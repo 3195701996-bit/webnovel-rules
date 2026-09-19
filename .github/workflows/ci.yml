@@ -36,33 +36,26 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
 
-      - name: Syntax check (all sources incl. Android embedded copy)
-        run: |
-          python -m compileall -q app.py server engine tests
-          python -m compileall -q android_app/app/src/main/python
+      - name: Syntax check
+        run: python -m compileall -q app.py server engine tests
 
-      - name: Assert Android embedded mirror is in sync
-        run: |
-          # 安卓内嵌镜像（engine/server/app.py/templates/static/sources）由
-          # scripts/sync_android.sh 从桌面权威源生成，禁止手改镜像。
-          # 此处全量断言一致（__pycache__/.DS_Store 不计）。
-          if ! bash scripts/sync_android.sh --check; then
-            echo "::error::安卓镜像与桌面权威源不一致，请运行 scripts/sync_android.sh 后再提交"
-            exit 1
-          fi
-          echo "安卓镜像一致 ✓"
+      # 注：APK 的 Python 引擎在 Gradle 构建期从本仓库桌面源码生成快照
+      # （android/app/build.gradle 的 syncPythonSnapshot 任务），仓库内不再有
+      # 需要保持一致的"安卓镜像副本"，因此无需镜像一致性检查。
 
       - name: Lint (non-blocking style, blocking on real errors)
         run: |
           pip install ruff
           # 只拦真错误：未定义名/重复定义/语法问题；风格问题不阻断
           ruff check . --select E9,F63,F7,F82,F811 \
-            --exclude venv,android_app,opensource
+            --exclude venv,android,opensource
 
       - name: Run tests
         env:
           WR_TEST: "1"
-        run: python -m pytest tests/ -q --timeout=120
+          WR_DISABLE_BACKGROUND: "1"
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python -m pytest tests/ -o addopts='' -q -p no:cacheprovider --timeout=120
 
       - name: API smoke checklist (real server, key endpoints)
         run: python tools/smoke_api.py
