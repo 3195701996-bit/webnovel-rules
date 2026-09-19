@@ -125,12 +125,10 @@ venv/bin/python app.py --port 8766
 
 ```bash
 cd android
-# 首次：本仓库不含 gradle-wrapper.jar（二进制不进仓库），任选其一生成：
-#   ① 用 Android Studio 打开本目录（自动生成 wrapper）
-#   ② 本机有 Gradle：gradle wrapper
 JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home \
   ./gradlew :app:assembleRelease        # 或 :app:assembleDebug
 # 产物：android/app/build/outputs/apk/{release,debug}/*.apk
+# 也可以直接用 Android Studio 打开本目录，Sync 后 Run
 ```
 
 要求：Android SDK 35、JDK 17、Python 3.12（引擎经 Chaquopy 打包进 APK）。
