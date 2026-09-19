@@ -513,11 +513,13 @@ internal fun MangaSearchScreen(
     // 从单源页进来时带上源 key（"在此源搜索"）；为空 = 全部源
     presetSource: String = "",
     presetOrder: String = "",
+    // 从详情页点作者/标签进来：带上关键词并自动搜索（对齐 web 端标签跳转）
+    presetKeyword: String = "",
 ) {
     // P0-E：查询词与"已加载页的原始响应"必须能跨页面进出恢复。
     // 保存原始 JSON 而不是解析后的对象：省掉自定义 Saver，且恢复时复用同一套
     // 防御式解析（不会出现"保存的结构与解析器不一致"这种隐蔽错误）。
-    var keyword by rememberSaveable { mutableStateOf("") }
+    var keyword by rememberSaveable { mutableStateOf(presetKeyword) }
     // 0.67.0：改成**网页端同款的分页**——一次只显示"当前页"，翻页是替换而不是追加。
     // 旧实现把每页原始响应追加进 pages 再合并显示（"加载更多"），既没有页码，
     // 也因为没有更新页码状态而永远只能再翻一页（用户 2026-09-17 反馈）。
@@ -807,6 +809,11 @@ internal fun MangaSearchScreen(
             selfCheckMsg = sb.toString()
             selfCheckBusy = false
         }
+    }
+
+    // 详情页点作者/标签进来：自动搜索一次（从返回栈恢复时不重搜）
+    LaunchedEffect(Unit) {
+        if (presetKeyword.isNotBlank() && !searched && !searching) doSearch(1)
     }
 
     Scaffold(topBar = {

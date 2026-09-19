@@ -375,7 +375,7 @@ internal fun OfflineSettingsScreen(onOpenReaderPrefs: () -> Unit) {
                 fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.height(WnSpace.xs))
             Text("阅读排版、产物信息与本地诊断不依赖引擎；书源管理、备份恢复、" +
-                "任务恢复、网络代理需要引擎就绪。",
+                "任务恢复需要引擎就绪。",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.outline)
         }

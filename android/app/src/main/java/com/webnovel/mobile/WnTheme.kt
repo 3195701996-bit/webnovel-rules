@@ -2,6 +2,7 @@ package com.webnovel.mobile
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -314,8 +315,7 @@ fun WnSegmentedTabs(
 
 /** 无封面占位：灰色（surfaceVar）底 + 「暂无封面」注释，所有作品通用 */
 @Composable
-fun WnNoCover(modifier: Modifier = Modifier) {
-    Box(
+fun WnNoCover(modifier: Modifier = Modifier) {    Box(
         modifier.clip(WnChipShape).background(WnColors.surfaceVar),
         Alignment.Center,
     ) {
@@ -369,4 +369,22 @@ fun WnCoverImage(
             modifier = modifier.clip(WnChipShape).background(WnColors.surfaceVar),
         )
     }
+}
+
+/** 可点击小标签（漫画详情页作者/标签 → 点击跳转该源搜索；对齐 web 端标签交互） */
+@Composable
+fun WnTagChip(text: String, accent: Boolean = false, onClick: () -> Unit) {
+    Text(
+        text,
+        style = MaterialTheme.typography.labelSmall,
+        color = if (accent) WnColors.accent else WnColors.ink,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier
+            .clip(WnPillShape)
+            .background(WnColors.surfaceVar)
+            .border(1.dp, if (accent) WnColors.accent else WnColors.line, WnPillShape)
+            .clickable(onClick = onClick)
+            .padding(horizontal = WnSpace.sm, vertical = WnSpace.xs),
+    )
 }

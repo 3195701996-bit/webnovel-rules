@@ -273,15 +273,13 @@ internal sealed interface Dest {
     data object History : Dest
     data object NovelSearch : Dest
     /** 漫画搜索：可带预置源/排序（从单源页"在此源搜索"进来时用） */
-    data class MangaSearch(val sourceKey: String = "", val order: String = "") : Dest
+    data class MangaSearch(val sourceKey: String = "", val order: String = "",
+                         val presetKeyword: String = "") : Dest
     data class OfflineNovel(val key: String, val index: Int) : Dest
     data class OfflineManga(val source: String, val comicId: String) : Dest
     data object Sources : Dest
     data object Storage : Dest
     data object Backup : Dest
-    /** 网络 → 代理：copy4000/jm 等域在部分网络下直连被重置，代理是必需路径
-     *  （引擎 netproxy 带 30s 健康探测，代理连不上自动临时直连，不会拖死全部源） */
-    data object NetProxy : Dest
     data class Web(val path: String, val title: String) : Dest
 }
 
@@ -303,13 +301,12 @@ internal fun destKey(d: Dest): String = when (d) {
     Dest.ReaderPrefs -> "ReaderPrefs"
     Dest.History -> "History"
     Dest.NovelSearch -> "NovelSearch"
-    is Dest.MangaSearch -> "MangaSearch:${d.sourceKey}:${d.order}"
+    is Dest.MangaSearch -> "MangaSearch:${d.sourceKey}:${d.order}:${d.presetKeyword}"
     is Dest.OfflineNovel -> "OfflineNovel:${d.key}"
     is Dest.OfflineManga -> "OfflineManga:${d.source}:${d.comicId}"
     Dest.Sources -> "Sources"
     Dest.Storage -> "Storage"
     Dest.Backup -> "Backup"
-    Dest.NetProxy -> "NetProxy"
     is Dest.Web -> "Web:${d.path}"
 }
 
@@ -377,6 +374,9 @@ private fun HomeScaffold(
                             push(Dest.Manga(top.source, top.comicId, idx, page,
                                             trusted = exact, note = note,
                                             startChapterId = chId, startLabel = chLabel))
+                        },
+                        onSearchTag = { kw ->
+                            push(Dest.MangaSearch(top.source, presetKeyword = kw))
                         })
                     is Dest.Manga -> MangaReaderScreen(gateway, ready, top.source, top.comicId,
                         top.index, top.page, loader, onBack = pop,
@@ -396,7 +396,6 @@ private fun HomeScaffold(
                     Dest.Storage -> StorageScreen(gateway, ready, onBack = pop)
                     is Dest.Backup -> BackupScreen(gateway, ready,
                         appVersion = BuildConfig.VERSION_NAME, onBack = pop)
-                    Dest.NetProxy -> ProxySettingsScreen(gateway, ready, onBack = pop)
                     is Dest.Web -> ReaderWebView(gateway, ready, top.path, top.title, onBack = pop)
                     is Dest.OfflineNovel, is Dest.OfflineManga, is Dest.ReaderPrefs -> Unit
                 }
@@ -1378,16 +1377,6 @@ private fun SettingsScreen(gateway: EngineGateway, ep: EngineEndpoint,
         }
         Text("设置立刻生效并保存在本机，引擎重启或失败都不会丢。",
             style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
-
-        Spacer(Modifier.height(12.dp))
-        SectionTitle("网络")
-        // 代理入口：copy4000/jm 等域在部分网络下直连被连接重置（真机实测），
-        // 走代理即恢复——对这些网络的用户代理是必需路径。引擎带 30s 健康探测：
-        // 代理连不上会自动临时直连并在页面里说明，不会把全部源拖死。
-        ListRow("代理（按网络需要）", "默认直连；你的网络访问不了某些源站域时才需要（机场/公司/局域网）",
-            Modifier.testTag("proxy_entry")) {
-            onOpen(Dest.NetProxy)
-        }
 
         Spacer(Modifier.height(12.dp))
         SectionTitle("书源与数据")

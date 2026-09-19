@@ -11,6 +11,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -173,6 +174,8 @@ fun MangaDetailScreen(
     onBack: () -> Unit,
     /** 打开阅读器：(章节下标, 页码, 该落点是否精确, 说明文案, 章节id, 章名) */
     onRead: (Int, Int, Boolean, String, String, String) -> Unit,
+    /** 点击作者/标签：跳到本源的搜索（关键词即作者名或标签名） */
+    onSearchTag: (String) -> Unit,
 ) {
     var detail by remember { mutableStateOf<MangaDetail?>(null) }
     var readIdx by remember { mutableIntStateOf(-1) }
@@ -367,14 +370,19 @@ fun MangaDetailScreen(
                                      fontWeight = FontWeight.Bold, maxLines = 3,
                                      overflow = TextOverflow.Ellipsis)
                                 Spacer(Modifier.height(WnSpace.sm))
-                                Text(
-                                    buildString {
-                                        append(d.author.ifBlank { "作者未知" })
-                                        if (d.sourceName.isNotBlank()) append(" · ").append(d.sourceName)
-                                    },
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
+                                // 作者：点击 → 该源内搜索此作者（对齐 web/venera 标签交互）
+                                Row(verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(WnSpace.sm)) {
+                                    WnTagChip("✎ " + d.author.ifBlank { "作者未知" },
+                                        accent = true) {
+                                        if (d.author.isNotBlank()) onSearchTag(d.author)
+                                    }
+                                    if (d.sourceName.isNotBlank()) {
+                                        Text("· " + d.sourceName,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                }
                                 Spacer(Modifier.height(WnSpace.xs))
                                 Text(
                                     "共 ${d.chapters.size} 话 · 已下载 ${d.downloadedCount} 话",
@@ -383,10 +391,17 @@ fun MangaDetailScreen(
                                 )
                                 if (d.tags.isNotEmpty()) {
                                     Spacer(Modifier.height(WnSpace.xs))
-                                    Text(d.tags.take(6).joinToString(" / "),
-                                         style = MaterialTheme.typography.labelSmall,
-                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                         maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                    // 标签：点击 → 该源内搜索此标签（可横向滑动）
+                                    Row(
+                                        Modifier.fillMaxWidth()
+                                            .horizontalScroll(
+                                                androidx.compose.foundation.rememberScrollState()),
+                                        horizontalArrangement = Arrangement.spacedBy(WnSpace.xs),
+                                    ) {
+                                        d.tags.forEach { t ->
+                                            WnTagChip(t) { onSearchTag(t) }
+                                        }
+                                    }
                                 }
                             }
                         }
