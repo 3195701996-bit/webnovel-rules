@@ -31,12 +31,7 @@ STOP_KIND_DONE = "done"
 
 MAX_PARALLEL = 2          # 全局并发下载任务数（可配置）
 SAVE_EVERY_CHAPTERS = 3   # 每 N 章持久化一次
-IMG_PARALLEL = 2          # 单任务图片并发下载数（同章内，默认保守档）
-
-def _img_parallel_for(source):
-    """按源分级的图片并发：拷贝系图片走 CDN（非 API 通道，210 风控面不同），
-    实测可放宽到 4；jm 等对并发敏感的源保持保守 2。"""
-    return 4 if source in ("copymanga", "copymanga_web") else IMG_PARALLEL
+IMG_PARALLEL = 2          # 单任务图片并发下载数（同章内）
 IMG_RETRY = 2             # 单图失败重试次数
 # 图片下载节流：拷贝漫画约 15 次/分钟/IP 软限制，超限触发 IP 级 210
 # 标记（TTL≈1h）→ 阅读也被拖垮。每图间隔约 3s，2 并发 ≈ 40 次/分，
@@ -814,7 +809,7 @@ class DownloadManager:
                             t = self._tasks.get(key)
                             if t:
                                 t["images_total"] = images_total
-                        # 同章图片并发下载（按源分级：拷贝系 4，其它 2）
+                        # 同章图片并发下载（IMG_PARALLEL）
                         from concurrent.futures import ThreadPoolExecutor as _TPE
                         # ch["id"] 用默认参数固化：闭包引用循环变量时，
                         # 只要线程池改为跨章节复用就会把图片写到错误章节目录
@@ -846,7 +841,7 @@ class DownloadManager:
                             # 进度定期落盘（节流）：强杀/断电后恢复出来的进度不能是 0
                             self._save_throttled()
                             return 1
-                        with _TPE(max_workers=_img_parallel_for(source)) as _pex:
+                        with _TPE(max_workers=IMG_PARALLEL) as _pex:
                             _rets = list(_pex.map(_dl_one, list(enumerate(imgs))))
                         _done_here = sum(1 for r in _rets if r == 1)
                         _bad_here = sum(1 for r in _rets if r == -1)

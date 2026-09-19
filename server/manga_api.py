@@ -1327,57 +1327,6 @@ def api_manga_detail(source, comic_id):
     return jsonify(_ensure_identity(_data))
 
 
-def _hedged_copymanga_info(comic_id):
-    """拷贝详情对冲竞速：APP/网页通道先跑，**5 秒未出结果**则 Playwright 网页
-    渠道加入竞速，首个拿到**非空章节**者胜出。
-
-    冷启动从"串行失败链 ~29s"降为"较快一条通道的耗时"——APP 通道健康时
-    不启动浏览器（Playwright 冷启动 15-20s 只在 APP 慢/挂时才付出）。
-    返回 (ComicDetails|None, via_web, gone_error)。
-    """
-    import concurrent.futures as _cf
-    app_ad = _manga_read_adapter("copymanga") or _manga_adapter("copymanga")
-    web_ad = _manga_adapter("copymanga_web")
-
-    def _run(ad):
-        if ad is None:
-            return ("err", None)
-        try:
-            return ("ok", ad.comic_info(comic_id))
-        except Exception as e:
-            _msg = str(e)
-            if ("404" in _msg or "不存在" in _msg or "下架" in _msg):
-                return ("gone", e)
-            return ("err", e)
-
-    ex = _cf.ThreadPoolExecutor(max_workers=2)
-    try:
-        f_app = ex.submit(_run, app_ad)
-        done, _ = _cf.wait({f_app}, timeout=5.0)
-        f_web = None
-        if done:
-            st, d = f_app.result()
-            if st == "ok" and getattr(d, "chapters", None):
-                return d, False, None
-            if st == "gone":
-                return None, False, done and f_app.result()[1]
-            # APP 快速失败/空结果：立即补网页渠道（不再等慢速重试链）
-        f_web = ex.submit(_run, web_ad)
-        gone_err = None
-        for f in _cf.as_completed({f_app, f_web}):
-            try:
-                st, d = f.result()
-            except Exception:
-                st, d = "err", None
-            if st == "ok" and getattr(d, "chapters", None):
-                return d, (f is f_web), None
-            if st == "gone" and gone_err is None:
-                gone_err = d
-        return None, False, gone_err
-    finally:
-        ex.shutdown(wait=False)
-
-
 def _refresh_detail_cache(source, comic_id, _info_p, _fast_web=None):
     """拉取详情并写入缓存。返回 _data dict 或 None（失败）。
     - 空章节结果不写缓存（IP 风控脏数据不固化）
@@ -1388,33 +1337,27 @@ def _refresh_detail_cache(source, comic_id, _info_p, _fast_web=None):
         return None
     # R22: copymanga 详情用快速失败实例——210 重试链 35s×N 会挂死详情页，
     # 快速失败后由下方 _api_detail_fallback 降级 copymanga_web（含快速 404）
-    _hedged_web = False
     if source == "copymanga":
-        # 对冲竞速：APP 与网页渠道（Playwright）取先到者（详见 _hedged_copymanga_info）
-        d, _hedged_web, _gone = _hedged_copymanga_info(comic_id)
-        if _gone is not None:
-            print(f"[manga-detail] 漫画不存在/已下架: {str(_gone)[:200]}", flush=True)
+        _quick = _manga_read_adapter(source)
+        if _quick is not None:
+            ad = _quick
+    try:
+        d = ad.comic_info(comic_id)
+    except Exception as e:
+        # 404（漫画下架/不存在）与风控(210/502)区分提示（对齐 Kotatsu 建议）
+        _msg = str(e)
+        _http_code = getattr(e, "code", None) or getattr(e, "status_code", None)
+        if _http_code == 404 or "404" in _msg or "不存在" in _msg or "下架" in _msg or "HTTPError" in type(e).__name__ and "404" in _msg:
+            # P2-8: 原文进日志，响应只给脱敏文案
+            print(f"[manga-detail] 漫画不存在/已下架: {_msg[:200]}", flush=True)
             return {"gone": True, "error": "漫画可能已下架/不存在"}
-        if d is None or not getattr(d, "chapters", None):
-            return _fast_web or None
-    else:
-        try:
-            d = ad.comic_info(comic_id)
-        except Exception as e:
-            # 404（漫画下架/不存在）与风控(210/502)区分提示（对齐 Kotatsu 建议）
-            _msg = str(e)
-            _http_code = getattr(e, "code", None) or getattr(e, "status_code", None)
-            if _http_code == 404 or "404" in _msg or "不存在" in _msg or "下架" in _msg or "HTTPError" in type(e).__name__ and "404" in _msg:
-                # P2-8: 原文进日志，响应只给脱敏文案
-                print(f"[manga-detail] 漫画不存在/已下架: {_msg[:200]}", flush=True)
-                return {"gone": True, "error": "漫画可能已下架/不存在"}
-            if _fast_web is None:
-                _fast_web = _api_detail_fallback(source, comic_id, e)
-            return _fast_web or None
-        if not d.chapters:
-            if _fast_web is None:
-                _fast_web = _api_detail_fallback(source, comic_id, None)
-            return _fast_web or None
+        if _fast_web is None:
+            _fast_web = _api_detail_fallback(source, comic_id, e)
+        return _fast_web or None
+    if not d.chapters:
+        if _fast_web is None:
+            _fast_web = _api_detail_fallback(source, comic_id, None)
+        return _fast_web or None
     _episodes, _volumes = _sort_split_chapters(d.chapters)
     _data = {
         "id": d.id, "title": d.title, "cover": d.cover,
@@ -1422,15 +1365,12 @@ def _refresh_detail_cache(source, comic_id, _info_p, _fast_web=None):
         "author": d.author, "tags": d.tags,
         "upload_time": d.upload_time, "update_time": d.update_time,
         "views": d.views, "likes": d.likes, "url": d.url,
-        "source": source,
-        "source_name": ("拷贝漫画(网页降级)" if _hedged_web else ad.name),
+        "source": source, "source_name": ad.name,
         "chapters": _episodes,
         "volumes": _volumes,
         "downloaded": _scan_downloaded_chapters(source, comic_id),
         "recommend": [{"id": r.id, "title": r.title, "cover": r.cover}
                       for r in (d.recommend or [])][:8]}
-    if _hedged_web:
-        _data["fallback"] = True
     # R25: 少章节告警——源仅收录极少章节时提示读者找更完整版本
     # （包子《迷宫饭》简版仅 1 话，完整版是"日版"条目 112 话）
     _total_ch = len(_episodes) + len(_volumes)

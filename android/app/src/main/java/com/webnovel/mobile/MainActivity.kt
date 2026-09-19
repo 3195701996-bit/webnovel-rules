@@ -279,6 +279,9 @@ internal sealed interface Dest {
     data object Sources : Dest
     data object Storage : Dest
     data object Backup : Dest
+    /** 网络 → 代理：copy4000/jm 等域在部分网络下直连被重置，代理是必需路径
+     *  （引擎 netproxy 带 30s 健康探测，代理连不上自动临时直连，不会拖死全部源） */
+    data object NetProxy : Dest
     data class Web(val path: String, val title: String) : Dest
 }
 
@@ -306,6 +309,7 @@ internal fun destKey(d: Dest): String = when (d) {
     Dest.Sources -> "Sources"
     Dest.Storage -> "Storage"
     Dest.Backup -> "Backup"
+    Dest.NetProxy -> "NetProxy"
     is Dest.Web -> "Web:${d.path}"
 }
 
@@ -324,27 +328,6 @@ private fun HomeScaffold(
     // 离线模式也要有 loader（读本地图片文件，不需要引擎凭据）
     val loader = remember(ep) {
         engineImageLoader(context, ep)
-    }
-
-    // 代理功能已下线（用户反馈：换包装新版本后，历史配置的代理会把全部源拖死，
-    // 每次都得清一次应用数据才能用）。引擎就绪时自查一次：只要还存着已保存的
-    // 代理（env 环境变量不是这里存的，不动），就静默清除、恢复直连 ——
-    // 老用户升级后无需再手动清数据。
-    LaunchedEffect(ep) {
-        if (ep != null) {
-            runCatching {
-                val r = gateway.httpText(ep.port, "/api/net/proxy")
-                val d = runCatching {
-                    org.json.JSONObject(r.body).optJSONObject("data")
-                }.getOrNull()
-                val proxy = d?.optString("proxy").orEmpty()
-                val src = d?.optString("source").orEmpty()
-                if (r.ok && proxy.isNotBlank() && src != "env") {
-                    gateway.httpPost(ep.port, "/api/net/proxy",
-                        org.json.JSONObject().put("proxy", "").toString())
-                }
-            }
-        }
     }
     val push: (Dest) -> Unit = { d -> stack.add(d) }
     val pop: () -> Unit = { if (stack.isNotEmpty()) stack.removeAt(stack.lastIndex) }
@@ -413,6 +396,7 @@ private fun HomeScaffold(
                     Dest.Storage -> StorageScreen(gateway, ready, onBack = pop)
                     is Dest.Backup -> BackupScreen(gateway, ready,
                         appVersion = BuildConfig.VERSION_NAME, onBack = pop)
+                    Dest.NetProxy -> ProxySettingsScreen(gateway, ready, onBack = pop)
                     is Dest.Web -> ReaderWebView(gateway, ready, top.path, top.title, onBack = pop)
                     is Dest.OfflineNovel, is Dest.OfflineManga, is Dest.ReaderPrefs -> Unit
                 }
@@ -1394,6 +1378,16 @@ private fun SettingsScreen(gateway: EngineGateway, ep: EngineEndpoint,
         }
         Text("设置立刻生效并保存在本机，引擎重启或失败都不会丢。",
             style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
+
+        Spacer(Modifier.height(12.dp))
+        SectionTitle("网络")
+        // 代理入口：copy4000/jm 等域在部分网络下直连被连接重置（真机实测），
+        // 走代理即恢复——对这些网络的用户代理是必需路径。引擎带 30s 健康探测：
+        // 代理连不上会自动临时直连并在页面里说明，不会把全部源拖死。
+        ListRow("代理（按网络需要）", "默认直连；你的网络访问不了某些源站域时才需要（机场/公司/局域网）",
+            Modifier.testTag("proxy_entry")) {
+            onOpen(Dest.NetProxy)
+        }
 
         Spacer(Modifier.height(12.dp))
         SectionTitle("书源与数据")

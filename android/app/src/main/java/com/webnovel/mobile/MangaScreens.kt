@@ -238,12 +238,14 @@ fun MangaDetailScreen(
     fun reload() {
         scope.launch {
             loading = true; error = null
-            // 详情获取失败自动重试 1 次（对齐网页端：间歇风控的瞬时失败大多能自愈）；
-            // 历史与详情互相独立，并行发出
+            // 详情获取失败自动重试 1 次——但**只在快速失败时**重试（间歇风控的
+            // 瞬时失败大多能自愈）；首次已等满 ~30s 超时说明链路不通，再重试
+            // 只会让"打不开"翻倍成"一分钟打不开"（实测教训）
             val hD = async { gateway.httpText(ep.port, "/api/manga/history") }
+            val t0 = System.currentTimeMillis()
             var r = gateway.httpText(ep.port, mangaPath(source, comicId))
             var d = if (r.ok) EngineData.mangaDetail(r.body) else null
-            if (d == null) {
+            if (d == null && System.currentTimeMillis() - t0 < 12_000) {
                 kotlinx.coroutines.delay(1500)
                 r = gateway.httpText(ep.port, mangaPath(source, comicId))
                 d = if (r.ok) EngineData.mangaDetail(r.body) else null
@@ -968,10 +970,12 @@ fun MangaReaderScreen(
         if (cached != null) {
             detail = cached
         } else {
+            // 失败重试同样只在快速失败时（<12s）；超时链路重试等于把等待翻倍
+            val t0 = System.currentTimeMillis()
             var r = gateway.httpText(ep.port, mangaPath(source, comicId))
             lastCode = r.code
             var d = if (r.ok) EngineData.mangaDetail(r.body) else null
-            if (d == null) {
+            if (d == null && System.currentTimeMillis() - t0 < 12_000) {
                 delay(1500)
                 r = gateway.httpText(ep.port, mangaPath(source, comicId))
                 lastCode = r.code
