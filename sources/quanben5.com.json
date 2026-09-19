@@ -1,0 +1,38 @@
+{
+ "bookSourceName": "全本小说网(镜像)",
+ "bookSourceGroup": "专属适配器",
+ "bookSourceUrl": "https://www.quanben5.com",
+ "bookSourceType": 0,
+ "bookUrlPattern": "https?://(www\\.)?quanben5\\.com/n/[^/]+/?",
+ "customOrder": 0,
+ "enabled": true,
+ "enabledCookieJar": false,
+ "enabledExplore": true,
+ "header": "{\"User-Agent\": \"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36\", \"Connection\": \"close\"}",
+ "ruleBookInfo": {
+  "name": "<h1[^>]*>([^<]+)</h1>@正则",
+  "author": "作者[:：]?\\s*(?:</?\\w+[^>]*>)*([^<]{2,30})@正则"
+ },
+ "ruleContent": {
+  "content": "div.articlebody@html",
+  "replaceRegex": ""
+ },
+ "ruleSearch": {
+  "bookList": "div.list2",
+  "name": "h3 a span.itemprop@text",
+  "bookUrl": "h3 a@href",
+  "author": "p@span.itemprop.author@text",
+  "intro": "p.itemprop.description@text"
+ },
+ "ruleToc": {
+  "chapterList": "a[href*='/amp/n/']",
+  "chapterName": "text",
+  "chapterUrl": "href"
+ },
+ "searchUrl": "https://www.quanben.io/index.php?c=book&a=search&keywords={{key}}",
+ "uid": "quanben5.com",
+ "concurrentRate": "3/1000",
+ "valid": false,
+ "valid_error": "解析结果缺少书名/链接（name='' url='/n/fanrenxiuxianzhuan/'）",
+ "valid_tested_at": "2026-09-04 16:22:59"
+}

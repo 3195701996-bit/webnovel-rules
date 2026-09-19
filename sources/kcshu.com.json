@@ -1,0 +1,26 @@
+{
+ "bookSourceName": "酷读书(kcshu)",
+ "bookSourceUrl": "http://kcshu.com",
+ "searchUrl": "/search.php?q={{key}}",
+ "ruleSearch": {
+  "bookList": "div.col-12 dl",
+  "name": "dd h3 a@text##^\\[[^\\]]+\\]\\s*##",
+  "bookUrl": "dd h3 a@href",
+  "author": "dd.book_other span@text"
+ },
+ "ruleBookInfo": {
+  "name": "h1@text"
+ },
+ "ruleToc": {
+  "chapterList": "div.book_list2 li",
+  "chapterName": "a@text",
+  "chapterUrl": "a@href"
+ },
+ "ruleContent": {
+  "content": "article.font_max@text##第\\(\\d+/\\d+\\)页\\s*##",
+  "nextContentUrl": "@正则:<a[^>]*href=\"([^\"]+)\"[^>]*>\\s*下一章"
+ },
+ "tocSort": "url",
+ "uid": "kcshu.com",
+ "enabled": false
+}

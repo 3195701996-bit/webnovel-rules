@@ -1,0 +1,683 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>webnovel_rules · 书源小说爬虫</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+<header class="topbar">
+  <span class="logo">📚 webnovel_rules<small>书源驱动 · 小说爬虫</small></span>
+  <nav>
+    <a href="/" class="active">🔍 搜索/书库</a>
+    <a href="/sources">书源管理</a>
+    <a href="/library">📖 我的书库</a>
+    <a href="/tasks_page">📋 任务管理</a>
+    <a href="/manga">🎨 漫画</a>
+    <a href="#" id="nav-clean" title="清理缓存（漫画图片/搜索/目录缓存）">🧹 清理缓存</a>
+  </nav>
+  <div class="spacer"></div>
+</header>
+
+<div class="container">
+  <div id="netip-bar" style="display:none;margin-bottom:12px;padding:8px 12px;border-radius:8px;background:var(--bg-2,#1c2230);border:1px solid var(--border);font-size:.8rem;color:var(--text-dim);"></div>
+  <div class="hero">
+    <h1>🔍 书源搜索</h1>
+    <div class="sub">基于已导入的 legado 书源，按书名或作者搜索并一键爬取</div>
+    <div class="search-bar">
+      <div class="q-wrap">
+        <input type="text" id="search-q" placeholder="书名或作者，如：龙族 / 江南 / 百变小樱"
+               autocomplete="off">
+        <span class="kbd-hint" title="按 / 快速聚焦搜索框">/</span>
+      </div>
+      <select id="search-source">
+        <option value="">全部书源</option>
+      </select>
+      <select id="search-type" title="搜索类型（结果必须包含关键词）">
+        <option value="all">全部</option>
+        <option value="name">书名</option>
+        <option value="author">作者</option>
+      </select>
+      <select id="search-sort" title="排序方式">
+        <option value="default">默认（相关性）</option>
+        <option value="update">最近更新</option>
+        <option value="word">字数最多</option>
+      </select>
+      <button class="btn primary btn-search" id="btn-search">🔍 搜索</button>
+    </div>
+    <div class="quick">
+      <span class="label">试试：</span>
+      <a data-q="龙族">龙族</a>
+      <a data-q="斗破苍穹">斗破苍穹</a>
+      <a data-q="剑来">剑来</a>
+      <a data-q="中律十二">作者·中律十二</a>
+      <span class="label" id="search-hint" style="margin-left:auto;"></span>
+    </div>
+    <div class="hist-row" id="hist-row" style="display:none;"></div>
+  </div>
+
+  <div class="search-status" id="search-status" style="display:none;"></div>
+  <div id="search-results"></div>
+
+  <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:8px;">
+    <a href="/library" class="btn primary" style="padding:14px 26px;font-size:1rem;">📖 进入我的书库</a>
+    <a href="/tasks_page" class="btn" style="padding:14px 26px;font-size:1rem;">📋 任务管理</a>
+    <a href="/sources" class="btn" style="padding:14px 26px;font-size:1rem;">书源管理</a>
+  </div>
+</div>
+
+<script src="/static/js/common.js"></script>
+{# 局域网地址发现只在桌面网页需要：手机 App 里本机就是 127.0.0.1，
+   加载它只会弹出"当前页面地址已失效"的误报（截图里那条就是这个）。
+   App 打开网页诊断时带 ?mobile=1，明确不加载。#}
+{% if not request.args.get('mobile') %}
+<script src="/static/js/netip.js"></script>
+{% endif %}
+<script src="/static/js/group_merge.js"></script>
+<script>
+
+// 带超时的 fetch：超时自动 abort，避免挂起阻塞页面交互
+function fetchTimeout(url, opts, ms) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ms || 15000);
+  return fetch(url, Object.assign({}, opts, {signal: ctrl.signal}))
+    .finally(() => clearTimeout(timer));
+}
+
+// 书源下拉
+async function loadSources() {
+  const r = await fetch('/api/sources');
+  const {sources} = await r.json();
+  const sel = $('#search-source');
+  const enabled = sources.filter(s => s.enabled && s.searchUrl);
+  sel.innerHTML = '<option value="">全部书源（' + enabled.length + '）</option>' +
+    enabled.map(s => `<option value="${s.uid}">${esc(s.bookSourceName)}</option>`).join('');
+  $('#search-hint').textContent = '已启用可搜索书源 ' + enabled.length + ' 个｜书源管理见上方导航';
+}
+
+// A03: 稳定 group key -> 卡片 DOM 的索引。新增/更新/收尾重排都经它定位卡片；
+// 任何整盒重绘（骨架屏/空态/缓存恢复）处必须同步 clear，避免指向已 detach 节点。
+const _rowIndex = new Map();
+
+// 卡片主体 HTML（新增与更新共用模板）。selIdx = 「选择来源」下拉选中项，
+// 缺省为主源（章节最全者，服务端 sources 已按章节数降序，通常为 0）。
+function groupRowHTML(g, selIdx) {
+  const cover = g.cover ? `<img class="cover" src="${esc(g.cover)}" loading="lazy" decoding="async" onerror="this.style.display='none'">` : '<div class="cover">📖</div>';
+  const srcs = g.sources || [];
+  const _maxCount = Math.max.apply(null, srcs.map(s => s.chapter_count || 0));
+  const _mainIdx = _maxCount > 0 ? srcs.findIndex(s => (s.chapter_count || 0) === _maxCount) : 0;
+  selIdx = (typeof selIdx === 'number' && selIdx >= 0 && selIdx < srcs.length) ? selIdx : _mainIdx;
+  const mainSrc = srcs[selIdx] || {};
+  const srcOpts = srcs.map((s, i) =>
+    `<option value="${i}"${i === selIdx ? ' selected' : ''}>${esc(s.source_name)}${s.chapter_count ? '（约' + s.chapter_count + '章）' : ''}</option>`).join('');
+  const detailBits = [];
+  if (mainSrc.last_chapter) detailBits.push('最新章节：' + esc(mainSrc.last_chapter.slice(0, 24)));
+  if (mainSrc.chapter_count) detailBits.push('约 ' + mainSrc.chapter_count + ' 章');
+  if (mainSrc.update_time) detailBits.push('更新：' + esc(mainSrc.update_time));
+  if (mainSrc.word_count) detailBits.push('字数：' + esc(mainSrc.word_count));
+  const srcBadge = srcs.length > 1
+    ? `<span class="tag" style="color:var(--accent);border-color:rgba(232,179,75,.4);">🔀 ${srcs.length} 源</span>`
+    : `<span class="src-tag">${esc((mainSrc.source_name || '未知源').slice(0, 14))}</span>`;
+  // 多源时附来源明细（源名+章数），一目了然
+  const srcDetail = srcs.length > 1
+    ? `<div class="src-list">${srcs.slice(0, 6).map(sm =>
+        `<span class="src-pill" title="${esc(sm.book_url || '')}">${esc(sm.source_name)}${sm.chapter_count ? '·' + sm.chapter_count + '章' : ''}</span>`).join('')}${srcs.length > 6 ? `<span class="src-pill">+${srcs.length - 6}</span>` : ''}</div>`
+    : '';
+  return `
+    ${cover}
+    <div class="info">
+      <h3>${esc(g.name)}</h3>
+      <div class="meta">
+        <span>作者：${esc(g.author || '未知')}</span>
+        ${srcBadge}
+      </div>
+      ${detailBits.length ? `<div class="meta" style="color:var(--accent-2);">${detailBits.join('｜')}</div>` : ''}
+      <div class="intro">${esc(g.intro || '暂无简介')}</div>
+      ${srcDetail}
+      <div class="ops" style="align-items:center;">
+        <label style="font-size:.78rem;color:var(--text-dim);">选择来源</label>
+        <select class="src-select" style="padding:6px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);max-width:240px;">
+          ${srcOpts}
+        </select>
+        <button class="btn primary small crawl-btn" data-src="${esc(mainSrc.source_uid || '')}" data-url="${esc(mainSrc.book_url || '')}" data-name="${esc(g.name)}">⏬ 下载本书</button>
+        <button class="btn small detail-btn" data-src="${esc(mainSrc.source_uid || '')}" data-url="${esc(mainSrc.book_url || '')}">📋 详情</button>
+      </div>
+    </div>`;
+}
+
+function renderGroup(g, box) {
+  const row = document.createElement('div');
+  row.className = 'search-result';
+  row.innerHTML = groupRowHTML(g);
+  box.appendChild(row);
+  row._fp = GroupMerge.groupFingerprint(g);
+  _rowIndex.set(GroupMerge.groupKey(g), row);
+  bindRowEvents(row, g);
+}
+
+// A03 更新语义：同 key 分组内容变化（晚到来源补齐/元数据变化）时原地重建
+// 卡片内容——不移动位置（搜索进行中不打断用户），并保留用户已选 source_uid。
+function updateGroupRow(row, g) {
+  const btn = row.querySelector('.crawl-btn');
+  const keepUid = btn ? (btn.dataset.src || '') : '';
+  const selIdx = GroupMerge.reselectSourceIndex(g.sources, keepUid, -1);
+  row.innerHTML = groupRowHTML(g, selIdx);
+  bindRowEvents(row, g);
+  row._fp = GroupMerge.groupFingerprint(g);
+}
+
+function bindRowEvents(row, g) {
+  const btn = row.querySelector('.crawl-btn');
+  btn.onclick = async () => {
+    if (!btn.dataset.src || !btn.dataset.url) { toast('请先选择书源', 'error'); return; }
+    btn.disabled = true; btn.textContent = '创建中…';
+    try {
+      // R53: 多源混合下载已取消——只用所选书源下载
+      const r = await fetchTimeout('/api/tasks', {method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({source_uid: btn.dataset.src, book_url: btn.dataset.url})}, 15000);
+      const d = await r.json();
+      if (r.ok) { location.href = '/tasks_page'; }
+      else { toast('⚠ ' + (d.error || '创建失败'), 'error'); btn.disabled = false; btn.textContent = '⏬ 爬取'; }
+    } catch (e) { toast('⚠ ' + e, 'error'); btn.disabled = false; btn.textContent = '⏬ 爬取'; }
+  };
+  const dbtn = row.querySelector('.detail-btn');
+  dbtn.onclick = () => {
+    // 全部源传给详情页（换源用）
+    try { sessionStorage.setItem('novel_detail_sources', JSON.stringify(g.sources || [])); } catch (e) {}
+    const s = (g.sources || [])[0] || {};
+    location.href = '/novel_detail?source_uid=' + encodeURIComponent(s.source_uid || '')
+      + '&book_url=' + encodeURIComponent(s.book_url || '')
+      + '&name=' + encodeURIComponent(g.name || '');
+  };
+  const sel = row.querySelector('.src-select');
+  sel.onchange = async () => {
+    const s = (g.sources || [])[parseInt(sel.value, 10)];
+    if (!s) return;
+    btn.dataset.src = s.source_uid;
+    btn.dataset.url = s.book_url;
+    let dline = row.querySelector('.src-detail-line');
+    if (!dline) {
+      dline = document.createElement('div');
+      dline.className = 'meta src-detail-line';
+      dline.style.color = 'var(--accent-2)';
+      row.querySelector('.intro').after(dline);
+    }
+    dline.textContent = '⏳ 正在获取该来源信息…';
+    try {
+      const r = await fetchTimeout('/api/search-detail', {method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({source_uid: s.source_uid, book_url: s.book_url})}, 15000);
+      const d = await r.json();
+      if (d.ok) {
+        const bits = [];
+        if (d.chapter_count) bits.push('共 ' + d.chapter_count + ' 章');
+        if (d.last_chapter) bits.push('最新章节：' + esc(d.last_chapter.slice(0, 26)));
+        if (d.update_time) bits.push('更新：' + esc(d.update_time));
+        if (d.word_count) bits.push('字数：' + esc(d.word_count));
+        dline.textContent = bits.length ? bits.join('｜') : '（该书源未提供更多信息）';
+        if (d.chapter_count) sel.options[sel.selectedIndex].text = s.source_name + '（' + d.chapter_count + ' 章）';
+      }
+    } catch (e) {}
+    try {
+      const r2 = await fetchTimeout('/api/search-toc-count', {method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({source_uid: s.source_uid, book_url: s.book_url})}, 12000);
+      const d2 = await r2.json();
+      if (d2.ok && d2.chapter_count) {
+        sel.options[sel.selectedIndex].text = s.source_name + '（' + d2.chapter_count + ' 章）';
+        const bits = [];
+        if (d2.chapter_count) bits.push('共 ' + d2.chapter_count + ' 章');
+        if (d2.last_chapter) bits.push('最新章节：' + esc(d2.last_chapter.slice(0, 26)));
+        dline.textContent = bits.join('｜');
+      } else if (d2.error) {
+        dline.textContent = '⚠ ' + (d2.error || '章节数获取失败');
+      }
+    } catch (e) {}
+  };
+}
+
+// P0-5: 视口懒加载章节数——只对进入视口的行触发 /api/search-toc-count，
+// 替代搜索完成后对全部已渲染行（可达 60+）的全量遍历请求风暴。
+// rootMargin 提前 200px 预取，滚动到之前章节数已就绪。
+let _tocObserver = null;
+function _loadTocForRow(row) {
+  const sel = row.querySelector('.src-select');
+  const crawlBtn = row.querySelector('.crawl-btn');
+  if (!sel || !crawlBtn || !sel.options.length) return;
+  if (row.dataset.tocLoaded) return;
+  row.dataset.tocLoaded = '1';
+  const sname = sel.options[0].text.split('（')[0];
+  return (async () => {
+    try {
+      const r = await fetchTimeout('/api/search-toc-count', {method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({source_uid: crawlBtn.dataset.src, book_url: crawlBtn.dataset.url})}, 12000);
+      const d = await r.json();
+      if (!d.ok || !d.chapter_count) return;
+      sel.options[0].text = sname + '（' + d.chapter_count + ' 章）';
+      const bits = [];
+      if (d.chapter_count) bits.push('共 ' + d.chapter_count + ' 章');
+      if (d.last_chapter) bits.push('最新章节：' + esc(d.last_chapter.slice(0, 24)));
+      if (!bits.length) return;
+      let dline = row.querySelector('.src-detail-line');
+      if (!dline) {
+        dline = document.createElement('div');
+        dline.className = 'meta src-detail-line';
+        dline.style.color = 'var(--accent-2)';
+        row.querySelector('.intro').after(dline);
+      }
+      dline.textContent = bits.join('｜');
+    } catch (e) {}
+  })();
+}
+function autoLoadToc(box) {
+  const rows = [...box.querySelectorAll('.search-result')];
+  // 老浏览器兜底：无 IntersectionObserver 时退化为并发 3 的全量加载
+  if (!('IntersectionObserver' in window)) {
+    const concurrency = 3;
+    let idx = 0;
+    async function worker() { while (idx < rows.length) await _loadTocForRow(rows[idx++]); }
+    Promise.all(Array.from({length: concurrency}, worker));
+    return;
+  }
+  if (!_tocObserver) {
+    _tocObserver = new IntersectionObserver((entries) => {
+      for (const en of entries) {
+        if (!en.isIntersecting) continue;
+        _tocObserver.unobserve(en.target);
+        _loadTocForRow(en.target);
+      }
+    }, {rootMargin: '200px'});
+  }
+  // dataset.tocWatched 防重：搜索新增结果时对全部行重挂，只挂新行
+  for (const row of rows) {
+    if (row.dataset.tocWatched) continue;
+    row.dataset.tocWatched = '1';
+    _tocObserver.observe(row);
+  }
+}
+// 新搜索开始前调用：丢弃对旧行的观察，避免已移除 DOM 滞留观察列表
+function resetTocObserver() {
+  if (_tocObserver) { _tocObserver.disconnect(); _tocObserver = null; }
+}
+
+// P2-3: 搜索状态栏稳定子节点。进度刷新只更新「文案节点」的 textContent，
+// 「取消按钮」整个搜索过程只挂载一次、abort 处理器稳定绑定——避免高频
+// innerHTML 重绘把按钮节点反复 detach 导致 Playwright/真人点击丢失。
+function _searchStatusNodes(st) {
+  if (!st._nodes || !st._nodes.text.isConnected) {
+    st.innerHTML = '';
+    const icon = document.createElement('span');
+    icon.className = 'st-icon';
+    const text = document.createElement('span');
+    text.id = 'search-status-text';
+    const btn = document.createElement('button');
+    btn.className = 'cancel-search';
+    btn.id = 'btn-cancel-search';
+    btn.textContent = '✕ 取消';
+    btn.onclick = () => { if (window._searchCtrl) { try { window._searchCtrl.abort(); } catch (e) {} } };
+    st.appendChild(icon); st.appendChild(text); st.appendChild(btn);
+    st._nodes = {icon, text, btn};
+  }
+  return st._nodes;
+}
+function setSearchStatus(st, iconHtml, text, showCancel) {
+  const n = _searchStatusNodes(st);
+  n.icon.innerHTML = iconHtml || '';
+  n.text.textContent = text;
+  n.btn.style.display = showCancel ? '' : 'none';
+}
+
+// 流式搜索
+function saveSearchState() {
+  const q = $('#search-q').value.trim();
+  if (!q) return;
+  const params = new URLSearchParams();
+  params.set('q', q);
+  if ($('#search-source').value) params.set('source', $('#search-source').value);
+  if ($('#search-type').value !== 'all') params.set('type', $('#search-type').value);
+  if ($('#search-sort').value !== 'default') params.set('sort', $('#search-sort').value);
+  history.replaceState(null, '', '?' + params.toString());
+}
+
+$('#btn-search').onclick = async (ev) => {
+  const q = $('#search-q').value.trim();
+  if (!q) { toast('请输入书名或作者', 'error'); return; }
+  doNovelSearch(q, false);
+};
+
+let _searchSeq = 0;   // C07: 搜索代际——被新搜索取代的旧搜索不得再写共享状态栏/结果盒
+async function doNovelSearch(q, silent) {
+  // 取消上一次未完成的搜索
+  if (window._searchCtrl) { try { window._searchCtrl.abort(); } catch (e) {} }
+  const mySeq = ++_searchSeq;   // C07: 本次搜索代际（启动即登记，旧代在途响应须让位）
+  saveSearchState();
+  const box = $('#search-results');
+  const st = $('#search-status');
+  let skeletonShown = false;
+  if (!silent) {
+    resetTocObserver();  // P0-5: 全新搜索，旧行将整体替换，先丢弃旧观察
+    box.innerHTML = renderSkeletons(4);
+    _rowIndex.clear();   // A03: 整盒重绘，同步丢弃 DOM 索引
+    skeletonShown = true;
+    st.style.display = 'flex';
+    setSearchStatus(st, '<span class="spinner"></span>', '正在搜索…', true);
+  }
+  const url = '/api/search/stream?q=' + encodeURIComponent(q) +
+    ($('#search-source').value ? '&source=' + encodeURIComponent($('#search-source').value) : '') +
+    '&sort=' + encodeURIComponent($('#search-sort').value) +
+    '&type=' + encodeURIComponent($('#search-type').value);
+  const ctrl = new AbortController();
+  window._searchCtrl = ctrl;
+  const timeout = setTimeout(() => ctrl.abort(), 60000);
+  // A03: groupMap = 当前展示的分组数据（key -> 合并后 group）。
+  // silent（后台刷新）时已显示的缓存卡片登记在 _rowIndex，updates/快照直接落到原卡片。
+  const groupMap = new Map();
+  let totalBooks = 0;
+  let gotAny = false;
+  // upsert：新增渲染 or 原地更新。isFinal=false 且用户正在操作该卡片时
+  // 只更新数据、不重绘（收尾快照统一校准），避免打断选源等交互。
+  const upsert = (g, isFinal) => {
+    const key = GroupMerge.groupKey(g);
+    const merged = GroupMerge.mergeGroup(groupMap.get(key), g);
+    groupMap.set(key, merged);
+    const row = _rowIndex.get(key);
+    if (!row || !row.isConnected) {
+      if (skeletonShown) { box.innerHTML = ''; skeletonShown = false; }
+      renderGroup(merged, box);
+      return true;
+    }
+    if (!isFinal && row.contains(document.activeElement)) return false;
+    if (row._fp !== GroupMerge.groupFingerprint(merged)) updateGroupRow(row, merged);
+    return false;
+  };
+  try {
+    const r = await fetch(url, {signal: ctrl.signal});
+    if (mySeq !== _searchSeq) return;   // C07: fetch await 期间已被新搜索取代——不再碰共享 DOM/状态
+    if (!r.ok) { box.innerHTML = '<div class="empty">⚠ 搜索请求失败</div>'; _rowIndex.clear(); return; }
+    const reader = r.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    while (true) {
+      const {done, value} = await reader.read();
+      // C07: 读流 await 期间被新搜索取代——旧批已到响应不得更新卡片/状态栏
+      // （abort 只能在下一个 await 观察；此处拦截已 resolve 的旧代批次）
+      if (mySeq !== _searchSeq) return;
+      if (done) break;
+      buf += dec.decode(value, {stream: true});
+      let idx;
+      while ((idx = buf.indexOf('\n\n')) >= 0) {
+        const evt = buf.slice(0, idx);
+        buf = buf.slice(idx + 2);
+        if (!evt.startsWith('data:')) continue;
+        let d;
+        try { d = JSON.parse(evt.slice(5).trim()); } catch (e) { continue; }
+        const groups = d.groups || [];
+        const updates = d.updates || [];
+        let newCount = 0;
+        if (d.finished) {
+          // A03 最终快照（含缓存秒回）：校准来源、元数据与排序
+          groups.forEach(g => { if (upsert(g, true)) newCount++; });
+          updates.forEach(g => { if (upsert(g, true)) newCount++; });
+          if (newCount > 0) gotAny = true;
+          // P0-4: "源结果数"按校准后分组内 sources 数合计（旧响应带 books 时兼容）
+          totalBooks = d.books ? d.books.length
+            : [...groupMap.values()].reduce((n, g) => n + ((g.sources || []).length), 0);
+          // 统一校准排序：按快照顺序重排 DOM；快照外卡片（旧缓存残留）排尾
+          const snapKeys = new Set();
+          for (const g of groups) {
+            const k = GroupMerge.groupKey(g);
+            const row = _rowIndex.get(k);
+            if (row && row.isConnected) { box.appendChild(row); snapKeys.add(k); }
+          }
+          for (const [k, row] of _rowIndex) {
+            if (!snapKeys.has(k) && row.isConnected) box.appendChild(row);
+          }
+          const oldC = getCachedNovelSearch();
+          const mergedAll = (silent && oldC && oldC.q === q)
+            ? mergeGroups(oldC.groups, [...groupMap.values()])
+            : [...groupMap.values()];
+          cacheNovelSearch(q, mergedAll);
+          if (_rowIndex.size) saveSearchHistory(q);
+          if (skeletonShown) { box.innerHTML = ''; skeletonShown = false; }
+          // C06: 搜索终态四态区分——搜索中(进行中)/部分完成/源失败/真正无结果。
+          // errors = {源名: 原因}（C06 服务端新增）；源失败不得描述为"搜不到书"。
+          const errMap = d.errors || {};
+          const errCount = Object.keys(errMap).length;
+          if (!_rowIndex.size) {
+            if (errCount > 0) {
+              // 源失败：不是"没有这本书"，而是书源暂时连不上
+              renderSearchSourceFail(q, errCount, d.total || 0);
+              setSearchStatus(st, '', '⚠ ' + errCount + ' 个书源连接失败/超时，未能完成搜索', false);
+              st.style.display = 'flex';
+            } else {
+              renderSearchEmpty(q);   // 真正无结果（源均正常返回、均无此书）
+            }
+          } else if (errCount > 0) {
+            // 部分完成：有结果但部分源失败/超时，结果可能不完整
+            setSearchStatus(st, '', `✅ 共 ${_rowIndex.size} 本书（${totalBooks} 个源结果） · ⚠ ${errCount} 个书源失败/超时，结果可能不完整 · 用时 ${d.elapsed}s`, false);
+            st.style.display = 'flex';
+          } else {
+            setSearchStatus(st, '', `✅ 共 ${_rowIndex.size} 本书（${totalBooks} 个源结果）${d.cached ? ' · 缓存' : ''} · 用时 ${d.elapsed}s`, false);
+            st.style.display = 'flex';
+          }
+          autoLoadToc(box);
+          break;
+        }
+        // 增量事件：先 updates（原地刷新旧卡片，不移动位置），再 groups（新卡片按到达顺序追加）
+        for (const g of updates) upsert(g, false);
+        for (const g of groups) { if (upsert(g, false)) newCount++; }
+        if (newCount > 0) gotAny = true;
+        // P0-4: 服务端 finished 事件与缓存均不再携带 books 原始列表，
+        // "源结果数"改按当前分组内 sources 数合计（旧响应带 books 时兼容）
+        totalBooks = d.books ? d.books.length
+          : [...groupMap.values()].reduce((n, g) => n + ((g.sources || []).length), 0);
+        // P0-5: 搜索新增结果时对全部行重挂观察（autoLoadToc 内部防重，只挂新行），
+        // 进入视口的行立即懒加载章节数，不再等搜索结束
+        if (newCount > 0) autoLoadToc(box);
+        // 只更新文案节点 textContent（天然转义 q），取消按钮节点不动
+        setSearchStatus(st, '<span class="spinner"></span>',
+          `🔍 ${q} · 已搜 ${d.done}/${d.total} 源 · ${_rowIndex.size} 本书`, true);
+        if (gotAny) st.style.display = 'flex';
+      }
+    }
+  } catch (e) {
+    // C07: 已被更新的搜索取代（旧代 abort/catch 晚到）——不得清掉新搜索的
+    // 骨架屏、结果盒或状态栏，直接放弃对共享 DOM 的写入
+    if (mySeq !== _searchSeq) return;
+    if (e.name === 'AbortError') {
+      // 用户取消或超时：清掉骨架屏，状态栏提示
+      if (skeletonShown) { box.innerHTML = ''; skeletonShown = false; }
+      if (!_rowIndex.size) {
+        st.style.display = 'flex';
+        setSearchStatus(st, '', '⏹ 搜索已取消', false);
+      }
+    } else {
+      if (skeletonShown) skeletonShown = false;
+      box.innerHTML = '<div class="empty">⚠ 搜索失败: ' + esc(String(e)) + '</div>';
+      _rowIndex.clear();
+    }
+  } finally {
+    clearTimeout(timeout);
+    if (mySeq !== _searchSeq) return;   // C07: 旧代 finally 不得隐藏/覆盖新搜索状态栏
+    if (!gotAny && !_rowIndex.size && !silent) st.style.display = 'none';
+    if (silent && gotAny) setSearchStatus(st, '', '✅ 已刷新（' + _rowIndex.size + ' 本书）', false);
+  }
+}
+
+$('#search-q').addEventListener('keydown', e => { if (e.key === 'Enter') $('#btn-search').click(); });
+// 输入不自动搜索：仅按「🔍 搜索」按钮或回车才触发（用户明确要求）
+// ── 骨架屏 ──
+function renderSkeletons(n) {
+  let h = '';
+  for (let i = 0; i < n; i++) {
+    h += '<div class="skeleton-card"><div class="sk sk-cover"></div>' +
+      '<div class="sk-lines"><div class="sk sk-line w40"></div>' +
+      '<div class="sk sk-line w90"></div><div class="sk sk-line w70"></div></div></div>';
+  }
+  return h;
+}
+
+// ── 搜索历史（localStorage，最多 10 条）──
+const HIST_KEY = 'novel_search_history_v1';
+function getSearchHistory() {
+  try { return JSON.parse(localStorage.getItem(HIST_KEY) || '[]'); } catch (e) { return []; }
+}
+function saveSearchHistory(q) {
+  q = (q || '').trim();
+  if (!q) return;
+  let h = getSearchHistory().filter(x => x !== q);
+  h.unshift(q);
+  h = h.slice(0, 10);
+  try { localStorage.setItem(HIST_KEY, JSON.stringify(h)); } catch (e) {}
+  renderHistory();
+}
+function removeHistory(q) {
+  const h = getSearchHistory().filter(x => x !== q);
+  try { localStorage.setItem(HIST_KEY, JSON.stringify(h)); } catch (e) {}
+  renderHistory();
+}
+
+// 热门推荐（发现能力）已移除：#hot-list/#hot-block 元素不存在，功能静默失效（B3 死代码）
+function renderHistory() {
+  const row = $('#hist-row');
+  if (!row) return;
+  const h = getSearchHistory();
+  if (!h.length) { row.style.display = 'none'; row.innerHTML = ''; return; }
+  row.style.display = 'flex';
+  row.innerHTML = '<span class="label" style="color:var(--text-dim);font-size:.78rem;">最近：</span>' +
+    h.map(q => `<span class="hist-chip" data-q="${esc(q)}">${esc(q)}<span class="x" data-x="${esc(q)}" title="删除">✕</span></span>`).join('') +
+    '<button class="hist-clear" id="hist-clear">清空</button>';
+  row.querySelectorAll('.hist-chip').forEach(c => {
+    c.onclick = (ev) => {
+      if (ev.target.classList.contains('x')) { removeHistory(ev.target.dataset.x); return; }
+      $('#search-q').value = c.dataset.q;
+      $('#btn-search').click();
+    };
+  });
+  const clr = $('#hist-clear');
+  if (clr) clr.onclick = () => {
+    try { localStorage.removeItem(HIST_KEY); } catch (e) {}
+    renderHistory();
+  };
+}
+
+// ── 键盘快捷键：/ 聚焦搜索框，Esc 取消搜索 ──
+document.addEventListener('keydown', (e) => {
+  const tag = (document.activeElement || {}).tagName || '';
+  const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(tag);
+  if (e.key === '/' && !typing) {
+    e.preventDefault();
+    $('#search-q').focus();
+    $('#search-q').select();
+  } else if (e.key === 'Escape') {
+    if (window._searchCtrl) { try { window._searchCtrl.abort(); } catch (err) {} }
+    if (typing) document.activeElement.blur();
+  }
+});
+
+// 空态引导（无结果时）
+function renderSearchEmpty(q) {
+  const box = $('#search-results');
+  _rowIndex.clear();  // A03: 整盒重绘，同步丢弃 DOM 索引
+  box.innerHTML = '<div class="empty"><div class="big">📚</div>没有找到相关小说' +
+    '<div style="color:var(--text-dim);font-size:.85rem;margin-top:6px;">试试其他关键词，或检查书源是否可用</div>' +
+    '<div style="margin-top:14px;"><a class="btn primary" href="/sources">去书源管理 →</a></div></div>';
+}
+// C06: 源失败态——与"真正无结果"严格区分，不得描述为"搜不到书"
+function renderSearchSourceFail(q, errCount, total) {
+  const box = $('#search-results');
+  _rowIndex.clear();  // A03: 整盒重绘，同步丢弃 DOM 索引
+  box.innerHTML = '<div class="empty"><div class="big">🔌</div>书源连接失败，未能完成搜索' +
+    '<div style="color:var(--text-dim);font-size:.85rem;margin-top:6px;">' +
+    errCount + (total ? '/' + total : '') + ' 个书源暂时无法访问（源站故障或网络问题），不代表没有这本书；请稍后重试或到书源管理校验</div>' +
+    '<div style="margin-top:14px;"><a class="btn primary" href="/sources">去书源管理 →</a></div></div>';
+}
+document.querySelectorAll('.quick a[data-q]').forEach(a => a.onclick = () => {
+  $('#search-q').value = a.dataset.q;
+  $('#btn-search').click();
+});
+
+// ── 搜索结果缓存（回退时不丢失）──
+const NOVEL_CACHE_KEY = 'novel_search_cache_v1';
+function cacheNovelSearch(q, groups) {
+  try { sessionStorage.setItem(NOVEL_CACHE_KEY, JSON.stringify({q, groups, ts: Date.now()})); } catch (e) {}
+}
+function getCachedNovelSearch() {
+  try { return JSON.parse(sessionStorage.getItem(NOVEL_CACHE_KEY) || 'null'); } catch (e) { return null; }
+}
+function mergeGroups(a, b) {
+  // A03: 同 key 分组不再是"先到先得"——用 GroupMerge.mergeGroup 合并，
+  // 旧缓存来源与新结果取并集（新数据覆盖同来源元数据）
+  const byKey = new Map(), order = [];
+  [...(a || []), ...(b || [])].forEach(g => {
+    const k = GroupMerge.groupKey(g);
+    if (!byKey.has(k)) { order.push(k); byKey.set(k, g); }
+    else byKey.set(k, GroupMerge.mergeGroup(byKey.get(k), g));
+  });
+  return order.map(k => byKey.get(k));
+}
+
+// 页面加载恢复：优先渲染缓存结果（任何回退方式都不清空），后台静默刷新
+function initRestoreSearch() {
+  const p = new URLSearchParams(location.search);
+  const urlQ = p.get('q');
+  const saved = getCachedNovelSearch();
+  const targetQ = urlQ || (saved && saved.q) || '';
+  if (!targetQ) return;
+  $('#search-q').value = targetQ;
+  if (p.get('source')) $('#search-source').value = p.get('source');
+  if (p.get('type')) $('#search-type').value = p.get('type');
+  if (p.get('sort')) $('#search-sort').value = p.get('sort');
+  if (saved && saved.q === targetQ && saved.groups && saved.groups.length) {
+    const box = $('#search-results');
+    box.innerHTML = '';
+    _rowIndex.clear();  // A03: 整盒重绘，同步丢弃 DOM 索引（renderGroup 会重建登记）
+    saved.groups.forEach(g => renderGroup(g, box));
+    const st = $('#search-status');
+    st.style.display = 'flex';
+    setSearchStatus(st, '', '已恢复上次结果（' + saved.groups.length + ' 本，后台刷新中…）', false);
+  }
+  doNovelSearch(targetQ, true);  // 静默刷新；空结果不会清空已显示内容
+}
+
+loadSources().then(() => setTimeout(initRestoreSearch, 50));
+renderHistory();
+// 输入框聚焦/有内容时隐藏 "/" 快捷键提示
+const _qInput = $('#search-q');
+const _kbdHint = document.querySelector('.kbd-hint');
+function _syncKbdHint() {
+  if (_kbdHint) _kbdHint.style.display =
+    (document.activeElement === _qInput || _qInput.value) ? 'none' : '';
+}
+_qInput.addEventListener('focus', _syncKbdHint);
+_qInput.addEventListener('blur', _syncKbdHint);
+_qInput.addEventListener('input', _syncKbdHint);
+
+// ═══ 缓存清理 ═══
+function fmtSize(n) {
+  if (n >= 1073741824) return (n / 1073741824).toFixed(2) + ' GB';
+  if (n >= 1048576) return (n / 1048576).toFixed(1) + ' MB';
+  return Math.round(n / 1024) + ' KB';
+}
+document.getElementById('nav-clean').addEventListener('click', async (e) => {
+  e.preventDefault();
+  if (!confirm('清理缓存？将删除漫画图片缓存、搜索/目录缓存与日志，释放磁盘空间（不影响已下载书籍）。')) return;
+  try {
+    const r = await fetch('/api/cache/clean', {method: 'POST',
+      headers: {'Content-Type': 'application/json'}, body: JSON.stringify({scope: 'cache'})});
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error || '清理失败');
+    const items = (d.cleaned || []).map(i => i.name + '（' + fmtSize(i.size) + '）').join('、');
+    toast('✓ 已释放 ' + fmtSize(d.freed) + (items ? '：' + items : ''), 'ok');
+  } catch (err) {
+    toast('⚠ 清理失败: ' + (err.message || err), 'error');
+  }
+});
+
+</script>
+</body>
+</html>

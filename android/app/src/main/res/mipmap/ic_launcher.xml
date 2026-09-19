@@ -1,0 +1,30 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+    <!-- API 24–25 回退图标（26+ 走 mipmap-anydpi-v26 自适应图标）：整幅自绘 -->
+    <path
+        android:fillColor="#0F1115"
+        android:pathData="M0,0 h48 v48 h-48 z" />
+    <!-- 打开的书：左页 -->
+    <path
+        android:fillColor="#E9EEF6"
+        android:pathData="M14,18 h10 v15 h-10 z" />
+    <!-- 右页 -->
+    <path
+        android:fillColor="#F7F9FC"
+        android:pathData="M25,18 h10 v15 h-10 z" />
+    <!-- 书脊 -->
+    <path
+        android:fillColor="#2B3547"
+        android:pathData="M23,18 h2 v15 h-2 z" />
+    <!-- 底部书沿 -->
+    <path
+        android:fillColor="#A7B0C0"
+        android:pathData="M14,31 h21 v2 h-21 z" />
+    <!-- 琥珀书签 -->
+    <path
+        android:fillColor="#E0A458"
+        android:pathData="M28,18 h3 v8 l-1.5,-2.5 l-1.5,2.5 z" />
+</vector>

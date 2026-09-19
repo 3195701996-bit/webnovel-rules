@@ -1,0 +1,8 @@
+# ── 漫画/图片/浏览器渲染（可选，缺失时相关源自动不可用）──
+# Pillow：jm 源图片块还原（engine/manga/jm.py 内延迟 import）
+Pillow>=10.0,<14
+# cryptography：jm 源 API 响应 AES 解密（engine/manga/jm.py 延迟 import，无降级，
+# 缺失即 ImportError；此前只在 requirements.lock，全新安装会漏）
+cryptography>=42,<51
+# Playwright：copymanga_web 源渲染；装后还需 `playwright install chromium`
+playwright>=1.40,<2

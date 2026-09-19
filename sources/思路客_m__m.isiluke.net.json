@@ -1,0 +1,27 @@
+{
+ "bookSourceName": "思路客(m版)",
+ "bookSourceUrl": "http://m.isiluke.net",
+ "searchUrl": "/SearchBook.php?keyword={{key}}",
+ "ruleSearch": {
+  "bookList": "div.slide-item",
+  "name": "p.title@text",
+  "bookUrl": "a[href*='/html/']@href",
+  "author": "p.author a@text"
+ },
+ "ruleBookInfo": {
+  "name": "h1@text",
+  "tocUrl": "a[href$='all.html']@href"
+ },
+ "ruleToc": {
+  "chapterList": "#chapterlist p a[href*='.html']",
+  "chapterName": "a@text",
+  "chapterUrl": "a@href"
+ },
+ "ruleContent": {
+  "content": "#chaptercontent@text##『章节错误，点此举报』\\s*####天才一秒记住[^\\n]*?无广告！\\s*####最新网址[:：]m\\.isiluke\\.la\\s*####\\(第\\d+/\\d+页\\)\\s*####（本章未完[^\\n]*?继续阅读）\\s*####crcoww\\w+\\(\\);\\s*####『加入书签[^\\n]*?』\\s*##",
+  "nextContentUrl": "#pt_next@href"
+ },
+ "tocSort": "url",
+ "uid": "思路客_m__m.isiluke.net",
+ "enabled": false
+}

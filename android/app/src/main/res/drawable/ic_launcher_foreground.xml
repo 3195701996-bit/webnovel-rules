@@ -1,0 +1,26 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- 打开的书：左页 -->
+    <path
+        android:fillColor="#E9EEF6"
+        android:pathData="M30,40 h23 v34 h-23 z" />
+    <!-- 右页 -->
+    <path
+        android:fillColor="#F7F9FC"
+        android:pathData="M55,40 h23 v34 h-23 z" />
+    <!-- 书脊 -->
+    <path
+        android:fillColor="#2B3547"
+        android:pathData="M52,40 h4 v34 h-4 z" />
+    <!-- 底部书沿 -->
+    <path
+        android:fillColor="#A7B0C0"
+        android:pathData="M30,70 h48 v4 h-48 z" />
+    <!-- 琥珀书签（品牌 accent） -->
+    <path
+        android:fillColor="#E0A458"
+        android:pathData="M61,40 h6 v18 l-3,-5 l-3,5 z" />
+</vector>

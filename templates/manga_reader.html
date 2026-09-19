@@ -1,0 +1,1055 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>漫画阅读 · webnovel_rules</title>
+<link rel="stylesheet" href="/static/css/style.css">
+<style>
+.reader-top { display:flex; align-items:center; gap:10px; padding:10px 14px; position:fixed; top:0; left:0; right:0; background:var(--bg); z-index:10; border-bottom:1px solid var(--border); transform:translateY(0); transition:transform 200ms ease; }
+.reader-top.hidden { transform:translateY(-100%); }
+.reader-top .back { background:none; border:none; color:var(--text); font-size:1.2rem; cursor:pointer; }
+.reader-top .ttl { font-weight:600; font-size:.9rem; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.reader-top .nav-btn { padding:6px 14px; border-radius:8px; border:1px solid var(--border); background:var(--bg-2,#1c2230); color:var(--text); cursor:pointer; font-size:.85rem; }
+.reader-top .nav-btn:hover { border-color:var(--accent); }
+.reader-top .nav-btn:disabled { opacity:.4; cursor:default; }
+/* 末页下方章节导航 */
+.ch-nav { width:100%; display:flex; align-items:center; justify-content:center; gap:16px;
+  padding:28px 14px 40px; }
+.ch-nav-btn { padding:10px 22px; border-radius:10px; border:1px solid var(--border);
+  background:var(--bg-2,#1c2230); color:var(--text); cursor:pointer; font-size:.9rem; font-weight:600; }
+.ch-nav-btn:hover:not(:disabled) { border-color:var(--accent); color:#8ab4ff; }
+.ch-nav-btn:disabled { opacity:.35; cursor:default; }
+.ch-nav-name { font-size:.8rem; color:var(--text-dim); max-width:40%; overflow:hidden;
+  text-overflow:ellipsis; white-space:nowrap; }
+body { padding-top:52px; }  /* 固定顶栏占位（Kimi 优化）*/
+/* 滚动连续阅读：图片无缝衔接，无黑间隙 */
+.scroll-stage { display:flex; flex-direction:column; align-items:center; gap:0; padding:0 0 60px; }
+.scroll-stage img { width:100%; max-width:100%; display:block; background:transparent; margin:0; padding:0; border:0; }
+.scroll-stage .img-wrap { position:relative; width:100%; display:block; line-height:0; }
+.scroll-stage .img-wrap img { min-height:auto; }
+/* 图片占位：按漫画页真实比例(3:4)占位——高度=宽度×4/3≈真实图高，
+   手机端不再出现 96vh 视口占位导致的巨大图片间隙；定位仍接近准确 */
+.scroll-stage .img-placeholder { aspect-ratio:3/4; width:100%; display:flex; align-items:center; justify-content:center; color:var(--text-dim); font-size:.78rem; background:transparent; }
+/* 图片加载完成前不显示黑色背景 */
+.scroll-stage img[src] { background:transparent; }
+/* 章节横幅 */
+.chap-banner { width:100%; text-align:center; padding:14px; color:var(--text-dim); font-size:.9rem; font-weight:600; }
+/* 章节目录面板 */
+.toc-btn { padding:6px 12px; border-radius:8px; border:1px solid var(--border); background:var(--bg-2,#1c2230); color:var(--text); cursor:pointer; font-size:.85rem; margin-right:8px; }
+.toc-btn:hover { border-color:var(--accent); }
+.toc-panel { position:fixed; top:0; right:0; bottom:0; width:min(320px, 85vw); background:var(--bg-2,#1c2230);
+  box-shadow:-4px 0 20px rgba(0,0,0,.4); z-index:150; transform:translateX(100%); transition:transform .25s ease; display:flex; flex-direction:column; }
+.toc-panel.show { transform:translateX(0); }
+.toc-head { display:flex; align-items:center; justify-content:space-between; padding:14px 16px; border-bottom:1px solid var(--border); font-weight:700; }
+.toc-head .close { background:none; border:none; color:var(--text-dim); font-size:1.2rem; cursor:pointer; }
+.toc-list { flex:1; overflow-y:auto; padding:8px 0; }
+.toc-item { display:block; width:100%; text-align:left; padding:9px 16px; background:none; border:none; color:var(--text);
+  font-size:.85rem; cursor:pointer; border-left:3px solid transparent; }
+.toc-item:hover { background:rgba(139,92,246,.1); }
+.toc-item.active { background:rgba(139,92,246,.15); border-left-color:#8b5cf6; color:#8b5cf6; font-weight:600; }
+.toc-item .grp { font-size:.68rem; color:var(--text-dim); display:block; }
+.toc-mask { position:fixed; inset:0; background:rgba(0,0,0,.5); z-index:140; display:none; }
+.toc-mask.show { display:block; }
+.toc-item.dl { border-left:3px solid #34a853; }
+.toc-item.dl .toc-dl { float:right; color:#34a853; font-size:.72rem; }
+/* ── R19: 阅读模式(滚动/单页/双页) + 亮度设置 ── */
+.settings-wrap { position:relative; }
+.settings-panel { position:absolute; top:calc(100% + 8px); right:0; width:230px;
+  background:var(--bg-2,#1c2230); border:1px solid var(--border); border-radius:12px;
+  box-shadow:0 8px 30px rgba(0,0,0,.5); z-index:200; padding:12px; display:none; }
+.settings-panel.show { display:block; }
+.settings-panel .st-row { display:flex; align-items:center; justify-content:space-between; gap:8px; margin:6px 0; }
+.settings-panel .st-label { font-size:.78rem; color:var(--text-dim); white-space:nowrap; }
+.settings-panel .st-opt { display:flex; gap:4px; flex:1; }
+.settings-panel .st-btn { flex:1; padding:5px 0; border:1px solid var(--border); border-radius:8px;
+  background:transparent; color:var(--text); font-size:.75rem; cursor:pointer; text-align:center; }
+.settings-panel .st-btn.active { background:rgba(139,92,246,.2); border-color:#8b5cf6; color:#c4b5fd; }
+.settings-panel input[type=range] { flex:1; accent-color:#8b5cf6; }
+/* 亮度遮罩：全屏黑色覆盖层，pointer-events 穿透，滚动/翻页模式共用 */
+#dim-overlay { position:fixed; inset:0; background:#000; opacity:0; z-index:60;
+  pointer-events:none; transition:opacity .15s ease; }
+/* 单页/双页模式：图片按视口适配 */
+.paged-stage { min-height:100vh; display:flex; flex-direction:column; }
+.page-view { flex:1; display:flex; align-items:center; justify-content:center;
+  position:relative; overflow:hidden; user-select:none; -webkit-user-select:none; }
+.page-view .page-img { max-width:100%; max-height:calc(100vh - 90px); object-fit:contain;
+  display:block; }
+.page-view .page-ph { color:var(--text-dim); font-size:.8rem; text-align:center; }
+/* 左右翻页点击区 */
+.page-zone { position:absolute; top:0; bottom:0; width:33%; cursor:pointer; z-index:2; }
+.page-zone.left { left:0; }
+.page-zone.right { right:0; }
+.page-zone:hover { background:rgba(139,92,246,.06); }
+/* 双页模式：两图并排（横屏/平板），窄屏自动退回单页 */
+.page-view.double { gap:4px; }
+.page-view.double .page-img { max-width:calc(50% - 4px); }
+/* 翻页模式底部章节导航 */
+.page-nav { width:100%; display:flex; align-items:center; justify-content:center;
+  gap:16px; padding:14px; }
+.page-hint { position:absolute; top:50%; transform:translateY(-50%); font-size:2rem;
+  color:rgba(255,255,255,.25); pointer-events:none; opacity:0; transition:opacity .2s; z-index:3; }
+.page-hint.show { opacity:1; }
+.page-ind { position:absolute; right:12px; bottom:10px; color:var(--text-dim); font-size:.7rem;
+  z-index:4; background:rgba(0,0,0,.45); padding:2px 9px; border-radius:8px; pointer-events:none; }
+</style>
+</head>
+<body>
+<div class="reader-top">
+  <button class="back" onclick="history.back()">←</button>
+  <div class="ttl" id="ttl"></div>
+  <button class="toc-btn" onclick="toggleToc(true)">☰ 目录</button>
+  <button class="nav-btn" onclick="zoomManga(-0.15)" title="缩小">A−</button>
+  <span class="zoom-val" id="zoom-val" style="font-size:.75rem;color:var(--text-dim);min-width:40px;text-align:center;">100%</span>
+  <button class="nav-btn" onclick="zoomManga(0.15)" title="放大">A+</button>
+  <div class="settings-wrap">
+    <button class="nav-btn" id="settings-btn" onclick="toggleSettings()" title="阅读设置">⚙</button>
+    <div class="settings-panel" id="settings-panel">
+      <div class="st-row"><span class="st-label">阅读模式</span>
+        <div class="st-opt">
+          <button class="st-btn" data-mode="scroll" onclick="setMode('scroll')">滚动</button>
+          <button class="st-btn" data-mode="paged" onclick="setMode('paged')">单页</button>
+          <button class="st-btn" data-mode="double" onclick="setMode('double')">双页</button>
+        </div>
+      </div>
+      <div class="st-row"><span class="st-label">亮度</span>
+        <div class="st-opt">
+          <button class="st-btn" data-bright="day" onclick="setBright('day')">白天</button>
+          <button class="st-btn" data-bright="night" onclick="setBright('night')">夜间</button>
+          <button class="st-btn" data-bright="custom" onclick="setBright('custom')">自定义</button>
+        </div>
+      </div>
+      <div class="st-row" id="bright-slider-row" style="display:none;">
+        <span class="st-label">亮度值</span>
+        <input type="range" id="bright-slider" min="0" max="70" value="45"
+          oninput="setBrightCustom(this.value)">
+        <span id="bright-val" style="font-size:.72rem;color:var(--text-dim);min-width:32px;text-align:right;">45%</span>
+      </div>
+      <div class="st-row"><span class="st-label">翻页方式</span>
+        <div class="st-opt">
+          <button class="st-btn" data-flip="zone" onclick="setFlipMode('zone')">点击翻页</button>
+          <button class="st-btn" data-flip="swipe" onclick="setFlipMode('swipe')">滑动翻页</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <button class="nav-btn" onclick="downloadCurrent()" title="下载本话">⭳</button>
+</div>
+
+<div id="dim-overlay"></div>
+
+<div id="toc-mask" class="toc-mask" onclick="toggleToc(false)"></div>
+<div id="toc-panel" class="toc-panel">
+  <div class="toc-head">
+    <span>📚 章节目录 <span id="toc-count" style="font-weight:400;color:var(--text-dim);font-size:.78rem;"></span></span>
+    <button class="close" onclick="toggleToc(false)">✕</button>
+  </div>
+  <div style="padding:8px 12px;border-bottom:1px solid var(--border);">
+    <input id="toc-search" placeholder="🔍 搜索章节…" style="width:100%;padding:8px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:.82rem;"
+      oninput="renderToc(this.value)">
+  </div>
+  <div class="toc-list" id="toc-list"></div>
+</div>
+
+<div id="stage" class="scroll-stage"></div>
+
+<script src="/static/js/common.js"></script>
+<script>
+const params = new URLSearchParams(location.search);
+const SOURCE = params.get('source');
+// B2: 畸形 % 序列抛 URIError 会毁掉整段脚本；参数缺失得到 "null" 继续发请求——统一拦截
+let CID = '', TITLE = '';
+try {
+  CID = decodeURIComponent(params.get('cid') || '');
+  TITLE = decodeURIComponent(params.get('title') || '');
+} catch (e) { CID = ''; TITLE = ''; }
+// URL 显式指定章节（详情页点任意一话/从目录带 ch 参数, ch=0 即第 1 话）
+// → 优先; 只有完全不带 ch 参数(如书库直开)才恢复上次位置。
+// 修复: 原实现 ch=0 被当"待恢复", 点"第 01 话"会跳到历史章节(如第02话)
+let chIdx0 = parseInt(params.get('ch') || '0', 10);
+const _urlChExplicit = params.has('ch');
+// 页码进度（详情页"继续阅读"传入）：首次进入该章节时滚动到对应页
+let pg0 = parseInt(params.get('pg') || '0', 10);
+
+// ── 恢复上次阅读位置：进入时若无显式章节参数，从服务端历史恢复 章节+页码 ──
+// 阅读进度同步就绪标记：**读到服务器历史之前绝不写回**——否则手机端重连瞬间
+// 读取失败会回退到第 1 话，用户一滚动就把 P1 写回服务器，两端进度一起被改掉
+// （用户实测："每次手机端重连都会导致阅读进度被重置"）。
+// 2026-09-13: 显式点章(_urlChExplicit)时也要读历史——同章要恢复**章内页码**，
+// 否则"从书库继续阅读"永远从该话第 1 页开始并把 P1 写回去。
+let _histReady = false;
+let _fallbackChIdx = null;      // 首次进入时实际打开的话（迟到同步据此判断用户是否已导航）
+// 服务端按**章节身份**解析出的落点（detail.resume，0.64.0）。用它而不是历史 idx：
+// 目录会变（加更/删章/插番外），idx 会指向别的话——用户看到的就是"我在第23话退出，
+// 再进来却回到第1话"。exact=false 表示只能近似，此时**不自动写回**，避免覆盖记录。
+let _resume = null;
+let _resumeInexact = false;
+async function restoreProgress(attempt = 0) {
+  try {
+    const r = await fetch('/api/manga/history');
+    const d = await r.json();
+    const rec = (d.history || []).find(x => x.source === SOURCE && x.comic_id === CID);
+    // 服务端解析结果优先（有它就不看 idx）
+    if (_resume && typeof _resume.index === 'number' && _resume.index >= 0) {
+      if (!_urlChExplicit) {
+        chIdx0 = _resume.index;
+        if (_resume.page > 1) pg0 = _resume.page;
+      } else if (_resume.index === chIdx0 && _resume.page > 1) {
+        pg0 = _resume.page;
+      }
+      if (!_resume.exact) _resumeInexact = true;
+      _histReady = true;
+      return;
+    }
+    if (_resume && _resume.record_label && (_resume.index < 0)) {
+      // 有记录但当前目录里找不到那一话：如实提示，且不自动写回
+      _resumeInexact = true;
+      _histReady = true;
+      showResumeNote(_resume.note || ('上次读到的「' + _resume.record_label + '」在当前目录里找不到'));
+      return;
+    }
+    if (rec && typeof rec.idx === 'number' && rec.idx >= 0) {
+      const m = /P(\d+)/.exec(rec.pos || '');
+      const _pg = m ? (parseInt(m[1], 10) || 1) : 1;
+      if (!_urlChExplicit) {
+        if (attempt > 0) {
+          // 迟到的成功（重连后补读到历史）：用户还在回退话且未自行导航 →
+          // 跟随服务器进度；已自行翻话则尊重用户位置，只恢复"可写"状态
+          const _tgt = (_resume && _resume.index >= 0) ? _resume.index : rec.idx;
+          const _tpg = (_resume && _resume.page > 0) ? _resume.page : _pg;
+          if (_fallbackChIdx !== null && chIdx === _fallbackChIdx
+              && _tgt !== chIdx && _tgt < chapters.length) {
+            if (_tpg > 1) pg0 = _tpg;
+            _histReady = true;      // 必须先置"可写"：跳转分支会 return，别漏掉
+            jumpChapter(_tgt);
+            return;
+          }
+        } else {
+          chIdx0 = rec.idx;               // 无显式章节：章节+页码都用历史
+          if (_pg > 1) pg0 = _pg;
+        }
+      } else if (rec.idx === chIdx0 && _pg > 1) {
+        pg0 = _pg;                        // 显式章节与历史同话：只恢复页码
+      }
+    }
+    _histReady = true;
+  } catch (e) {
+    if (attempt < 6) {                    // 退避重试：网络恢复后自动补上
+      setTimeout(() => { if (!_histReady) restoreProgress(attempt + 1); },
+                 1200 * (attempt + 1));
+    }
+  }
+}
+
+// ── 阅读进度：记录 章节+页码（节流保存到服务端历史）──
+let _histTimer = null;
+function currentPage() {
+  const wraps = document.querySelectorAll('#stage .img-wrap');
+  if (!wraps.length) return 1;
+  const vp = window.scrollY + window.innerHeight * 0.35;
+  for (let i = 0; i < wraps.length; i++) {
+    const w = wraps[i];
+    if (w.offsetTop + w.offsetHeight > vp) return i + 1;
+  }
+  return wraps.length;
+}
+let _histUnsynced = null;  // 服务端同步失败待重试的位置（A05：写失败不再静默丢弃）
+function _postHistory(payload, tag, retried) {
+  fetch('/api/manga/history', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify(payload)
+  }).then(r => r.json()).then(d => {
+    if (!d || d.ok !== true) throw new Error('save failed');
+    if (_histUnsynced === tag) _histUnsynced = null;
+  }).catch(() => {
+    _histUnsynced = tag;                      // 保留待同步位置
+    if (!retried) setTimeout(() => {          // 简单重试一次
+      if (_histUnsynced === tag) _postHistory(payload, tag, true);
+    }, 2000);
+  });
+}
+// 卸载/切后台专用保存：sendBeacon 由浏览器保证送出（普通 fetch 在页面卸载时
+// 会被取消——实测"读到一半退出后阅读记录不更新"），失败回落 keepalive fetch。
+function saveProgressBeacon() {
+  try {
+    if (!chapters.length || chIdx < 0 || chIdx >= chapters.length) return;
+    if (!_histReady) return;
+  // 0.64.0（**关键**）：只允许写"**正在显示**的那一话"。
+  // 之前只看 chIdx：进入阅读器时 chapters 已就绪、而目标话还在请求中（源站几秒），
+  // 这段窗口里任何一次自动保存（滚动防抖/定时器/离开页面）都会把 chIdx 的初始值
+  // 0 写进去 —— 记录被改成"第1话 P1"，于是**下一次进来就只会从第1话开始**
+  // （用户反馈"在第23话退出，再进却跳到第一话"的真因之一，浏览器实测复现）。
+  if (!_curChId || !chapters[chIdx] || _curChId !== chapters[chIdx].id) return;
+    let pg;
+    if (settings.mode === 'scroll') { pg = currentPage(); }
+    else {
+      const imgs = window._curImgs || [];
+      if (!imgs.length) return;
+      pg = _pageIdx + 1;
+    }
+    const payload = {source: SOURCE, comic_id: CID, idx: chIdx,
+      chapter_id: (chapters[chIdx].id || ''),
+      chapter_label: (chapters[chIdx].name || ''),
+      pos: (chapters[chIdx].name || '') + ' P' + pg, title: TITLE};
+    const body = JSON.stringify(payload);
+    const url = '/api/manga/history';
+    if (navigator.sendBeacon) {
+      const blob = new Blob([body], {type: 'application/json'});
+      if (navigator.sendBeacon(url, blob)) return;
+    }
+    fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: body, keepalive: true}).catch(() => {});
+  } catch (e) {}
+}
+
+function saveProgress() {
+  if (!chapters.length || chIdx < 0 || chIdx >= chapters.length) return;
+  // 0.64.0（**关键**）：只允许写"**正在显示**的那一话"。
+  // 之前只看 chIdx：进入阅读器时 chapters 已就绪、而目标话还在请求中（源站几秒），
+  // 这段窗口里任何一次自动保存（滚动防抖/定时器/离开页面）都会把 chIdx 的初始值
+  // 0 写进去 —— 记录被改成"第1话 P1"，于是**下一次进来就只会从第1话开始**
+  // （用户反馈"在第23话退出，再进却跳到第一话"的真因之一，浏览器实测复现）。
+  if (!_curChId || !chapters[chIdx] || _curChId !== chapters[chIdx].id) return;
+  let pg;
+  if (settings.mode === 'scroll') {
+    pg = currentPage();
+  } else {
+    const imgs = window._curImgs || [];
+    if (!imgs.length) return;
+    pg = _pageIdx + 1;
+  }
+  // 服务器历史未读到 → 不写（防"读取失败回退"覆盖两端进度）；联网后重试读取
+  if (!_histReady) return;
+  const payload = {source: SOURCE, comic_id: CID, idx: chIdx,
+    chapter_id: (chapters[chIdx].id || ''),
+    chapter_label: (chapters[chIdx].name || ''),
+    pos: (chapters[chIdx].name || '') + ' P' + pg, title: TITLE};
+  _histUnsynced = null;
+  _postHistory(payload, payload, false);
+}
+// ── 实时进度：领先保存 + 节流（0.64.0）────────────────────────────────
+// 用户要求"应该实时记录阅读进度"。旧实现只有 700ms 防抖 + 15s 心跳：
+// 连续滚动时防抖被反复重置 → 一路都在"待保存"，真正写盘可能只在最后停顿，
+// 卡死/杀进程就丢。改成：**位置一变就先写一次**，2s 内的后续变化合并成一次尾写。
+let _lastSaveKey = '';
+let _lastSaveTs = 0;
+let _saveTimer = null;
+const _SAVE_MIN_GAP = 2000;
+
+function scheduleProgressSave() {
+  if (!_histReady || document.hidden) return;
+  if (!_curChId || !chapters[chIdx]) return;          // 还没渲染出话 → 不写
+  const pg = (settings.mode === 'scroll') ? currentPage() : (_pageIdx + 1);
+  const key = _curChId + ':' + pg;
+  if (key === _lastSaveKey) return;                    // 位置没变 → 不写
+  const now = Date.now();
+  if (now - _lastSaveTs >= _SAVE_MIN_GAP) {
+    _lastSaveTs = now; _lastSaveKey = key;
+    saveProgress();
+    return;
+  }
+  if (_saveTimer) clearTimeout(_saveTimer);            // 节流窗口内 → 尾写一次
+  _saveTimer = setTimeout(() => {
+    _saveTimer = null; _lastSaveTs = Date.now();
+    _lastSaveKey = key;
+    saveProgress();
+  }, _SAVE_MIN_GAP - (now - _lastSaveTs));
+}
+
+// 定位锚点：scrollToPage 期间记录目标位置；用户手动滚动离开后不再抢位校正
+let _locateY = -1;
+let _userMoved = false;
+
+function scrollToPage(pg, onDone) {
+  const gen = _curGen, chId = _curChId;  // 冻结所属章：切章后旧校正/定时器不得抢位
+  const wraps = document.querySelectorAll('#stage .img-wrap');
+  const target = wraps[pg - 1];
+  if (!target) { if (onDone) onDone(); return; }
+  const imgs = window._curImgs || [];
+  // ① 瞬时定位（无滚动动画）：直接调至目标页占位高度（≈视口高，接近真实）
+  _locateY = target.offsetTop;
+  _userMoved = false;
+  window.scrollTo(0, _locateY);
+  // ② 目标页图片优先加载（内容立刻可见），随后目标页前 1 张也优先（往上读有内容）
+  const _ti = pg - 1;
+  _mountImg(wraps[_ti], imgs[_ti], _ti, imgs, true, null, gen, chId);
+  if (_ti - 1 >= 0) _mountImg(wraps[_ti - 1], imgs[_ti - 1], _ti - 1, imgs, true, null, gen, chId);
+  // ③ 目标页之前的图片后台逐张加载（确定 offsetTop 需它们的高度）；
+  //    全部 settle 后**一次性**精确校正（非逐步跳动）；用户已手动滚动则不再校正
+  let pending = 0;
+  const correct = () => {
+    if (gen !== _curGen) { if (onDone) onDone(); return; }  // 已切章：旧章不再校正
+    if (!target.isConnected) return;
+    if (_userMoved) { if (onDone) onDone(); return; }
+    _locateY = target.offsetTop;
+    window.scrollTo(0, _locateY);  // 瞬时，无动画
+    if (onDone) onDone();
+  };
+  for (let i = 0; i < pg && i < wraps.length; i++) {
+    const w = wraps[i];
+    if (!w.querySelector('img')) {
+      pending++;
+      _mountImg(w, imgs[i], i, imgs, true, () => { pending--; if (pending <= 0) correct(); }, gen, chId);
+    }
+  }
+  if (pending <= 0) correct();
+  // ④ 兜底：3.5s 内仍未全部 settle（CDN 极慢/降级代理中）也校正一次，避免一直悬空
+  setTimeout(() => {
+    if (gen !== _curGen) return;  // 已切章：旧章的兜底校正不得执行
+    if (target.isConnected && !_userMoved) window.scrollTo(0, target.offsetTop);
+  }, 3500);
+}
+// 滚动节流保存（含章节切换后）
+window.addEventListener('scroll', () => {
+  if (!chapters.length) return;
+  // 用户手动滚动（离开定位锚点 >120px）→ 停止自动校正，尊重用户当前位置
+  if (_locateY >= 0 && Math.abs(window.scrollY - _locateY) > 120) _userMoved = true;
+  scheduleProgressSave();       // 位置一变就写（2s 内合并）→ 实时记录
+}, {passive: true});
+let chapters = [];
+let chIdx = 0;
+let loading = false;
+// 渲染代际 + 冻结的所属章节：切章后旧图的懒加载回调/代理降级定时器
+// 不得再写 DOM，也不得用"当前 chIdx"拼出错误章节的代理地址
+let _renderGen = 0;
+let _curGen = 0;
+let _curChId = '';
+let _scrollIO = null;
+
+document.title = TITLE + ' · 漫画阅读';
+$('#ttl').textContent = TITLE;
+
+async function loadDetail() {
+  $('#stage').innerHTML = '<div class="chap-banner">加载中…</div>';
+  try {
+    // 恢复上次阅读位置（URL 未显式指定章节时）；与详情并行请求
+    if (!_urlChExplicit) {
+      const r = await fetch('/api/manga/' + SOURCE + '/' + encodeURIComponent(CID));
+      const d = await r.json();
+      _resume = d.resume || null;
+      if (_resume && _resume.note) showResumeNote(_resume.note);
+      await restoreProgress();
+      chapters = d.chapters || [];
+      window._dlSet = new Set(d.downloaded || []);
+      if (!chapters.length) { $('#stage').innerHTML = '<div class="chap-banner">无章节</div>'; return; }
+      _fallbackChIdx = Math.min(chIdx0, chapters.length - 1);
+      gotoChapter(_fallbackChIdx, false);
+    } else {
+      // 显式章节（书库/详情带 ?ch=N 进入）**同样要读历史**：
+      //  ① 恢复同话的章内页码（否则每次都从 P1 开始）；
+      //  ② 置 _histReady——否则"读到进度前不写服务器"的门会把之后所有
+      //     阅读记录写入全部挡掉（实测缺陷：jm 读到一半退出不更新记录）。
+      const r = await fetch('/api/manga/' + SOURCE + '/' + encodeURIComponent(CID));
+      const d = await r.json();
+      _resume = d.resume || null;
+      await restoreProgress();
+      chapters = d.chapters || [];
+      window._dlSet = new Set(d.downloaded || []);
+      if (!chapters.length) { $('#stage').innerHTML = '<div class="chap-banner">无章节</div>'; return; }
+      _fallbackChIdx = Math.min(chIdx0, chapters.length - 1);
+      gotoChapter(_fallbackChIdx, true);
+    }
+  } catch (e) {
+    $('#stage').innerHTML = '<div class="chap-banner">加载失败: ' + esc(e.message || e) + '</div>';
+  }
+}
+
+function showResumeNote(text) {
+  try {
+    let el = document.getElementById('resume-note');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'resume-note';
+      el.className = 'chap-banner';
+      el.style.cssText = 'background:#2a2a38;color:#b9c2cf;font-size:12px;'
+        + 'padding:6px 10px;text-align:center';
+      const st = document.getElementById('stage');
+      st.parentNode.insertBefore(el, st);
+    }
+    el.textContent = text;
+    el.style.display = 'block';
+  } catch (e) {}
+}
+
+async function gotoChapter(i, explicit) {
+  if (i < 0 || i >= chapters.length || loading) return;
+  if (i !== chIdx && chIdx >= 0 && chapters.length) saveProgress();  // 切换前保存当前进度
+  loading = true;
+  chIdx = i;
+  _renderGen++;                 // 立即作废旧章的异步回调/定时器
+  _disconnectScrollIO();        // 断开旧章懒加载观察者
+  $('#stage').innerHTML = '<div class="chap-banner">加载中…</div>';
+  try {
+    // 复用预取数据（下一章图片列表已在滚动时预取；预取带目标章节 idx，
+    // 只有切到"下一章"才复用——跳章（如第1话→第5.5话）必须重新拉取，
+    // 否则会误用预取的第2话图片导致内容错位）
+    let d = null, lastErr = null;
+    // 复用预取：**只有非空才复用**。空的下一话预取（源站限流/瞬时空响应）
+    // 一旦被当作有效数据，这一章就永远是"没有图"，且客户端不会再请求一次
+    // ——正是"加载时刷新/切章后，后续页面再也不加载"的成因之一。
+    if (window._nextChImgs && window._nextChImgs.idx === i
+        && (window._nextChImgs.images || []).length) {
+      d = {images: window._nextChImgs.images};
+      window._nextChImgs = null;
+    } else if (window._nextChImgs) {
+      window._nextChImgs = null;  // 跳章/空预取：丢弃，按新章节重新拉取
+    }
+    if (!d) {
+      // fetch 超时兜底（45s/次）+ 自动重试 2 次（copymanga 间歇风控时提升成功率）
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        try {
+          const ctrl = new AbortController();
+          const timer = setTimeout(() => ctrl.abort(), 45000);
+          let r;
+          try {
+            // 批量接口：一次返回全部图片（已下载本地路径/未下载源站CDN）
+            // 章节 ID 需编码：部分源的 ID 含 # ? & 等字符，直接拼接会截断路径
+            r = await fetch(`/api/manga/${SOURCE}/${encodeURIComponent(CID)}/chapter/${encodeURIComponent(chapters[i].id)}/urls`, {signal: ctrl.signal});
+          } finally { clearTimeout(timer); }
+          d = await r.json();
+          if (d.error) throw new Error(d.error);
+          break;
+        } catch (e) {
+          lastErr = e;
+          if (attempt < 2) await new Promise(res => setTimeout(res, 1500 * attempt));
+        }
+      }
+    }
+    if (!d) throw lastErr || new Error('加载失败');
+    const imgs = d.images || [];
+    // 服务端已经把"源站空列表"当作失败返回错误；这里再兜一层：拿到空列表
+    // 绝不渲染成"空白章节"（用户会以为图片不加载），而是明确报错 + 可重试
+    if (!imgs.length) throw new Error('本章未取到图片（源站限流或暂无内容），请重试');
+    // 打开章节时**只给显式打开**写记录：书库/详情点进某一话 = 用户选了这一话；
+    // 自动续读打开则保持原记录不动（否则会把"第47话 P30"冲成"第1话 P1"）。
+    if (explicit && !_resumeInexact) {
+      fetch('/api/manga/history', {method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({source: SOURCE, comic_id: CID, idx: i,
+          chapter_id: (chapters[i].id || ''),
+          chapter_label: (chapters[i].name || ''),
+          pos: (chapters[i].name || '') + ' P1', title: TITLE})}).catch(()=>{});
+    } else if (!explicit && _resumeInexact && chapters[i]) {
+      showResumeNote('未能精确定位上次读到的位置，已从「' + (chapters[i].name || '') +
+        '」开始；这次不会自动覆盖你的阅读记录');
+    }
+    renderChapter(imgs, chapters[i].name);
+    window._curImgs = imgs;  // 供 scrollToPage 定位前强制加载前部图 / 翻页模式使用
+    // 定位：继续阅读恢复→指定页码（滚动模式 scrollToPage；翻页模式在 renderPaged 内按 pg0 定位）
+    if (i === chIdx0 && pg0 > 1 && settings.mode === 'scroll') {
+      // 同步定位（renderScroll 后同帧 scrollTo）：用户只看到目标页，
+      // 不会先见第一页；前部图异步加载时 scrollToPage 内部自动校正
+      scrollToPage(pg0);
+    } else if (settings.mode === 'scroll') {
+      // 瞬时回顶部（对齐整页重载体验）：style.css 全局 html{scroll-behavior:smooth}
+      // 会让普通 scrollTo 变成慢速动画，切章时会从章尾"滑行"数秒才到章首
+      const _de = document.documentElement;
+      const _sb = _de.style.scrollBehavior;
+      _de.style.scrollBehavior = 'auto';
+      window.scrollTo(0, 0);
+      _de.style.scrollBehavior = _sb;
+    }
+    // 预取下一章图片列表（滚到当前章底部前就开始；预取绑定目标 idx，跳章不复用）
+    if (i < chapters.length - 1 && !window._nextChImgs) {
+      const _pi = i + 1;
+      fetch(`/api/manga/${SOURCE}/${encodeURIComponent(CID)}/chapter/${encodeURIComponent(chapters[_pi].id)}/urls`)
+        .then(r => r.json()).then(dd => {
+          window._nextChImgs = {idx: _pi, images: dd.images || []};
+        }).catch(()=>{});
+    }
+  } catch (e) {
+    $('#stage').innerHTML = '<div class="chap-banner">章节加载失败' + (e && e.name === 'AbortError' ? '（请求超时）' : '') + ': ' + esc(e.message || e) + '<br><small>可 <a href="javascript:gotoChapter(chIdx, false)" style="color:#8ab4ff;">点击重试</a> 或 <a href="javascript:location.reload()" style="color:#8ab4ff;">刷新页面</a></small></div>';
+  }
+  loading = false;
+}
+document.addEventListener('visibilitychange', () => {
+  // 切后台/锁屏：手机端最可靠的保存时机（beacon 保证送出）
+  if (document.hidden) saveProgressBeacon();
+  else if (!_histReady) restoreProgress();   // 回到前台补读进度（重连后自愈）
+});
+window.addEventListener('pagehide', saveProgressBeacon);   // 移动端更可靠
+window.addEventListener('beforeunload', saveProgressBeacon);  // 退出阅读器时保存
+window.addEventListener('online', () => { if (!_histReady) restoreProgress(); });
+// 阅读心跳：每 5s 兜底一次（位置变化才写）。滚动路径已经是"一变就写"，
+// 这里只是防止某些渲染路径（翻页模式、图片重排）没有触发滚动事件。
+setInterval(() => {
+  if (document.hidden || !_histReady) return;
+  scheduleProgressSave();
+}, 5000);
+
+function renderScroll(imgs, chName, gen, chId) {
+  const _gen = (gen === undefined ? _curGen : gen);
+  const _chid = (chId === undefined ? _curChId : chId);
+  const stage = $('#stage');
+  stage.className = 'scroll-stage';
+  stage.style.width = (_zoomLevel * 100) + '%';
+  stage.innerHTML = '<div class="chap-banner">▼ ' + esc(chName) + ' ▼</div>';
+  const wraps = [];
+  imgs.forEach((item, i) => {
+    const u = item && typeof item === 'object' ? (item.url || '') : item;
+    const w = document.createElement('div');
+    w.className = 'img-wrap';
+    w.dataset.idx = i;
+    // 已下载 → 本地 API 路径（快）；未下载 → 源站 CDN 直连（浏览器直接加载）
+    w.innerHTML = '<div class="img-placeholder" id="ph-' + i + '">第 ' + (i+1) + '/' + imgs.length + ' 页 加载中…</div>';
+    stage.appendChild(w);
+    wraps.push(w);
+  });
+  // 懒加载：IntersectionObserver 滚动到可视区才加载图片（无进度条动画）
+  const io = new IntersectionObserver((entries) => {
+    if (_gen !== _curGen) { io.disconnect(); return; }  // 已切章：旧观察者不得再写 DOM
+    entries.forEach(en => {
+      if (!en.isIntersecting) return;
+      const w = en.target;
+      const idx = parseInt(w.dataset.idx, 10);
+      io.unobserve(w);
+      _mountImg(w, imgs[idx], idx, imgs, false, null, _gen, _chid);
+    });
+  }, { rootMargin: '200px' });
+  _scrollIO = io;  // 记录观察者：切章/重渲染时统一 disconnect，避免回调泄漏
+  wraps.forEach((w, i) => { w.dataset.idx = i; io.observe(w); });
+  // 章节导航：放在本话**末页下方**（看完一话在此切换上一话/下一话）
+  const nav = document.createElement('div');
+  nav.className = 'ch-nav';
+  nav.innerHTML =
+    '<button class="ch-nav-btn" id="btm-prev" ' + (chIdx <= 0 ? 'disabled' : '') +
+      ' onclick="jumpChapter(chIdx-1)">← 上一话</button>' +
+    '<span class="ch-nav-name">' + esc(chName) + '</span>' +
+    '<button class="ch-nav-btn" id="btm-next" ' + (chIdx >= chapters.length - 1 ? 'disabled' : '') +
+      ' onclick="jumpChapter(chIdx+1)">下一话 →</button>';
+  stage.appendChild(nav);
+}
+
+// 挂载单张图片（懒加载 IO 与"定位前强制加载"共用）。
+// force=true：立即加载且等待 settle（onload 或最终失败）后回调 onDone，用于定位前
+// 先铺满前部图片高度，保证 scrollToPage 的 offsetTop 精确
+function _mountImg(w, item, idx, imgs, force, onDone, gen, chId) {
+  // 冻结本图所属渲染代/章节：切章后旧图的 onload/onerror/延迟代理定时器一律失效，
+  // 且代理地址用所属章节 id，绝不引用"当前 chIdx"（否则会给新章拼错地址）
+  const _gen = (gen === undefined ? _curGen : gen);
+  const _chid = (chId === undefined ? _curChId : chId);
+  if (w.querySelector('img')) { if (onDone) onDone(); return; }  // 已挂载
+  const ph = w.querySelector('.img-placeholder');
+  const u = item && typeof item === 'object' ? (item.url || '') : item;
+  const img = document.createElement('img');
+  // 本地已下载图片 → 首屏高优先级（服务器直读磁盘，秒开）；未下载 CDN → 正常 lazy
+  if (item && typeof item === 'object' && item.local) {
+    img.fetchPriority = 'high';
+    img.loading = 'eager';
+  } else {
+    img.loading = 'lazy';
+  }
+  img.alt = 'p' + (idx+1);
+  // 源站 CDN 图片需带 Referer 防盗链 → 用 no-referrer 策略（部分源需要 referer）
+  if (item && typeof item === 'object' && !item.local) {
+    img.referrerPolicy = 'no-referrer';
+  }
+  let _settled = false;
+  const _done = () => { if (!_settled) { _settled = true; if (onDone) onDone(); } };
+  img.onload = () => { if (_gen !== _curGen) return; if (ph) ph.remove(); _settled = true; _done(); };
+  img.decoding = 'async';  // R18: 异步解码不阻塞渲染
+  const _orig = () => (item && typeof item === 'object' ? item.url : u) || '';
+  // 服务器懒下载通道（jm 等混淆源给的是 /api/... 相对地址）与源站 CDN 直连
+  // （copymanga 的绝对 http(s) 地址）失败后必须走**不同**的补救路径：
+  //   - 绝对 CDN 地址 → 降级 /proxy?u=（带 Referer 防盗链，服务器中转）
+  //   - /api/ 相对地址 → /proxy 只接受公网 http(s)，必然 400；早期实现一律走
+  //     /proxy，导致 jm 一页失败就永久"加载失败"，只能手动重试或刷新页面。
+  //     正确做法：带 cache-buster 重打同一个服务器地址（绕过浏览器失败态与
+  //     服务器秒级冷却），最多 2 次。
+  const _isServerPath = _orig().indexOf('/api/') === 0;
+  const _retryUrl = (base) => {
+    const sep = base.indexOf('?') >= 0 ? '&' : '?';
+    return _isServerPath ? base + sep + 'r=' + Date.now() : base;
+  };
+  const _retry = (base) => {
+    const _n = parseInt(img.dataset.tries || '0', 10);
+    if (_n >= 3) return false;
+    img.dataset.tries = String(_n + 1);
+    // 递进退避：服务器对刚失败的图有秒级冷却（5s），三次重试按
+    // base×(1,2,3) 排布（默认 1.2/2.4/3.6s），多数抖动无需用户手动点"重试"
+    setTimeout(() => {
+      if (_gen !== _curGen) return;  // 延迟重试前再核对：不得用新章地址
+      const _b = _orig();
+      if (_isServerPath) {
+        img.src = _retryUrl(_b);
+      } else {
+        img.src = '/api/manga/' + SOURCE + '/' + encodeURIComponent(CID)
+          + '/chapter/' + encodeURIComponent(_chid) + '/proxy?u=' + encodeURIComponent(_b);
+      }
+    }, Math.max(0, base) * (_n + 1));
+    return true;
+  };
+  img.onerror = () => {
+    if (_gen !== _curGen) return;  // 已切章：旧图错误不得改动 DOM
+    if (_retry(force ? 300 : 1200)) return;
+    if (ph) {
+      // 多次失败 → 重试按钮（重置重试链）
+      ph.innerHTML = '<span style="color:#f66;">加载失败</span> <button class="retry-btn" style="margin-left:6px;padding:4px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-card);color:var(--text);cursor:pointer;">重试</button>';
+      const rb = ph.querySelector('.retry-btn');
+      if (rb) rb.onclick = () => {
+        delete img.dataset.retried;
+        img.dataset.tries = '0';
+        delete img.dataset.hung;
+        ph.textContent = '第 ' + (idx+1) + '/' + imgs.length + ' 页 加载中…';
+        img.src = _retryUrl(_orig());
+      };
+    }
+    _done();
+  };
+  img.src = u;  // 已下载→本地路径；未下载→服务器懒下载（jm 等混淆源）
+  w.appendChild(img);
+  // 卡死看门狗：请求既不 onload 也不 onerror（源站挂住/CDN 掐断连接）时，
+  // 占位会永远停在"加载中…"，并且一直占着浏览器同域连接（6 条）让后续页面
+  // 排不上队——用户看到的就是"后续页面不加载"。到点按同一地址重试一次。
+  setTimeout(() => {
+    if (_gen !== _curGen || _settled) return;
+    if (img.dataset.hung) return;   // 同一次挂死只触发一次
+    img.dataset.hung = '1';
+    _retry(1000);
+  }, 15000);
+  if (!force) {
+    // 预加载：后 1 张 + 前 LOOKAHEAD 张（提升连续滚动体验，R18）
+    // 2026-09-10：前视窗口 2→4。混淆源（jm）每页都要经服务器还原，服务器
+    // 端有预热带兜底；浏览器侧多铺几张可让"快滚"时不出现空白占位。
+    const LOOKAHEAD = 4;
+    // 预取句柄集合挂在本题 imgs 数组上（换章自动丢弃）；**必须保留引用**：
+    // 脱离 DOM 的 Image 一旦被 GC，浏览器会取消未完成的加载，预取白做。
+    if (!imgs._pre) imgs._pre = { seen: new Set(), keep: [] };
+    const _pre = (k) => {
+      if (k < 0 || k >= imgs.length) return;
+      const it = imgs[k]; const uk = it && typeof it === 'object' ? it.url : it;
+      if (!uk || imgs._pre.seen.has(uk)) return;   // 同一张不重复请求
+      imgs._pre.seen.add(uk);
+      const pi = new Image();
+      if (it && typeof it === 'object' && !it.local) pi.referrerPolicy = 'no-referrer';
+      pi.src = uk;
+      imgs._pre.keep.push(pi);
+      if (imgs._pre.keep.length > 16) imgs._pre.keep.shift();
+    };
+    _pre(idx - 1);
+    for (let k = 1; k <= LOOKAHEAD; k++) _pre(idx + k);
+  }
+}
+
+document.addEventListener('keydown', e => {
+  // 翻页模式：左右键/翻页键翻屏；Home/End 切章
+  if (settings.mode !== 'scroll') {
+    const view = document.querySelector('.page-view');
+    const per = view && view.classList.contains('double') ? 2 : 1;
+    if (e.key === 'ArrowRight' || e.key === 'PageDown') { e.preventDefault(); flipPage(per); }
+    else if (e.key === 'ArrowLeft' || e.key === 'PageUp') { e.preventDefault(); flipPage(-per); }
+    else if (e.key === 'Home') { if (chIdx > 0) jumpChapter(chIdx - 1); }
+    else if (e.key === 'End') { if (chIdx < chapters.length - 1) jumpChapter(chIdx + 1); }
+    return;
+  }
+  if (e.key === 'ArrowRight' || e.key === 'PageDown') window.scrollBy({top: window.innerHeight * 0.8, behavior:'smooth'});
+  if (e.key === 'ArrowLeft' || e.key === 'PageUp') window.scrollBy({top: -window.innerHeight * 0.8, behavior:'smooth'});
+  if (e.key === 'Home') { if (chIdx > 0) jumpChapter(chIdx - 1); else window.scrollTo(0,0); }
+  if (e.key === 'End') { if (chIdx < chapters.length - 1) jumpChapter(chIdx + 1); else window.scrollTo(0, document.body.scrollHeight); }
+});
+
+function toggleToc(show) {
+  document.getElementById('toc-panel').classList.toggle('show', show);
+  document.getElementById('toc-mask').classList.toggle('show', show);
+  if (show) renderToc();
+}
+function renderToc(filter) {
+  const list = document.getElementById('toc-list');
+  list.innerHTML = '';
+  const kw = (filter || '').trim().toLowerCase();
+  let curGroup = '';
+  chapters.forEach((ch, i) => {
+    if (kw && !(ch.name || '').toLowerCase().includes(kw)) return;
+    const grpLabel = (ch.group && ch.group !== curGroup)
+      ? `<span class="grp">${esc(ch.group)}</span>` : '';
+    if (ch.group) curGroup = ch.group;
+    const btn = document.createElement('button');
+    const isDl = window._dlSet && window._dlSet.has(ch.id);
+    btn.className = 'toc-item' + (i === chIdx ? ' active' : '') + (isDl ? ' dl' : '');
+    btn.innerHTML = grpLabel + esc(ch.name || ('第' + (i+1) + '话'))
+      + (isDl ? ' <span class="toc-dl">⬇</span>' : '');
+    btn.onclick = () => { toggleToc(false); jumpChapter(i); };
+    list.appendChild(btn);
+  });
+  document.getElementById('toc-count').textContent = '共 ' + chapters.length + ' 话';
+  // 当前章节滚动到可视区
+  const active = list.querySelector('.toc-item.active');
+  if (active) active.scrollIntoView({block:'center'});
+}
+// ── 图片缩放：整章图片按比例缩放（默认100%，看跨页大图可放大）──
+let _zoomLevel = 1.0;
+function zoomManga(delta) {
+  _zoomLevel = Math.min(2.5, Math.max(0.5, _zoomLevel + delta));
+  document.getElementById('stage').style.width = (_zoomLevel * 100) + '%';
+  const zv = document.getElementById('zoom-val');
+  if (zv) zv.textContent = Math.round(_zoomLevel * 100) + '%';
+}
+
+// ══════════════════════════════════════════════
+//  R19: 阅读设置——模式(滚动/单页/双页) + 亮度(白天/夜间/自定义) + 翻页方式
+// ══════════════════════════════════════════════
+const SETTINGS_KEY = 'manga_reader_settings';
+let settings = {mode:'scroll', bright:'day', brightVal:45, flip:'zone'};
+try { Object.assign(settings, JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}')); } catch(e) {}
+function saveSettings() { try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch(e) {} }
+function toggleSettings() {
+  const p = document.getElementById('settings-panel');
+  p.classList.toggle('show');
+  if (p.classList.contains('show')) syncSettingsUI();
+}
+function syncSettingsUI() {
+  document.querySelectorAll('.st-btn[data-mode]').forEach(b =>
+    b.classList.toggle('active', b.dataset.mode === settings.mode));
+  document.querySelectorAll('.st-btn[data-bright]').forEach(b =>
+    b.classList.toggle('active', b.dataset.bright === settings.bright));
+  document.querySelectorAll('.st-btn[data-flip]').forEach(b =>
+    b.classList.toggle('active', b.dataset.flip === settings.flip));
+  const row = document.getElementById('bright-slider-row');
+  row.style.display = settings.bright === 'custom' ? '' : 'none';
+  document.getElementById('bright-slider').value = settings.brightVal;
+  document.getElementById('bright-val').textContent = settings.brightVal + '%';
+}
+function setMode(m) {
+  // B7: 切换模式前记录当前页码到 pg0——renderPaged/gotoChapter 重渲染按 pg0 定位，
+  // 否则会用页面加载时的初始 pg0，切模式后跳回初始页
+  if (settings.mode !== 'scroll') pg0 = _pageIdx + 1;
+  else if (m !== 'scroll') pg0 = currentPage();
+  settings.mode = m; saveSettings(); syncSettingsUI();
+  if (chapters.length && chIdx >= 0 && chIdx < chapters.length) gotoChapter(chIdx, false);
+}
+function setBright(b) {
+  settings.bright = b; saveSettings(); syncSettingsUI(); applyBright();
+}
+function setBrightCustom(v) {
+  settings.brightVal = parseInt(v, 10) || 45;
+  settings.bright = 'custom'; saveSettings(); syncSettingsUI(); applyBright();
+}
+function setFlipMode(f) {
+  // B7: 翻页方式切换也会重渲染翻页视图——先记录当前页码，避免回到初始页
+  if (settings.mode !== 'scroll') pg0 = _pageIdx + 1;
+  settings.flip = f; saveSettings(); syncSettingsUI();
+  if (settings.mode !== 'scroll' && chapters.length) gotoChapter(chIdx, false);
+}
+function applyBright() {
+  const o = document.getElementById('dim-overlay'); if (!o) return;
+  let v = 0;
+  if (settings.bright === 'night') v = 0.45;
+  else if (settings.bright === 'custom') v = settings.brightVal / 100;
+  o.style.opacity = v;
+}
+// 点击设置面板外部关闭
+document.addEventListener('click', e => {
+  const wrap = document.querySelector('.settings-wrap');
+  if (wrap && !wrap.contains(e.target)) {
+    const p = document.getElementById('settings-panel');
+    if (p) p.classList.remove('show');
+  }
+});
+
+// ══════════════════════════════════════════════
+//  R19: 单页/双页翻页渲染（点击区或横滑翻页，页码角标，进度保存）
+// ══════════════════════════════════════════════
+let _pageIdx = 0;         // 当前屏首张图片下标（0-based）
+let _touchX = null, _touchY = null;
+
+function renderChapter(imgs, chName) {
+  _renderGen++;                                   // 冻结本代渲染：旧异步回调据此失效
+  const gen = _renderGen;
+  const chId = (chapters[chIdx] || {}).id || '';  // 冻结本代所属章节 ID
+  _curGen = gen; _curChId = chId;
+  _disconnectScrollIO();
+  if (settings.mode === 'scroll') renderScroll(imgs, chName, gen, chId);
+  else renderPaged(imgs, chName, gen, chId);
+}
+function _disconnectScrollIO() {
+  if (_scrollIO) { try { _scrollIO.disconnect(); } catch (e) {} _scrollIO = null; }
+}
+
+function renderPaged(imgs, chName, gen, chId) {
+  const stage = $('#stage');
+  stage.className = 'paged-stage';
+  stage.style.width = '100%';
+  stage.innerHTML = '<div class="chap-banner">▼ ' + esc(chName) + ' ▼</div>';
+  const view = document.createElement('div');
+  view.className = 'page-view';
+  const double = settings.mode === 'double' && window.innerWidth >= 760;
+  if (double) view.classList.add('double');
+  stage.appendChild(view);
+  const nav = document.createElement('div');
+  nav.className = 'ch-nav';
+  nav.innerHTML =
+    '<button class="ch-nav-btn" id="pg-prev" ' + (chIdx <= 0 ? 'disabled' : '') +
+      ' onclick="jumpChapter(chIdx-1)">← 上一话</button>' +
+    '<span class="ch-nav-name">' + esc(chName) + '</span>' +
+    '<button class="ch-nav-btn" id="pg-next" ' + (chIdx >= chapters.length - 1 ? 'disabled' : '') +
+      ' onclick="jumpChapter(chIdx+1)">下一话 →</button>';
+  stage.appendChild(nav);
+  const per = double ? 2 : 1;
+  const max = Math.max(0, imgs.length - per);
+  // 恢复进度：目标页所在屏（首进章节或切换模式后重渲染）
+  _pageIdx = Math.min(max, Math.max(0, Math.floor((pg0 - 1) / per) * per));
+  if (settings.flip === 'zone') {
+    const zl = document.createElement('div'); zl.className = 'page-zone left';
+    zl.onclick = () => flipPage(-per);
+    const zr = document.createElement('div'); zr.className = 'page-zone right';
+    zr.onclick = () => flipPage(per);
+    view.appendChild(zl); view.appendChild(zr);
+  }
+  // 横滑翻页（touch 滑动，仅翻页模式）
+  view.ontouchstart = e => { const t = e.touches[0]; _touchX = t.clientX; _touchY = t.clientY; };
+  view.ontouchend = e => {
+    if (_touchX == null) return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - _touchX, dy = t.clientY - _touchY;
+    _touchX = null;
+    if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+      flipPage(dx < 0 ? per : -per);
+    }
+  };
+  showPage(view, imgs, per, gen, chId);
+}
+
+function showPage(view, imgs, per, gen, chId) {
+  // 冻结本屏所属渲染代/章节：切章后旧屏的 onload/onerror/延迟代理/滚动定时器一律失效
+  const _gen = (gen === undefined ? _curGen : gen);
+  const _chid = (chId === undefined ? _curChId : chId);
+  const idx = _pageIdx;
+  const slice = imgs.slice(idx, idx + per);
+  view.innerHTML = '';
+  slice.forEach((item, i) => {
+    const u = item && typeof item === 'object' ? (item.url || '') : item;
+    const ph = document.createElement('div');
+    ph.className = 'page-ph';
+    ph.textContent = '第 ' + (idx + i + 1) + '/' + imgs.length + ' 页 加载中…';
+    const img = document.createElement('img');
+    img.className = 'page-img';
+    if (item && typeof item === 'object' && item.local) img.fetchPriority = 'high';
+    if (item && typeof item === 'object' && !item.local) img.referrerPolicy = 'no-referrer';
+    img.onload = () => { if (_gen !== _curGen) return; ph.remove(); };
+    img.onerror = () => {
+      if (_gen !== _curGen) return;  // 已切章：旧屏错误不得改动 DOM
+      // CDN 直连失败 → 降级服务器代理（带 Referer 防盗链 + 本地缓存）
+      if (!img.dataset.retried) {
+        img.dataset.retried = '1';
+        const orig = (item && typeof item === 'object' ? item.url : u) || '';
+        setTimeout(() => {
+          if (_gen !== _curGen) return;  // 延迟降级前再核对：用所属章节 id，勿引用当前 chIdx
+          img.src = '/api/manga/' + SOURCE + '/' + encodeURIComponent(CID)
+            + '/chapter/' + encodeURIComponent(_chid) + '/proxy?u=' + encodeURIComponent(orig);
+        }, 400);
+      } else {
+        ph.innerHTML = '<span style="color:#f66;">加载失败</span>';
+      }
+    };
+    view.appendChild(ph);
+    view.appendChild(img);
+    img.src = u;
+  });
+  // 相邻屏预加载
+  preloadPaged(imgs, idx - per, per);
+  preloadPaged(imgs, idx + per, per);
+  // 页码角标
+  const totalScreens = Math.max(1, Math.ceil(imgs.length / per));
+  const screenNo = Math.floor(idx / per) + 1;
+  let ind = view.querySelector('.page-ind');
+  if (!ind) { ind = document.createElement('div'); ind.className = 'page-ind'; view.appendChild(ind); }
+  ind.textContent = screenNo + ' / ' + totalScreens;
+  // 本章末屏 → 展示章节导航（滚动到底部）
+  if (idx >= imgs.length - per && imgs.length > 0) {
+    setTimeout(() => {
+      if (_gen !== _curGen) return;  // 已切章：旧屏不再滚动到底部
+      window.scrollTo({top: document.body.scrollHeight, behavior: 'smooth'});
+    }, 120);
+  } else {
+    window.scrollTo(0, 0);
+  }
+}
+
+function preloadPaged(imgs, from, per) {
+  // 保留句柄：脱离引用的 Image 被 GC 后浏览器会取消未完成的加载（预取白做）
+  if (!imgs._pre) imgs._pre = { seen: new Set(), keep: [] };
+  for (let i = Math.max(0, from); i < Math.min(imgs.length, from + per); i++) {
+    const it = imgs[i];
+    const u = it && typeof it === 'object' ? it.url : it;
+    if (!u || imgs._pre.seen.has(u)) continue;
+    imgs._pre.seen.add(u);
+    const p = new Image();
+    if (it && typeof it === 'object' && !it.local) p.referrerPolicy = 'no-referrer';
+    p.src = u;
+    imgs._pre.keep.push(p);
+    if (imgs._pre.keep.length > 16) imgs._pre.keep.shift();
+  }
+}
+
+function flipPage(delta) {
+  const view = document.querySelector('.page-view');
+  if (!view) return;
+  const imgs = window._curImgs || [];
+  if (!imgs.length) return;
+  const per = view.classList.contains('double') ? 2 : 1;
+  const max = Math.max(0, imgs.length - per);
+  const ni = Math.min(max, Math.max(0, _pageIdx + delta));
+  if (ni === _pageIdx) return;
+  _pageIdx = ni;
+  showPage(view, imgs, per, _curGen, _curChId);
+  scheduleProgressSave();     // 翻页模式同理：位置一变就写（实时）
+}
+
+// 换章：页内切换（P0-2，不再整页刷新）——直接调 gotoChapter，复用已加载的
+// 章节详情与下一话图片列表预取(_nextChImgs)，省掉整页 HTML/JS 重解析 +
+// 详情接口一次 RTT；gotoChapter 内部负责：切换前保存当前进度、新章 P1 历史
+// 上报、urls 超时重试、失败提示、切章后重新预取下一话。
+// 用 history.replaceState 同步地址栏章节参数（不压栈：返回键 history.back
+// 仍回到"进入阅读前的页面"，与原 location.replace 语义一致），
+// 保证刷新/分享链接指向当前话。
+function jumpChapter(i) {
+  if (i < 0 || i >= chapters.length || loading) return;
+  pg0 = 1;             // 新章从第 1 页开始：卷轴模式回顶部、翻页模式回第 1 屏，
+                       // 与整页重载体验一致（避免命中 chIdx0/pg0 的"恢复进度"分支）
+  _locateY = -1;       // 丢弃上一章的滚动定位锚点，避免旧校正逻辑干扰新章
+  _userMoved = false;
+  try {
+    const u = '/manga_reader?source=' + encodeURIComponent(SOURCE)
+      + '&cid=' + encodeURIComponent(CID)
+      + '&ch=' + i
+      + '&title=' + encodeURIComponent(TITLE || (chapters[i] || {}).name || '');
+    history.replaceState(null, '', u);
+  } catch (e) {}
+  gotoChapter(i, true);      // 目录点选：用户明确选了这一话
+}
+// 下载当前话（跳转下载页并定位到该话；chid 为稳定章节 id，下载页直接提交该 ID）
+function downloadCurrent() {
+  if (!chapters[chIdx]) return;
+  const c = chapters[chIdx];
+  location.href = `/manga_download?source=${encodeURIComponent(SOURCE)}&cid=${encodeURIComponent(CID)}&ch=${encodeURIComponent(c.name || '')}&chid=${encodeURIComponent(c.id || '')}&mode=single`;
+}
+if (!SOURCE || !CID) {
+  // 参数缺失/解码失败：不发请求，直接提示
+  $('#stage').innerHTML = '<div class="chap-banner">⚠️ 链接参数缺失或无效（source/cid）。请 <a href="javascript:history.back()" style="color:#8ab4ff;">返回</a> 重新进入。</div>';
+} else {
+  loadDetail();
+}
+applyBright();  // R19: 恢复亮度设置
+
+// ── 工具栏滚动隐藏/单击呼出（Kimi 协作优化）──
+(function() {
+  const topBar = document.querySelector('.reader-top');
+  let lastScrollY = window.scrollY, ticking = false, isHidden = false;
+  function updateTopBar() {
+    const y = window.scrollY;
+    if (y > lastScrollY && y > 50) { topBar.classList.add('hidden'); isHidden = true; }
+    else if (y < lastScrollY) { topBar.classList.remove('hidden'); isHidden = false; }
+    lastScrollY = y; ticking = false;
+  }
+  window.addEventListener('scroll', function() {
+    if (!ticking) { requestAnimationFrame(updateTopBar); ticking = true; }
+  }, {passive: true});
+  document.addEventListener('click', function(e) {
+    if (e.target.closest('button, a, [role="button"]')) return;
+    if (e.target.closest('.reader-top')) return;
+    isHidden = !isHidden;
+    topBar.classList.toggle('hidden', isHidden);
+  });
+})();
+
+</script>
+</body>
+</html>

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 启动器按读者视角命名；内嵌引擎只在通知与「设置 → 诊断」中体现（诊断 §4） -->
+    <string name="app_name">小说漫画</string>
+    <string name="notif_channel">本机阅读引擎</string>
+    <string name="notif_channel_desc">内嵌内容引擎的运行状态</string>
+</resources>

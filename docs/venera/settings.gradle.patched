@@ -1,0 +1,42 @@
+pluginManagement {
+    def flutterSdkPath = {
+        def properties = new Properties()
+        file("local.properties").withInputStream { properties.load(it) }
+        def flutterSdkPath = properties.getProperty("flutter.sdk")
+        assert flutterSdkPath != null, "flutter.sdk not set in local.properties"
+        return flutterSdkPath
+    }()
+
+    includeBuild("$flutterSdkPath/packages/flutter_tools/gradle")
+
+    repositories {
+        // 国内镜像优先（google()/mavenCentral 直连不稳定）
+        maven { url 'https://maven.aliyun.com/repository/google' }
+        maven { url 'https://maven.aliyun.com/repository/central' }
+        maven { url 'https://maven.aliyun.com/repository/gradle-plugin' }
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+
+plugins {
+    id "dev.flutter.flutter-plugin-loader" version "1.0.0"
+    id "com.android.application" version '8.12.3' apply false
+    id "org.jetbrains.kotlin.android" version "2.1.0" apply false
+}
+
+// 依赖仓库：国内镜像优先（google()/mavenCentral 直连不稳定）
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
+    repositories {
+        maven { url 'https://maven.aliyun.com/repository/google' }
+        maven { url 'https://maven.aliyun.com/repository/central' }
+        // Flutter 引擎 AAR（flutter 插件默认添加的 download.flutter.io 被 PREFER_SETTINGS 屏蔽，需显式声明）
+        maven { url 'https://storage.googleapis.com/download.flutter.io' }
+        google()
+        mavenCentral()
+    }
+}
+
+include ":app"

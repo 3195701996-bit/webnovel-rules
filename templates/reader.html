@@ -1,0 +1,703 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<link rel="icon" href="data:,">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>阅读 · webnovel_rules</title>
+<link rel="stylesheet" href="/static/css/style.css">
+<style>
+/* ── 书库阅读器手机体验（对齐在线阅读器）── */
+:root { --reader-fs: 17px; --reader-lh: 1.9; }
+[data-theme="dark"] {
+  --bg: #10131a; --bg-2: #171b25; --text: #c8ccd4; --text-dim: #7a8090;
+  --border: #262b38; --accent: #e8b34b;
+}
+[data-theme="sepia"] {
+  --bg: #f4ecd8; --bg-2: #eae0c8; --text: #3d3220; --text-dim: #8a7a5c;
+  --border: #d8c9a8; --accent: #8a6d2f;
+}
+html, body { transition: background .2s, color .2s; }
+/* P2-2 目录分段展开按钮（区间渲染：每段 200 章，按需上下扩段） */
+.reader-side .toc-expand {
+  display: block; margin: 4px 8px; padding: 7px 10px; border-radius: 6px;
+  border: 1px dashed var(--border); color: var(--text-dim);
+  font-size: .78rem; text-align: center; cursor: pointer; user-select: none;
+}
+.reader-side .toc-expand:hover { color: var(--accent); border-color: var(--accent); text-decoration: none; }
+@media (max-width: 768px) {
+  .reader-paper .body { font-size: var(--reader-fs) !important; line-height: var(--reader-lh) !important; }
+  .reader-paper h1 { font-size: 1.22rem !important; }
+  .reader-nav { display: none !important; }  /* 桌面导航在手机隐藏，用底部固定栏 */
+  .reader-main { padding-bottom: 84px; }
+
+  /* 底部固定翻章栏 */
+  .mobile-bar {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 80;
+    display: flex; align-items: stretch; gap: 6px;
+    padding: 8px 10px calc(8px + env(safe-area-inset-bottom));
+    background: color-mix(in srgb, var(--bg) 94%, transparent);
+    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+    border-top: 1px solid var(--border);
+  }
+  .mobile-bar .bar-btn {
+    flex: 1; min-height: 48px; border-radius: 12px;
+    border: 1px solid var(--border); background: var(--bg-2);
+    color: var(--text); font-size: .92rem; font-weight: 600; cursor: pointer;
+  }
+  .mobile-bar .bar-btn:disabled { opacity: .35; }
+  .mobile-bar .bar-btn.primary { background: var(--accent); color: #1a1400; border-color: transparent; }
+  .mobile-bar .bar-info {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    min-width: 70px; color: var(--text-dim); font-size: .72rem; line-height: 1.4;
+  }
+  .mobile-bar .bar-info b { color: var(--text); font-size: .8rem; }
+
+  /* 设置按钮（顶部） */
+  .reader-settings-btn {
+    position: fixed; right: 12px; bottom: calc(76px + env(safe-area-inset-bottom));
+    width: 42px; height: 42px; border-radius: 50%; z-index: 75;
+    border: 1px solid var(--border); background: var(--bg-2); color: var(--text);
+    font-size: 1.05rem; cursor: pointer;
+    box-shadow: 0 3px 12px rgba(0,0,0,.25);
+  }
+  .settings-sheet {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 95;
+    background: var(--bg-2); border-radius: 18px 18px 0 0;
+    border-top: 1px solid var(--border); padding: 14px 16px calc(16px + env(safe-area-inset-bottom));
+    transform: translateY(105%); transition: transform .25s ease;
+  }
+  .settings-sheet.open { transform: translateY(0); }
+  .settings-sheet h3 { margin: 0 0 12px; font-size: .9rem; }
+  .settings-row { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+  .settings-row .label { font-size: .82rem; color: var(--text-dim); width: 56px; }
+  .settings-row .group { display: flex; gap: 6px; flex: 1; }
+  .settings-row .group button {
+    flex: 1; min-height: 40px; border-radius: 10px; border: 1px solid var(--border);
+    background: var(--bg); color: var(--text); font-size: .85rem; cursor: pointer;
+  }
+  .settings-row .group button.active { border-color: var(--accent); color: var(--accent); font-weight: 700; }
+  .settings-row .fs-btn {
+    width: 46px; min-height: 40px; border-radius: 10px; border: 1px solid var(--border);
+    background: var(--bg); color: var(--text); font-size: 1rem; cursor: pointer;
+  }
+  .settings-row .fs-val { width: 46px; text-align: center; font-size: .8rem; color: var(--text-dim); }
+  .sheet-mask {
+    position: fixed; inset: 0; z-index: 90; background: rgba(0,0,0,.4);
+    opacity: 0; pointer-events: none; transition: opacity .2s;
+  }
+  .sheet-mask.open { opacity: 1; pointer-events: auto; }
+  .chapter-fade { animation: fadeIn .25s ease; }
+  @keyframes fadeIn { from { opacity: .35; } to { opacity: 1; } }
+}
+@media (min-width: 769px) { .mobile-bar, .reader-settings-btn, .settings-sheet, .sheet-mask { display: none !important; } }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <span class="logo">📚 webnovel_rules<small>小说爬虫与阅读中心</small></span>
+  <nav>
+    <a href="/">书库</a>
+    <a href="/manga">🎨 漫画</a>
+  </nav>
+  <div class="spacer"></div>
+  <span style="font-size:.8rem;color:var(--text-dim);" id="book-progress"></span>
+  <a class="btn small" id="txt-download" style="display:none;">下载全文</a>
+</header>
+
+<div class="container reader">
+  <aside class="reader-side">
+    <h4 id="side-title">目录</h4>
+    <div style="padding:0 10px 8px;">
+      <input id="toc-search" placeholder="🔍 搜索章节…" style="width:100%;box-sizing:border-box;padding:7px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:.8rem;">
+    </div>
+    <div id="chapter-list"><div class="loading" style="padding:20px;">加载目录…</div></div>
+  </aside>
+
+  <main class="reader-main">
+    <div class="reader-paper" id="paper">
+      <div class="loading">📖 选择左侧章节开始阅读</div>
+    </div>
+    <div class="reader-nav">
+      <button class="btn" id="btn-prev">← 上一章</button>
+      <span class="center" id="nav-info"></span>
+      <div class="progress-bar" id="nav-progress"><div class="progress-fill" id="nav-fill" style="width:0%"></div></div>
+      <button class="btn" id="btn-next">下一章 →</button>
+    </div>
+    <button class="reader-side-toggle" id="toc-toggle">目录</button>
+    <div class="reader-side-overlay" id="toc-overlay"></div>
+  </main>
+</div>
+
+<button class="reader-settings-btn" id="m-settings" aria-label="阅读设置">⚙</button>
+<div class="mobile-bar">
+  <button class="bar-btn" id="m-prev">← 上一章</button>
+  <div class="bar-info"><b id="m-info">1 / 0</b><span id="m-pct">0%</span></div>
+  <button class="bar-btn primary" id="m-next">下一章 →</button>
+</div>
+<div class="sheet-mask" id="m-mask"></div>
+<div class="settings-sheet" id="m-sheet">
+  <h3>阅读设置</h3>
+  <div class="settings-row">
+    <span class="label">字号</span>
+    <button class="fs-btn" id="m-fs-dec">A−</button>
+    <span class="fs-val" id="m-fs-val">17px</span>
+    <button class="fs-btn" id="m-fs-inc">A+</button>
+  </div>
+  <div class="settings-row">
+    <span class="label">行距</span>
+    <div class="group" id="m-lh-group">
+      <button data-lh-val="1.6">紧凑</button>
+      <button data-lh-val="1.9" class="active">适中</button>
+      <button data-lh-val="2.3">宽松</button>
+    </div>
+  </div>
+  <div class="settings-row">
+    <span class="label">主题</span>
+    <div class="group" id="m-theme-group">
+      <button data-theme-val="light">日间</button>
+      <button data-theme-val="sepia">护眼</button>
+      <button data-theme-val="dark" class="active">夜间</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/js/common.js"></script>
+<script src="/static/js/toc_render.js"></script>
+<script src="/static/js/chapter_cache.js"></script>
+<script>
+const KEY = {{ book_key | tojson }};
+let BOOK = null;        // 书籍详情（含目录）
+let currentIdx = 0;      // 当前章节序号（1 起）
+
+// P2-2/C04 目录分段渲染：共用组件 static/js/toc_render.js（详情页同用），
+// 每段 TOC_CHUNK 章，仅挂载当前章所在段 + 按需上下扩段；搜索作用于全量目录数组
+const TOC_CHUNK = (window.TocRender && TocRender.TOC_CHUNK) || 200;
+let tocView = null;
+
+const STORE_KEY = 'reader:' + KEY;
+
+// C03: 显式章节参数（详情页点章进入）——入口章优先级：?ch=N > 续读历史 > 首个已下载章
+const CH_PARAM = parseInt(new URLSearchParams(location.search).get('ch'), 10) || 0;
+let _chParamPending = CH_PARAM;   // 仅首次进入生效；init 重入（重爬刷新目录）不重复跳转
+
+// C03 纯函数：入口章决策（显式参数 > 历史 > 首个已下载），页面与测试共用同一规则
+function pickEntryChapter(chParam, savedIdx, total, firstDl) {
+  if (chParam >= 1 && chParam <= total) return chParam;
+  if (savedIdx >= 1 && savedIdx <= total) return savedIdx;
+  return firstDl || 1;
+}
+
+// C05: 章节正文缓存（static/js/chapter_cache.js）——pending Map 在途去重（预取与
+// 点击阅读共享同一 Promise）+ Map 插入序 LRU 容量约束（完成入库时循环淘汰，
+// 乱序返回不超限）+ 代际失效（重爬/目录刷新后旧响应丢弃）。fetchChapter 是
+// 章节请求的唯一出口。
+function _fetchChapterRemote(idx) {
+  // C05 追加：服务端 chapter 响应带 Cache-Control private,max-age=3600；Default fetch
+  // 会直接命中 HTTP 缓存（max-age 内不校验），仅清 JS 内存 LRU 仍会读到浏览器旧正文。
+  // 用 cache:'no-cache' 强制条件重验证（仍保留 ETag/304 与 JS 内存 LRU，非 no-store）。
+  // 非 2xx 抛错：错误 JSON 不得当作“未下载章节”交给阅读器（缓存层按失败重试处理）。
+  return fetch('/api/books/' + KEY + '/chapter/' + idx, {cache: 'no-cache'}).then(r => {
+    if (!r.ok) throw new Error('章节请求失败: HTTP ' + r.status);
+    return r.json();
+  });
+}
+window._chCache = ChapterCache.makeChapterCache({capacity: 6, fetchChapter: _fetchChapterRemote});
+
+async function init() {
+  try {
+    const r = await fetch('/api/books/' + KEY);
+    if (!r.ok) throw new Error('书籍不存在');
+    BOOK = await r.json();
+  } catch (e) {
+    $('#paper').innerHTML = '<div class="loading">⚠ ' + e.message + '</div>';
+    return;
+  }
+  // C05: init 重入（重爬成功刷新目录）时整书缓存失效——正文版本已变化，
+  // 在途请求的旧代结果也会被代际校验丢弃；首次进入时缓存为空，调用无害
+  if (window._chCache) window._chCache.invalidateAll();
+  document.title = BOOK.name + ' · 阅读';
+  $('#side-title').textContent = BOOK.name + '（' + (BOOK.done || 0) + '/' + BOOK.total + ' 章）';
+  $('#book-progress').textContent = BOOK.percent + '%';
+  if (BOOK.done >= BOOK.total) { $('#txt-download').style.display = ''; }
+  $('#txt-download').onclick = () => window.open('/api/books/' + KEY + '/txt', '_blank');
+
+  const list = $('#chapter-list');
+  list.innerHTML = '';
+  const failCnt = BOOK.chapters.filter(c => c.failed).length;
+  const downCnt = BOOK.chapters.filter(c => c.downloaded).length;
+  $('#side-title').textContent = BOOK.name + '（' + downCnt + '/' + BOOK.total + ' 章'
+    + (failCnt ? '，' + failCnt + ' 失败' : '') + '）';
+  window._tocFilter = '';
+  const tocSearch = $('#toc-search');
+  if (tocSearch) tocSearch.value = '';   // init 重入（重爬刷新目录）时清空过滤
+
+  // 单章条目（区间渲染与搜索过滤共用）；data-ch-idx 供高亮精确定位
+  function makeTocAnchor(c) {
+    const a = document.createElement('a');
+    a.dataset.chIdx = c.index;
+    const cls = (c.index === currentIdx) ? ' current' : '';
+    if (c.failed) {
+      a.className = 'ch failed' + cls;
+      a.innerHTML = c.index + '. ' + escapeHtml(c.name) + '<span class="badge">失败</span>';
+      a.title = c.name + '（下载失败，可点击重爬）';
+      a.onclick = () => {
+        $('#paper').innerHTML = '<div class="loading">⚠ 本章下载失败' +
+          (c.failed_reason ? '：' + escapeHtml(c.failed_reason) : '') +
+          '<br><button class="btn primary" id="btn-retry">🔄 重新爬取本章</button></div>';
+        $('#btn-retry').onclick = () => retryChapter(c.index);
+      };
+    } else if (c.downloaded) {
+      a.className = 'ch' + cls;
+      a.textContent = c.index + '. ' + c.name;
+      a.title = c.name;
+      a.onclick = () => goto(c.index);
+    } else {
+      a.className = 'ch missing' + cls;
+      a.textContent = c.index + '. ' + c.name;
+      a.title = c.name + '（未开始爬取）';
+      a.onclick = () => {
+        $('#paper').innerHTML = '<div class="loading">📄 本章尚未爬取<br>' +
+          '<button class="btn primary" id="btn-retry">🔄 爬取本章</button></div>';
+        $('#btn-retry').onclick = () => retryChapter(c.index);
+      };
+    }
+    return a;
+  }
+  // P2-2/C04 大书目录分段渲染：5000 章一次 innerHTML 全量渲染需数百 ms，
+  // 改为共用组件只挂载当前章所在段（200 章/段）+ 上下「展开」按钮按需扩段；
+  // 搜索过滤作用于全量目录数组（未挂载章节同样可被找到），命中按同样步长分段追加。
+  // API 响应格式不变（仍全量章节数组）。
+  tocView = TocRender.makeTocView({
+    container: list,
+    chunkSize: TOC_CHUNK,
+    makeItem: makeTocAnchor,
+    emptyHTML: '<div style="padding:12px;color:var(--text-dim);font-size:.8rem;">暂无章节</div>',
+  });
+  tocView.setData(BOOK.chapters);
+  window._renderTocList = () => tocView.render();
+  if (tocSearch) tocSearch.oninput = () => {
+    window._tocFilter = tocSearch.value;
+    tocView.setFilter(tocSearch.value);
+    tocView.render();
+  };
+  _renderTocList();
+
+  // 恢复上次阅读位置（章节 + 章内滚动百分比）
+  // 优先级：服务器同步进度 > 本机 localStorage（跨设备/换浏览器仍能续读）
+  let savedIdx = 0, savedPct = 0;
+  try {
+    const _s = JSON.parse(localStorage.getItem(STORE_KEY) || '{}');
+    savedIdx = parseInt(_s.idx, 10) || 0;
+    savedPct = parseInt(_s.pct, 10) || 0;
+  } catch (e) {
+    // 旧格式兼容；localStorage 本身不可用（隐私模式/配额）时不再二次抛出
+    try { savedIdx = parseInt(localStorage.getItem(STORE_KEY) || '0', 10) || 0; } catch (e2) {}
+  }
+  const _gotoLocal = () => {
+    const target = pickEntryChapter(0, savedIdx, BOOK.total, firstDownloaded());
+    _restorePct = savedPct;  // 恢复成功后该章渲染时滚动到该百分比
+    goto(target);
+  };
+  // C03: 入口章优先级——显式章节参数 > 续读历史（服务器同步 > 本机）> 首个已下载章
+  if (_chParamPending >= 1 && _chParamPending <= BOOK.total) {
+    const _t = _chParamPending; _chParamPending = 0;
+    _restorePct = 0;         // 显式点章进入：不套用历史滚动百分比
+    _progressReady = true;   // 用户显式导航：这是明确意图，允许写回
+    goto(_t);
+  } else {
+    _chParamPending = 0;
+    // 读取服务器进度；失败不进入"可写"状态，且退避重试（网络恢复后自动补上）
+    const _readProgress = (attempt) => {
+      fetch('/api/books/' + encodeURIComponent(KEY) + '/progress')
+        .then(r => r.json()).then(d => {
+          if (d.ok && d.idx >= 1 && d.idx <= BOOK.total) {
+            savedIdx = d.idx;
+            savedPct = d.pct || 0;
+            try { localStorage.setItem(STORE_KEY, JSON.stringify({idx: savedIdx, pct: savedPct})); } catch (e) {}
+          }
+          if (attempt === 0) {
+            _progressFallbackIdx = pickEntryChapter(0, savedIdx, BOOK.total, firstDownloaded());
+            _progressReady = true;      // 读到服务器进度（或确认无记录）→ 允许写回
+            _gotoLocal();
+          } else {
+            // 迟到的成功：用户此刻仍在回退章（未自行导航）→ 定位到服务器进度；
+            // 用户已自己翻章 → 尊重其位置，只恢复"允许写回"
+            _progressReady = true;
+            if (currentIdx === _progressFallbackIdx && savedIdx >= 1
+                && savedIdx !== currentIdx) {
+              _restorePct = savedPct;
+              goto(savedIdx);
+            }
+          }
+        }).catch(() => {
+          if (attempt === 0) {
+            // 先用本机位置显示，但**不允许写服务器**（关键：不把回退位置写回去）
+            _progressFallbackIdx = pickEntryChapter(0, savedIdx, BOOK.total, firstDownloaded());
+            _gotoLocal();
+          }
+          if (attempt < 6) {
+            setTimeout(() => { if (!_progressReady) _readProgress(attempt + 1); },
+                       1200 * (attempt + 1));
+          }
+        });
+    };
+    window._retryProgressRead = () => { if (!_progressReady) _readProgress(1); };
+    _readProgress(0);
+  }
+}
+
+function firstDownloaded() {
+  const c = BOOK.chapters.find(x => x.downloaded);
+  return c ? c.index : 1;
+}
+
+let _restorePct = 0;   // 本次进入需恢复的章内滚动百分比（首次渲染消费一次）
+// 2026-09-13 关键修复：**服务器进度读取成功之前，绝不把当前位置写回服务器**。
+// 起因（用户实测）：手机端网络重连瞬间 /progress 读失败 → 前端回退到"本地/第 1 章"
+// → 用户一滚动就把第 1 章 POST 上去，两端的进度都被改掉（"每次重连进度被重置"）。
+// 规则：只有"读到服务器进度"或"用户显式点章进入"才允许写；读取失败则只存本机，
+// 并在联网/回到前台时重试读取。
+let _progressReady = false;       // 允许写服务器的前提
+let _progressFallbackIdx = 0;     // 读取失败时的回退章（用于判断用户是否已自行导航）
+let _posTimer = null;
+let _posUnsynced = null;  // 服务端同步失败待重试的位置（A05：写失败不再静默丢弃）
+function _postProgress(pos, retried) {
+  fetch('/api/books/' + encodeURIComponent(KEY) + '/progress', {method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({idx: pos.idx, pct: pos.pct,
+      name: (BOOK && BOOK.chapters && BOOK.chapters[pos.idx-1]) ? BOOK.chapters[pos.idx-1].name : ''})
+  }).then(r => r.json()).then(d => {
+    if (!d || d.ok !== true) throw new Error('save failed');
+    if (_posUnsynced === pos) _posUnsynced = null;
+  }).catch(() => {
+    _posUnsynced = pos;                       // 保留待同步位置
+    if (!retried) setTimeout(() => {          // 简单重试一次
+      if (_posUnsynced === pos) _postProgress(pos, true);
+    }, 2000);
+  });
+}
+function _currentPos() {
+  const paper = $('#paper');
+  if (!paper) return null;
+  const h = paper.scrollHeight - window.innerHeight;
+  const pct = h > 0 ? Math.min(100, Math.round(window.scrollY / h * 100)) : 100;
+  return {idx: currentIdx, pct};
+}
+function savePos() {
+  // 保存 章节+章内滚动百分比（节流调用）
+  const pos = _currentPos();
+  if (!pos) return;
+  try { localStorage.setItem(STORE_KEY, JSON.stringify(pos)); } catch (e) {}
+  // 服务器同步（跨设备不丢；节流由调用方保证）
+  // 进度未读到之前不写服务器：否则"读取失败→回退第 1 章"会把两端进度一起改坏
+  if (_progressReady && navigator.onLine !== false) {
+    _posUnsynced = null;
+    _postProgress(pos, false);
+  }
+}
+// 卸载/切后台专用：sendBeacon 由浏览器保证送出（普通 fetch 在页面卸载时会被
+// 取消——"读到一半退出后记录不更新"就是这么来的），失败回落 keepalive fetch
+function savePosBeacon() {
+  try {
+    const pos = _currentPos();
+    if (!pos || !_progressReady || pos.idx < 1) return;
+    try { localStorage.setItem(STORE_KEY, JSON.stringify(pos)); } catch (e) {}
+    const body = JSON.stringify({idx: pos.idx, pct: pos.pct,
+      name: (BOOK && BOOK.chapters && BOOK.chapters[pos.idx - 1])
+            ? BOOK.chapters[pos.idx - 1].name : ''});
+    const url = '/api/books/' + encodeURIComponent(KEY) + '/progress';
+    if (navigator.sendBeacon) {
+      const blob = new Blob([body], {type: 'application/json'});
+      if (navigator.sendBeacon(url, blob)) return;
+    }
+    fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: body, keepalive: true}).catch(() => {});
+  } catch (e) {}
+}
+// 退出/切后台/锁屏都要保存；手机端 pagehide 比 beforeunload 可靠
+window.addEventListener('pagehide', savePosBeacon);
+window.addEventListener('beforeunload', savePosBeacon);
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) savePosBeacon();
+});
+// 阅读心跳：每 20s 存一次（位置变化才写），阅读记录接近实时
+setInterval(() => {
+  if (document.hidden || !_progressReady) return;
+  savePos();
+}, 20000);
+
+let _gotoSeq = 0;   // B5: 切章请求序号——快速连点时过期响应直接丢弃，不覆盖新章节
+// C03: requestedIdx（goto 参数 idx）与 displayedIdx（currentIdx）分离——
+// 只有新章正文成功渲染后才提交 currentIdx/savePos；加载失败保留旧正文与旧进度位置
+async function goto(idx) {
+  if (!BOOK || idx < 1 || idx > BOOK.total) return;
+  const seq = ++_gotoSeq;
+  const paper = $('#paper');
+  // 预取缓存命中：上一章切换时已缓存下一章
+  if (window._chCache && window._chCache[idx]) {
+    currentIdx = idx;          // C03: 缓存正文就绪，提交 displayedIdx
+    renderChapter(window._chCache[idx]);
+    savePos();                 // C03: 渲染成功后才保存进度
+    preloadChapter(idx + 1);
+    preloadChapter(idx - 1);   // P2-1: 往回翻同样秒开（边界章 preloadChapter 内部跳过）
+    return;
+  }
+  const hasOld = currentIdx >= 1;   // 已有成功显示的章节：加载期间保留旧正文与旧进度
+  if (hasOld) $('#nav-info').textContent = '⏳ 加载第 ' + idx + ' 章…';
+  else paper.innerHTML = '<div class="loading">加载中…</div>';
+  try {
+    // C05: 经共享缓存取章——与在途预取复用同一 Promise（pending Map 在途去重），
+    // 绝不重复发请求；底层章节请求由缓存层 fetchChapter 统一发起
+    const ch = await window._chCache.get(idx);
+    if (seq !== _gotoSeq) return;  // 已有更新的切章请求，丢弃过期响应
+    if (!ch.downloaded || typeof ch.content !== 'string') {
+      if (hasOld) {   // C03: 保留旧正文与旧进度位置
+        $('#nav-info').textContent = currentIdx + ' / ' + BOOK.total;
+        toast('第 ' + idx + ' 章尚未下载或内容缺失', 'error');
+      } else {
+        paper.innerHTML = '<div class="loading">⚠ 本章尚未下载<br><a href="/">返回书库</a> 或等待爬取完成</div>';
+      }
+      return;
+    }
+    currentIdx = idx;          // C03: 新章正文就绪，提交 displayedIdx
+    renderChapter(ch);
+    savePos();                 // C03: 渲染成功后才保存进度
+    preloadChapter(idx + 1);
+    preloadChapter(idx - 1);   // P2-1: 往回翻同样秒开
+  } catch (e) {
+    if (seq !== _gotoSeq) return;  // 过期请求的失败提示也不覆盖当前章节
+    if (hasOld) {   // C03: 加载失败保留旧正文与旧进度位置
+      $('#nav-info').textContent = currentIdx + ' / ' + BOOK.total;
+      toast('章节加载失败（已保留当前章节）: ' + e, 'error');
+    } else {
+      paper.innerHTML = '<div class="loading">⚠ 加载失败: ' + e + '</div>';
+    }
+  }
+}
+
+// 渲染章节 + 预取下一章（切章秒开）
+function renderChapter(ch) {
+  // 过滤与章节标题重复的首段（部分源正文首行重复章节标题）
+  const norm = s => String(s || '').replace(/^\d+[、.\s]*/, '').replace(/\s+/g, '').trim();
+  const paras = ch.content.split(/\n+/).filter(s => s.trim())
+    .filter((p, i) => i > 0 || norm(p.trim()) !== norm(ch.name) || norm(p.trim()).length <= 2);
+  $('#paper').innerHTML = '<h1>' + escapeHtml(ch.name) + '</h1><div class="body">'
+    + paras.map(p => '<p>' + escapeHtml(p.trim()) + '</p>').join('')
+    + '</div>';
+  document.title = ch.name + ' · ' + BOOK.name;
+  $('#nav-info').textContent = currentIdx + ' / ' + BOOK.total;
+  // 高亮目录（统一使用 current 类；区间渲染下先确保当前章所在段已挂载，
+  // 再按 data-ch-idx 精确定位——过滤态/分段态下位置序号不可靠）
+  ensureTocVisible(currentIdx);
+  document.querySelectorAll('.reader-side .ch').forEach(a => a.classList.remove('current'));
+  const cur = document.querySelector('.reader-side .ch[data-ch-idx="' + currentIdx + '"]');
+  if (cur) cur.classList.add('current');
+  // 恢复上次章内滚动位置（仅进入时首次渲染消费）；切章/翻章仍从顶部开始
+  if (_restorePct > 0) {
+    const _p = _restorePct;
+    _restorePct = 0;
+    setTimeout(() => {
+      const _paper = $('#paper');
+      const _h = _paper.scrollHeight - window.innerHeight;
+      window.scrollTo({top: _h * _p / 100});
+      savePos();
+    }, 30);
+  } else {
+    window.scrollTo({top: 0});
+  }
+}
+
+// P2-2/C04: 翻章跨段时自动把目录分段切到 idx 所在段并重绘（过滤态不干预，由用户自行滚动）
+function ensureTocVisible(idx) {
+  if (!BOOK || !tocView || !window._renderTocList) return;
+  if ((window._tocFilter || '').trim()) return;
+  if (idx < 1 || idx > BOOK.chapters.length) return;
+  if (tocView.locate(idx)) window._renderTocList();
+}
+
+// 预取相邻章到内存缓存（不阻塞当前渲染）；第 1 章前/末章后边界直接跳过。
+// C05: 在途去重 + LRU 容量约束 + 失败重试语义由缓存层负责
+function preloadChapter(idx) {
+  if (!window._chCache || idx < 1 || idx > BOOK.total) return;
+  window._chCache.prefetch(idx);
+}
+
+$('#btn-prev').onclick = () => { if (currentIdx > 1) goto(currentIdx - 1); };
+$('#btn-next').onclick = () => { if (currentIdx < BOOK.total) goto(currentIdx + 1); };
+document.addEventListener('keydown', e => {
+  if (e.key === 'ArrowLeft') $('#btn-prev').click();
+  if (e.key === 'ArrowRight') $('#btn-next').click();
+});
+
+async function retryChapter(idx) {
+  const paper = $('#paper');
+  paper.innerHTML = '<div class="loading"><span class="spinner"></span>正在重新爬取本章…</div>';
+  try {
+    const r = await fetch('/api/books/' + KEY + '/chapter/' + idx, {method: 'POST'});
+    const d = await r.json();
+    if (!r.ok) {
+      paper.innerHTML = '<div class="loading">⚠ ' + (d.error || '重爬失败') +
+        '<br><button class="btn primary" id="btn-retry">🔄 再试一次</button></div>';
+      const b = $('#btn-retry');
+      if (b) b.onclick = () => retryChapter(idx);
+      return;
+    }
+    // 重爬成功：显示内容并刷新目录状态
+    const paras = d.content.split(/\n+/).filter(s => s.trim());
+    paper.innerHTML = '<h1>' + escapeHtml(d.name) + '</h1><div class="body">'
+      + paras.map(p => '<p>' + escapeHtml(p.trim()) + '</p>').join('')
+      + '</div>';
+    toast('✓ 本章重爬成功（' + d.length + ' 字）', 'ok');
+    if (window._chCache) window._chCache.invalidate(idx);  // C05: 重爬后该章缓存失效
+    await init();  // 刷新目录状态（失败→已下载）；init 内会整书失效缓存（正文版本已变）
+  } catch (e) {
+    paper.innerHTML = '<div class="loading">⚠ 重爬请求失败: ' + e +
+      '<br><button class="btn primary" id="btn-retry">🔄 再试一次</button></div>';
+    const b = $('#btn-retry');
+    if (b) b.onclick = () => retryChapter(idx);
+  }
+}
+
+
+// 进度同步补读：网络重连（手机端切换 WiFi/流量）或回到前台时，
+// 若还没读到服务器进度就补读一次；读到之前绝不写服务器（见 _progressReady）
+window.addEventListener('online', () => {
+  if (!_progressReady && window._retryProgressRead) window._retryProgressRead();
+});
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && !_progressReady && window._retryProgressRead) {
+    window._retryProgressRead();
+  }
+});
+
+
+// ═══ R1 阅读体验增强（Kimi CSS + 集成脚本）═══
+(function() {
+  const isMobile = () => window.innerWidth <= 768;
+  const side = document.querySelector('.reader-side');
+  const overlay = $('#toc-overlay');
+  const toggle = $('#toc-toggle');
+
+  // 移动端目录抽屉
+  function setToc(open) {
+    if (side) side.classList.toggle('open', open);
+    if (overlay) overlay.classList.toggle('active', open);
+  }
+  if (toggle) toggle.onclick = () => setToc(!side.classList.contains('open'));
+  if (overlay) overlay.onclick = () => setToc(false);
+  document.addEventListener('click', (e) => {
+    if (isMobile() && e.target.closest('.reader-side .ch')) setToc(false);
+  });
+
+  // 本章阅读进度（滚动百分比）
+  function updateProgress() {
+    const paper = $('#paper');
+    const fill = $('#nav-fill');
+    if (!paper || !fill) return;
+    const h = paper.scrollHeight - window.innerHeight;
+    const pct = h > 0 ? Math.min(100, Math.round(window.scrollY / h * 100)) : 100;
+    fill.style.width = pct + '%';
+    // 到底部 → 当前章标记已读
+    if (pct >= 95) {
+      const cur = document.querySelector('.reader-side .ch.current');
+      if (cur && !cur.classList.contains('read')) { cur.classList.add('read'); }
+    }
+  }
+  window.addEventListener('scroll', () => {
+    updateProgress();
+    if (_posTimer) clearTimeout(_posTimer);
+    _posTimer = setTimeout(savePos, 600);  // 节流保存章内滚动位置
+  }, {passive: true});
+  window.addEventListener('resize', updateProgress, {passive: true});
+  const _obs = new MutationObserver(updateProgress);
+  _obs.observe(document.body, {childList: true, subtree: true});
+
+  // 打开目录时滚动到当前章（先确保所在区间已挂载）
+  function scrollTocToCurrent() {
+    ensureTocVisible(currentIdx);
+    const cur = document.querySelector('.reader-side .ch.current');
+    if (cur && cur.scrollIntoView) cur.scrollIntoView({block: 'center', behavior: 'smooth'});
+  }
+  if (toggle) toggle.addEventListener('click', () => setTimeout(scrollTocToCurrent, 300));
+  setTimeout(scrollTocToCurrent, 800);
+})();
+
+
+// ═══ 移动端固定翻章栏 + 阅读设置 ═══
+(function() {
+  const isMobile = () => window.innerWidth <= 768;
+  const $m = s => document.querySelector(s);
+
+  // 设置持久化
+  const SET_KEY = 'reader_settings';
+  let settings = { fs: 17, lh: 1.9, theme: 'dark' };  // 默认 dark 与全站深色一致（夜间不白屏）
+  try { settings = Object.assign(settings, JSON.parse(localStorage.getItem(SET_KEY) || '{}')); } catch (e) {}
+  function applySettings() {
+    document.documentElement.style.setProperty('--reader-fs', settings.fs + 'px');
+    document.documentElement.style.setProperty('--reader-lh', (settings.lh || 1.9));
+    document.documentElement.setAttribute('data-theme', settings.theme);
+    const v = $m('#m-fs-val'); if (v) v.textContent = settings.fs + 'px';
+    document.querySelectorAll('#m-theme-group button').forEach(b =>
+      b.classList.toggle('active', b.dataset.themeVal === settings.theme));
+    document.querySelectorAll('#m-lh-group button').forEach(b =>
+      b.classList.toggle('active', String(b.dataset.lhVal) === String(settings.lh)));
+    try { localStorage.setItem(SET_KEY, JSON.stringify(settings)); } catch (e) {}
+  }
+  const fsDec = $m('#m-fs-dec'), fsInc = $m('#m-fs-inc');
+  if (fsDec) fsDec.onclick = () => { settings.fs = Math.max(14, settings.fs - 1); applySettings(); };
+  if (fsInc) fsInc.onclick = () => { settings.fs = Math.min(24, settings.fs + 1); applySettings(); };
+  document.querySelectorAll('#m-theme-group button').forEach(b => {
+    b.onclick = () => { settings.theme = b.dataset.themeVal; applySettings(); };
+  document.querySelectorAll('#m-lh-group button').forEach(b => {
+    b.onclick = () => { settings.lh = parseFloat(b.dataset.lhVal); applySettings(); };
+  });
+  });
+  function toggleSheet(open) {
+    const s = $m('#m-sheet'), mask = $m('#m-mask');
+    if (s) s.classList.toggle('open', open);
+    if (mask) mask.classList.toggle('open', open);
+  }
+  const ms = $m('#m-settings'), mm = $m('#m-mask');
+  if (ms) ms.onclick = () => toggleSheet(true);
+  if (mm) mm.onclick = () => toggleSheet(false);
+  applySettings();
+
+  // 移动端翻章（复用桌面按钮逻辑）
+  const mp = $m('#m-prev'), mn = $m('#m-next');
+  if (mp) mp.onclick = () => { const b = $('#btn-prev'); if (b) b.click(); };
+  if (mn) mn.onclick = () => { const b = $('#btn-next'); if (b) b.click(); };
+
+  // 同步状态到移动栏
+  const _sync = setInterval(() => {
+    if (!isMobile()) return;
+    const info = $m('#m-info'), pct = $m('#m-pct');
+    if (info) info.textContent = currentIdx + ' / ' + (BOOK ? BOOK.total : 0);
+    if (mp) mp.disabled = currentIdx <= 1;
+    if (mn) mn.disabled = currentIdx >= (BOOK ? BOOK.total : 0);
+    const paper = $('#paper');
+    if (pct && paper) {
+      const h = paper.scrollHeight - window.innerHeight;
+      pct.textContent = (h > 0 ? Math.min(100, Math.round(window.scrollY / h * 100)) : 0) + '%';
+    }
+  }, 400);
+
+  // 章节切换淡入
+  const _origRender = renderChapter;
+  window.renderChapter = function(ch) {
+    const paper = $('#paper');
+    paper.classList.remove('chapter-fade');
+    _origRender(ch);
+    paper.classList.add('chapter-fade');
+    const mp2 = $m('#m-prev'), mn2 = $m('#m-next');
+    if (mp2) mp2.disabled = currentIdx <= 1;
+    if (mn2) mn2.disabled = currentIdx >= (BOOK ? BOOK.total : 0);
+    const info2 = $m('#m-info'); if (info2) info2.textContent = currentIdx + ' / ' + (BOOK ? BOOK.total : 0);
+  };
+})();
+
+
+init();
+</script>
+</body>
+</html>

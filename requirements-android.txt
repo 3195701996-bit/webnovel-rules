@@ -1,0 +1,21 @@
+# 手机端（APK 内嵌 Python）依赖集合 —— 设计 §10
+#
+# 与桌面 requirements.txt 的关系：这里只列**移动端实际需要**的运行时依赖，
+# 版本与 android/app/build.gradle 的 chaquopy pip 清单保持一致（成组锁定）。
+#
+# 重要边界（阶段 A 实测，见 APK阶段A验证结果.txt）：
+#   curl-cffi 在 Android **无可用安装组合**——其 android_24_arm64_v8a wheel 要求
+#   cffi>=2.0.0，而 Chaquopy 轮子索引（13.1/14.1/15.1）只提供 cffi 1.17.1。
+#   因此这里不列 curl-cffi；图片/请求通道走 engine 内既有的 requests/cloudscraper
+#   降级路径（设计 §4），能力台账会把受影响的能力如实标为 degraded/unsupported。
+#   禁止用同名 shim 冒充该依赖。
+flask==3.1.2
+waitress==3.0.2
+requests
+cloudscraper
+lxml==5.3.0
+cssselect
+jsonpath-ng
+opencc-python-reimplemented
+pillow==11.0.0
+cryptography==42.0.8

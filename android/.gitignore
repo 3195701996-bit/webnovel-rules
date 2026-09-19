@@ -1,0 +1,10 @@
+# 构建产物、机器相关配置与签名材料都不入库（设计 §10）
+.gradle/
+build/
+local.properties
+*.jks
+*.keystore
+key.properties
+keystore.properties
+*.keystore.bak
+release-signing/

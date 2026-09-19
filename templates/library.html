@@ -1,0 +1,638 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>我的书库 · webnovel_rules</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/static/css/style.css">
+<style>
+/* 阅读进度标记（与"下载进度"区分：阅读用蓝色细条） */
+.read-line { font-size:.72rem; color:var(--text-dim); margin:6px 0 0; display:flex;
+             align-items:center; gap:6px; overflow:hidden; white-space:nowrap; }
+.read-line b { color:var(--text); font-weight:600; overflow:hidden;
+               text-overflow:ellipsis; max-width:62%; }
+.read-line .read-sub { margin-left:auto; color:#8ab4ff; font-variant-numeric:tabular-nums; }
+.read-line.read-none { opacity:.5; }
+.mcard .bar { height:4px; margin-top:4px; background:rgba(255,255,255,.06);
+               border-radius:3px; overflow:hidden; }
+.mcard .bar i { display:block; height:100%; }
+.card .bar.read, .mcard .bar.read { height:4px; margin-top:4px; background:rgba(255,255,255,.06); }
+.card .bar.read i, .mcard .bar.read i { background:#4c8bf5; }
+/* 封面缺失（断网且本地无封面）时不留空白：占位图标保持卡片高度与观感 */
+.cover-missing { position: relative; }
+.cover-missing::before {
+  content: '📖'; display: flex; align-items: center; justify-content: center;
+  width: 100%; aspect-ratio: 3/4; font-size: 2rem; background: #0d1117; opacity: .5;
+}
+</style>
+</head>
+<body>
+<header class="topbar">
+  <span class="logo">📚 webnovel_rules<small>书源驱动 · 小说爬虫</small></span>
+  <nav>
+    <a href="/">🔍 搜索/书库</a>
+    <a href="/sources">书源管理</a>
+    <a href="/library" class="active">📖 我的书库</a>
+    <a href="/tasks_page">📋 任务管理</a>
+    <a href="/manga">🎨 漫画</a>
+  </nav>
+  <div class="spacer"></div>
+</header>
+
+<div class="container">
+  <div id="netip-bar" style="display:none;margin-bottom:12px;padding:8px 12px;border-radius:8px;background:var(--bg-2,#1c2230);border:1px solid var(--border);font-size:.8rem;color:var(--text-dim);"></div>
+  <div class="section-title" style="display:flex;align-items:center;gap:10px;">📖 我的书库
+    <button class="btn small" id="btn-books-refresh" title="手动刷新" style="font-size:.78rem;">🔄</button>
+    <select id="book-sort" class="sort-select" onchange="setBookSort(this.value)" title="排序方式"
+      style="margin-left:auto;padding:4px 8px;border-radius:8px;border:1px solid var(--border);background:var(--bg-2,#1c2230);color:var(--text);font-size:.78rem;">
+      <option value="downloaded">⬇ 最近下载</option>
+      <option value="read">📖 最近阅读</option>
+    </select>
+  </div>
+  <p class="page-sub">已爬取的小说，点击卡片进入阅读；可下载合并全文。</p>
+  <div id="books"><div class="empty"><div class="big">📭</div>加载中…</div></div>
+
+  <div class="section-title" style="margin-top:32px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">🎨 漫画书库
+    <div class="section-ops">
+      <button class="btn small" id="btn-manga-refresh" title="手动刷新" style="font-size:.78rem;">🔄</button>
+      <button class="btn small primary" id="btn-manga-check-all" style="font-size:.78rem;">🔄 一键检查更新</button>
+      <select id="manga-sort" class="sort-select" onchange="setMangaSort(this.value)" title="排序方式"
+        style="padding:4px 8px;border-radius:8px;border:1px solid var(--border);background:var(--bg-2,#1c2230);color:var(--text);font-size:.78rem;">
+        <option value="downloaded">⬇ 最近下载</option>
+        <option value="read">📖 最近阅读</option>
+      </select>
+    </div>
+  </div>
+  <p class="page-sub">已下载的漫画（本地图片），点击进入阅读；可打包 ZIP。</p>
+  <div id="manga-check-status" style="display:none;margin:0 0 10px;padding:9px 12px;border-radius:8px;background:var(--bg-2,#1c2230);border:1px solid var(--border);font-size:.85rem;line-height:1.5;"></div>
+  <div id="manga-books" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:14px;">
+    <div class="empty" style="grid-column:1/-1;"><div class="big">📭</div>加载中…</div>
+  </div>
+</div>
+
+<script src="/static/js/common.js"></script>
+<script src="/static/js/netip.js"></script>
+<script>
+const checkingKeys = new Set();   // 检查中的书籍 key，重渲染后保持按钮状态
+let _booksSig = '';   // R50: 书库数据指纹——内容无变化时跳过全量重绘
+let _mangaSig = '';   // （避免轮询每 6s/5s 重建 DOM：滚动被打断/按钮闪烁）
+
+// ── R30: 书库排序（入库时间/最近下载/最近阅读），localStorage 持久化 ──
+// R32: 移除"最早下载"排序规则，保留 最近下载/最近阅读 两档（旧设置回退）
+// B9: localStorage 不可用（隐私模式/配额）时回退默认值，不炸掉整段脚本
+let bookSort = 'downloaded', mangaSort = 'downloaded';
+try {
+  bookSort = localStorage.getItem('lib_book_sort') || 'downloaded';
+  mangaSort = localStorage.getItem('lib_manga_sort') || 'downloaded';
+} catch (e) {}
+if (!['downloaded','read'].includes(bookSort)) bookSort = 'downloaded';
+if (!['downloaded','read'].includes(mangaSort)) mangaSort = 'downloaded';
+function setBookSort(v) { bookSort = v; try { localStorage.setItem('lib_book_sort', v); } catch (e) {} loadBooks(); }
+function setMangaSort(v) { mangaSort = v; try { localStorage.setItem('lib_manga_sort', v); } catch (e) {} loadMangaLibrary(); }
+// 解析日期字符串(2026-08-24 23:24:55)→epoch；无效→0
+function tsOf(s) { const t = Date.parse(String(s||'').replace(' ', 'T')); return isNaN(t) ? 0 : t/1000; }
+function sortList(list, sortMode, getDownloaded, getRead) {
+  const k = {
+    downloaded: c => getDownloaded(c) || 0,
+    read: c => getRead(c) || 0,
+  }[sortMode] || (c => getDownloaded(c) || 0);
+  return list.slice().sort((a, b) => k(b) - k(a));
+}
+
+async function loadMangaLibrary() {
+  const box = document.getElementById('manga-books');
+  const sel = document.getElementById('manga-sort');
+  if (sel) sel.value = mangaSort;
+  try {
+    const r = await fetch('/api/manga/library');
+    const d = await r.json();
+    // R35: 展示已下载完成 + 正在下载的任务（带实时进度）；
+    // 此前下载中任务被过滤，书库只剩旧完成记录 → 与实际进度不符的错觉
+    let list = (d.comics || []).filter(x => x.status === 'done' || x.status === 'downloading');
+    if (!list.length) {
+      // R50: 空态也做指纹——从"有内容"到"全删"要重绘,持续为空则跳过
+      if (_mangaSig === 'empty') return [];
+      _mangaSig = 'empty';
+      box.innerHTML = '<div class="empty" style="grid-column:1/-1;"><div class="big">📭</div>暂无已下载漫画<br>在漫画页搜索并下载一部漫画后，会显示在这里</div>';
+      return [];
+    }
+    // R32: 排序——最近下载=downloaded_at，最近阅读=last_read_ts
+    list = sortList(list, mangaSort,
+      c => tsOf(c.downloaded_at), c => c.last_read_ts || 0);
+    // R50: 指纹无变化 → 跳过重绘(进度/状态无变化时不再每 5s 重建 DOM)
+    // 阅读进度必须进入指纹：否则服务端已写入第20话，书库轮询仍会认为
+    // 卡片“没有变化”而跳过重绘，用户看到的就是旧进度。
+    const msig = JSON.stringify(list.map(c => [c.source, c.comic_id, c.status,
+      c.dl_done, c.dl_total, c.dl_images, c.local_images, c.missing_images,
+      c.title, c.cover, c.downloaded_at, c.read_pos, c.read_page,
+      c.read_idx, c.read_ratio, c.last_read_ts]));
+    if (msig === _mangaSig) return list;
+    _mangaSig = msig;
+    box.innerHTML = '';
+    list.forEach(c => {
+      const card = document.createElement('div');
+      card.className = 'mcard';
+      card.style.cssText = 'background:var(--bg-2,#1c2230);border-radius:10px;overflow:hidden;border:1px solid var(--border);cursor:pointer;transition:.15s;position:relative;';
+      // R8 状态徽标
+      const badgeMap = {done:['⬇ 已下载','--done'], downloading:['⏳ 下载中','--running'],
+        queued:['⏳ 排队','--queued'], paused:['⏸ 暂停','--paused'], error:['⚠ 异常','--error'], stopped:['☁ 在线','--stopped']};
+      const bd = badgeMap[c.status] || ['☁ 在线','--stopped'];
+      const statusBadge = `<span class="status-badge status-badge${bd[1]}">${bd[0]}</span>`;
+      const dlTag = c.status === 'downloading'
+        ? `<div style="font-size:.72rem;color:#e8833a;margin-top:4px;display:flex;align-items:center;gap:4px;">
+            <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#e8833a;animation:blink 1s infinite;"></span>
+            ⏳ 下载中 ${c.dl_done||0}/${c.dl_total||'?'} 话 · ${c.dl_images||0}图${c.dl_speed ? ' · ' + c.dl_speed + '/s' : ''}
+          </div>`
+        : (c.missing_images
+          ? `<div style="font-size:.72rem;color:#f66;margin-top:4px;">⚠ 本地图片缺失，请重新下载</div>`
+          : `<div style="font-size:.72rem;color:#34a853;margin-top:4px;">✅ 已下载 · ${c.local_images||0} 图</div>`);
+      card.innerHTML = `
+        ${statusBadge}
+        <img src="${esc(c.cover_view || c.cover || '')}" loading="lazy" decoding="async" style="width:100%;aspect-ratio:3/4;object-fit:cover;display:block;background:#0d1117;" onerror="this.onerror=null;this.style.display='none';if(this.parentNode)this.parentNode.classList.add('cover-missing');">
+        <div style="padding:8px 10px;">
+          <div style="font-size:.85rem;font-weight:600;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;">${esc(c.title)}</div>
+          <div style="font-size:.72rem;color:var(--text-dim);margin-top:3px;">${esc(c.source_name)}</div>
+          ${c.read_pos
+            ? `<div class="read-line">📖 读到 <b>${esc(c.read_pos)}</b>${c.read_total > 0 ? `<span class="read-sub">${c.read_ratio}%</span>` : ''}</div>` +
+              (c.read_total > 0 ? `<div class="bar read"><i style="width:${c.read_ratio}%"></i></div>` : '')
+            : `<div class="read-line read-none">📖 未读</div>`}
+          ${dlTag}
+        </div>`;
+      card.onclick = () => {
+        if (c.status === 'downloading') {
+          alert('该漫画正在下载中，完成后再阅读');
+          return;
+        }
+        if (c.missing_images) {
+          alert('本地图片缺失，请点击下方「⭳ 重新下载」恢复');
+          return;
+        }
+        // 书库卡片是“继续阅读”，不能伪装成用户明确点了第 1 话。
+        // 带 ch=0 会让阅读器跳过服务端 resume，历史记录再正确也只能打开第一话。
+        location.href = '/manga_reader?source=' + encodeURIComponent(c.source)
+          + '&cid=' + encodeURIComponent(c.comic_id)
+          + '&title=' + encodeURIComponent(c.title);
+      };
+      const delBtn = document.createElement('div');
+      delBtn.style.cssText = 'padding:8px 0;text-align:center;border-top:1px solid var(--border);font-size:.75rem;color:#f66;cursor:pointer;';
+      delBtn.textContent = '🗑 删除';
+      delBtn.onclick = async (e) => {
+        e.stopPropagation();
+        if (!confirm('删除《' + c.title + '》？将清除所有本地缓存与记录，不可恢复。')) return;
+        try {
+          const r = await fetch('/api/manga/library/' + c.source + '/' + encodeURIComponent(c.comic_id), {method:'DELETE'});
+          const d = await r.json();
+          if (d.ok) { card.remove(); alert('已删除'); }
+          else alert('删除失败');
+        } catch(e) { alert('删除失败'); }
+      };
+      card.appendChild(delBtn);
+      // 图片缺失 → 提供一键重新下载（下载内容永不自动删，误删后在此恢复）
+      if (c.missing_images) {
+        const reBtn = document.createElement('div');
+        reBtn.style.cssText = 'padding:8px 0;text-align:center;border-top:1px solid var(--border);font-size:.75rem;color:#8ab4ff;cursor:pointer;font-weight:600;';
+        reBtn.textContent = '⭳ 重新下载';
+        reBtn.onclick = async (e) => {
+          e.stopPropagation();
+          if (!confirm('重新下载《' + c.title + '》的全部章节？（需重新从源站获取图片）')) return;
+          reBtn.textContent = '⏳ 启动下载中…';
+          reBtn.style.pointerEvents = 'none';
+          try {
+            const r = await fetch('/api/manga/' + c.source + '/' + encodeURIComponent(c.comic_id) + '/download', {
+              method:'POST', headers:{'Content-Type':'application/json'},
+              body: JSON.stringify({title: c.title, cover: c.cover || ''})
+            });
+            const d = await r.json();
+            if (d.ok) {
+              reBtn.textContent = '✅ 已开始下载';
+              setTimeout(() => loadMangaLibrary(), 1500);
+            } else {
+              reBtn.textContent = '⚠ ' + (d.error || '启动失败');
+              reBtn.style.pointerEvents = '';
+            }
+          } catch(err) {
+            reBtn.textContent = '⚠ 启动失败';
+            reBtn.style.pointerEvents = '';
+          }
+        };
+        card.appendChild(reBtn);
+      }
+      // R28: 打包 ZIP 导出（书库直达；大书打包需数秒-数十秒，服务器流式生成）
+      const zipBtn = document.createElement('div');
+      zipBtn.style.cssText = 'padding:8px 0;text-align:center;border-top:1px solid var(--border);font-size:.75rem;color:#8ab4ff;cursor:pointer;font-weight:600;';
+      zipBtn.textContent = '🗜 打包 ZIP';
+      zipBtn.onclick = async (e) => {
+        e.stopPropagation();
+        zipBtn.textContent = '⏳ 打包中…';
+        zipBtn.style.pointerEvents = 'none';
+        try {
+          const r = await fetch('/api/manga/' + c.source + '/' + encodeURIComponent(c.comic_id) + '/zip');
+          if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || ('HTTP ' + r.status));
+          const blob = await r.blob();
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = (c.title || c.comic_id) + '.zip';
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          setTimeout(() => URL.revokeObjectURL(a.href), 30000);
+          zipBtn.textContent = '✅ 已开始下载';
+          setTimeout(() => { zipBtn.textContent = '🗜 打包 ZIP'; zipBtn.style.pointerEvents = ''; }, 3000);
+        } catch (err) {
+          zipBtn.textContent = '⚠ 打包失败: ' + (err.message || err);
+          setTimeout(() => { zipBtn.textContent = '🗜 打包 ZIP'; zipBtn.style.pointerEvents = ''; }, 3000);
+        }
+      };
+      card.appendChild(zipBtn);
+      const updBtn = document.createElement('div');
+      updBtn.style.cssText = 'padding:8px 0;text-align:center;border-top:1px solid var(--border);font-size:.75rem;color:var(--text-dim);cursor:pointer;';
+      updBtn.textContent = '🔄 检查更新';
+      updBtn.onclick = async (e) => {
+        e.stopPropagation();
+        updBtn.textContent = '⏳ 检测中…（约10-30秒）';
+        updBtn.style.pointerEvents = 'none';
+        try {
+          // fetch 超时 90s（copymanga_web 详情渲染慢）
+          const ctrl = new AbortController();
+          const timer = setTimeout(() => ctrl.abort(), 90000);
+          let r;
+          try {
+            r = await fetch('/api/manga/' + c.source + '/' + encodeURIComponent(c.comic_id) + '/check-update', {method:'POST', signal: ctrl.signal});
+          } finally { clearTimeout(timer); }
+          const d = await r.json();
+          if (d.error) throw new Error(d.error);
+          if (d.has_update && d.missing_count) {
+            // R57: 不用系统 confirm(移动端弹窗不可靠)——按钮直接变为下载入口
+            updBtn.textContent = '⭳ 补下 ' + d.missing_count + ' 章（点击下载）';
+            updBtn.style.color = '#e8b34b';
+            updBtn.onclick = async (e2) => {
+              e2.stopPropagation();
+              updBtn.style.pointerEvents = 'none';
+              updBtn.textContent = '⏳ 下载中…';
+              try {
+                const r2 = await fetch('/api/manga/' + c.source + '/' + encodeURIComponent(c.comic_id) + '/download-new', {
+                  method:'POST', headers:{'Content-Type':'application/json'},
+                  body: JSON.stringify({title: c.title, cover: c.cover || '', new_chapters: (d.missing||[]).map(x => x.id)})
+                });
+                const d2 = await r2.json();
+                if (d2.ok) { updBtn.textContent = '🔄 已开始补下'; toast('🔄 已开始补充下载', 'ok'); }
+                else { updBtn.textContent = '⚠ ' + (d2.error || '启动失败'); }
+              } catch (err) { updBtn.textContent = '⚠ 启动失败'; }
+              setTimeout(() => { updBtn.textContent = '🔄 检查更新'; updBtn.style.color = ''; updBtn.style.pointerEvents = ''; }, 4000);
+            };
+          } else {
+            updBtn.textContent = '✅ 已是最新（' + (d.latest || '') + '）';
+            setTimeout(() => updBtn.textContent = '🔄 检查更新', 3000);
+          }
+        } catch (e) {
+          updBtn.textContent = '⚠ 检查失败' + (e && e.name === 'AbortError' ? '（超时）' : '');
+          setTimeout(() => updBtn.textContent = '🔄 检查更新', 3000);
+        } finally {
+          updBtn.style.pointerEvents = '';
+        }
+      };
+      card.appendChild(updBtn);
+      card.oncontextmenu = (e) => {
+        e.preventDefault();
+        if (confirm('删除该漫画的本地数据？')) {
+          fetch('/api/manga/library/' + c.source + '/' + encodeURIComponent(c.comic_id), {method:'DELETE'})
+            .then(() => loadMangaLibrary());
+        }
+      };
+      box.appendChild(card);
+    });
+    return list;   // B03: 返回数据供轮询器按任务状态调速
+  } catch (e) {
+    box.innerHTML = '<div class="empty" style="grid-column:1/-1;">漫画书库加载失败</div>';
+    return null;   // B03: 失败供轮询器指数退避
+  }
+}
+async function loadBooks() {
+  const box0 = $('#books');
+  let books;
+  try {
+    const r = await fetch('/api/books');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    ({books} = await r.json());
+  } catch (e) {
+    box0.innerHTML = '<div class="empty"><div class="big">⚠️</div>书库加载失败<br>'
+      + '<span style="font-size:.8rem;color:var(--text-dim);">' + esc(e.message || '网络错误')
+      + '</span><br><button class="btn small" onclick="loadBooks()" style="margin-top:10px;">重试</button></div>';
+    return null;   // B03: 失败供轮询器指数退避
+  }
+  const sel = document.getElementById('book-sort');
+  if (sel) sel.value = bookSort;
+  // R32: 排序——最近下载=updated_at，最近阅读=last_read_ts
+  books = sortList(books || [], bookSort,
+    b => tsOf(b.updated_at), b => b.last_read_ts || 0);
+  // R50: 数据指纹无变化 → 跳过重绘（轮询不再打断滚动/按钮闪烁）
+  const sig = JSON.stringify(books.map(b => [b.key, b.percent, b.failed,
+    b.has_update, b.has_txt, b.done, b.total, b.updated_at, b.last_read_ts]))
+    + '|' + [...checkingKeys].sort().join(',');
+  if (sig === _booksSig) return books;
+  _booksSig = sig;
+  const box = $('#books');
+  if (!books.length) { box.innerHTML = '<div class="empty"><div class="big">📖</div>书库为空<br>在搜索页搜索并爬取一本书吧</div>'; return books; }
+  box.innerHTML = '';
+  const grid = document.createElement('div');
+  grid.className = 'grid';
+  for (const b of books) {
+    const card = document.createElement('div');
+    card.className = 'card';
+    const checking = checkingKeys.has(b.key);
+    // R50: 手机窄屏次要按钮用短文案(单行 4 个不折行)，桌面保持长文案
+    const mobile = window.innerWidth <= 640;
+    const txtLabel = mobile ? 'TXT' : '下载 txt';
+    const checkLabel = checking ? (mobile ? '⏳' : '⏳ 检查中…')
+      : (mobile ? '🔄 检查' : '🔄 检查更新');
+    const delLabel = mobile ? '🗑' : '🗑 删除';
+    // R8 小说状态徽标
+    const nb = b.percent >= 100 ? ['✓ 完结','--novel-done']
+      : (b.failed ? ['⚠ 失败','--novel-fail'] : ['⏳ 下载中','--novel-running']);
+    card.innerHTML = `
+      <div class="ncard-top">
+        <h3>${esc(b.name)}</h3>
+        <span class="status-badge status-badge${nb[1]}">${nb[0]}</span>
+      </div>
+      <div class="meta">
+        ${b.has_update ? '<span class="tag err" style="background:rgba(224,92,92,.15);color:#ff9d9d;">🔔 有更新</span>' : ''}
+        <span>${esc(b.author || '佚名')}</span><span>${b.done}/${b.total} 章</span>
+      </div>
+      <div class="tags">
+        ${b.failed ? `<span class="tag err">${b.failed} 章失败</span>` : ''}
+        ${b.has_txt ? '<span class="tag done">全文已合并</span>' : ''}
+      </div>
+      <div class="read-line" title="阅读进度">
+        ${b.read_idx
+          ? `📖 读到 <b>${esc(b.read_name || ('第 ' + b.read_idx + ' 章'))}</b>` +
+            `${b.read_pct ? ` · 本章 ${b.read_pct}%` : ''}` +
+            `<span class="read-sub">${b.read_ratio}%</span>`
+          : `<span class="read-none">📖 未读</span>`}
+      </div>
+      <div class="bar read" title="阅读进度 ${b.read_ratio}%"><i style="width:${b.read_ratio}%"></i></div>
+      <div class="bar" title="下载进度 ${b.percent}%"><i style="width:${b.percent}%"></i></div>
+      <div class="actions">
+        <button class="btn small primary read-btn" data-key="${b.key}">阅读</button>
+        <button class="btn small detail-btn" data-key="${b.key}" data-name="${esc(b.name)}">详情</button>
+        ${b.has_txt ? `<button class="btn small txt-btn" data-key="${b.key}" title="下载合并全文 TXT">${txtLabel}</button>` : ''}
+        <button class="btn small check-btn" data-key="${b.key}" title="检查站点是否有新章节并重试失败章节" ${checking ? 'disabled' : ''}>${checkLabel}</button>
+        <button class="btn small danger del-btn" data-key="${b.key}" data-name="${esc(b.name)}">${delLabel}</button>
+      </div>`;
+    grid.appendChild(card);
+    // 点击卡片空白处(非按钮区)直接进入阅读——手机上更易点中
+    card.onclick = (e) => {
+      if (e.target.closest('.actions')) return;
+      location.href = '/reader/' + b.key;
+    };
+  }
+  box.appendChild(grid);
+  box.querySelectorAll('.read-btn').forEach(b => b.onclick = () => location.href = '/reader/' + b.dataset.key);
+  box.querySelectorAll('.detail-btn').forEach(b => b.onclick = () =>
+    location.href = '/novel_detail?key=' + encodeURIComponent(b.dataset.key) + '&name=' + encodeURIComponent(b.dataset.name));
+  box.querySelectorAll('.txt-btn').forEach(b => b.onclick = () => window.open('/api/books/' + b.dataset.key + '/txt', '_blank'));
+  box.querySelectorAll('.del-btn').forEach(b => b.onclick = async () => {
+    if (!confirm('确定删除《' + b.dataset.name + '》？数据将移入回收站（data/trash/），可人工恢复。')) return;
+    const r = await fetch('/api/books/' + b.dataset.key, {method: 'DELETE'});
+    const d = await r.json().catch(() => ({}));
+    if (r.ok) toast('已移入回收站', 'ok');
+    else toast('⚠ ' + (d.error || '删除失败'), 'error');
+    loadBooks();
+  });
+  box.querySelectorAll('.check-btn').forEach(b => b.onclick = async () => {
+    const key = b.dataset.key;
+    checkingKeys.add(key);
+    loadBooks();   // 立即刷新按钮为"检查中…"
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 20000);
+    try {
+      const r = await fetch('/api/books/' + key + '/check-update',
+        {method: 'POST', signal: ctrl.signal});
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok && d.status !== 'checking') {
+        toast('⚠ ' + (d.error || '检查启动失败'), 'error');
+        checkingKeys.delete(key); loadBooks();
+        return;
+      }
+    } catch (e) {
+      toast('⚠ 检查启动失败: ' + e, 'error');
+      checkingKeys.delete(key); loadBooks();
+      return;
+    } finally { clearTimeout(timer); }
+    // 轮询检查状态（最长 150s）
+    const start = Date.now();
+    while (Date.now() - start < 150000) {
+      await new Promise(res => setTimeout(res, 2000));
+      try {
+        const sr = await fetch('/api/books/' + key + '/check-status');
+        const sd = await sr.json();
+        if (!sr.ok || sd.status === 'checking') continue;
+        checkingKeys.delete(key);
+        if (sd.missing_count > 0) {
+          // 询问是否补充下载缺失章节
+          const ok = confirm('检测到 ' + sd.missing_count + ' 个缺失章节（' + (sd.message || '') + '）\n是否补充下载？');
+          if (ok) {
+            const dr = await fetch('/api/books/' + key + '/download-missing', {method: 'POST'});
+            const dd = await dr.json().catch(() => ({}));
+            if (dd.ok) {
+              toast('🔄 已开始补充下载 ' + (dd.chapters || 0) + ' 章', 'ok');
+              setTimeout(() => location.href = '/tasks_page', 1200);
+            } else {
+              toast('⚠ ' + (dd.error || '启动失败'), 'error');
+            }
+          } else {
+            toast(sd.message || '已检测缺失，未下载', '');
+          }
+        } else if (sd.error) {
+          toast('⚠ ' + sd.message, 'error');
+        } else {
+          toast(sd.message || '已是最新', 'ok');
+        }
+        loadBooks();
+        return;
+      } catch (e) { /* 网络抖动继续轮询 */ }
+    }
+    checkingKeys.delete(key);
+    toast('⚠ 检查超时，请稍后重试', 'error');
+    loadBooks();
+  });
+  return books;   // B03: 返回数据供轮询器使用
+}
+// B03: 轮询治理——createPoller（common.js）：setTimeout 链（请求完成后才排
+// 下一次，慢请求不重叠）+ 页面隐藏停轮 + 失败指数退避 + 按任务状态调速。
+// 漫画有下载中任务时 3s 高频，全部静止后 20s 低频；小说列表 12s 常规。
+const mangaPoller = createPoller(loadMangaLibrary, {
+  baseMs: 5000,
+  interval: (list) => (list && list.some(c => c.status === 'downloading')) ? 3000 : 20000,
+});
+const bookPoller = createPoller(loadBooks, {baseMs: 12000});
+// 手动刷新入口（立即拉取并重排计时）
+document.getElementById('btn-books-refresh').onclick = () => bookPoller.kick();
+document.getElementById('btn-manga-refresh').onclick = () => mangaPoller.kick();
+
+// R56: 一键检查书库漫画更新——后台逐部检查; 刷新页面自动恢复进度/结果
+let _mangaPollActive = false;    // 轮询进行中(点击启动或刷新恢复)
+
+async function mangaPollLoop(bar) {
+  // 轮询直到后端任务结束(running=false); 更新状态条文本
+  let fails = 0;
+  while (true) {
+    await new Promise(res => setTimeout(res, 1200));
+    let s;
+    try {
+      s = await (await fetch('/api/manga/library/check-updates/status')).json();
+      fails = 0;
+    } catch (e) {
+      if (++fails > 12) return null;   // 网络长时间中断 → 退出
+      continue;
+    }
+    const res = s.results || [];
+    const updN = res.filter(x => x.has_update).length;
+    const skipN = res.filter(x => x.skipped || (x.error || '').includes('跳过')).length;
+    const errN = res.filter(x => x.error && !x.has_update && !x.skipped && !(x.error || '').includes('跳过')).length;
+    if (s.running) {
+      const last = res[res.length - 1];
+      if (bar) {
+        bar.style.display = '';
+        bar.textContent = '⏳ 检查中 ' + res.length + '/' + (s.total || '?')
+          + (last ? ' · 刚完成『' + String(last.title || '').slice(0, 16) + '』'
+              + (last.has_update ? ' 🔔有更新' : (last.error ? ' ⚠' : ' ✓')) : '')
+          + (updN || errN || skipN ? `（已发现 ${updN} 部更新${errN ? '、' + errN + ' 部失败' : ''}${skipN ? '、' + skipN + ' 部风控跳过' : ''}）` : '');
+        bar.style.color = updN ? '#e8b34b' : '';
+      }
+    } else {
+      return s;
+    }
+  }
+}
+
+function mangaShowResult(fd, quiet, pollFailed) {
+  const bar = document.getElementById('manga-check-status');
+  // 轮询连续失败（网络长时间中断/服务无响应）与"确实没有可检查的漫画"是两回事：
+  // 前者必须报真实失败，绝不能显示成 📭 没有可检查的漫画（否则用户误以为检查完成）
+  if (pollFailed) {
+    const msg = '⚠ 检查状态获取失败：网络长时间中断或服务无响应，请稍后重试';
+    if (bar) { bar.style.display = ''; bar.style.color = '#f66'; bar.textContent = msg; }
+    if (!quiet) toast('⚠ 检查状态获取失败，请稍后重试', 'error');
+    return {upd: [], err: []};
+  }
+  const res = fd.results || [];
+  const upd = res.filter(x => x.has_update);
+  const skip = res.filter(x => x.skipped || (x.error || '').includes('跳过'));
+  const err = res.filter(x => x.error && !x.has_update && !x.skipped && !(x.error || '').includes('跳过'));
+  let msg, color;
+  if (!res.length) { msg = '📭 没有可检查的漫画'; color = 'var(--text-dim)'; }
+  else if (!upd.length && !err.length) {
+    msg = '✅ 检查完成：' + res.length + ' 部漫画' + (skip.length ? '（' + skip.length + ' 部因源站风控跳过）' : '') + '，其余全部最新';
+    color = '#34a853';
+    if (!quiet) toast(msg, 'ok');
+  } else {
+    msg = '🔔 ' + upd.length + ' 部有更新' + (err.length ? '，' + err.length + ' 部失败' : '')
+      + (skip.length ? '，' + skip.length + ' 部风控跳过' : '');
+    if (upd.length) {
+      msg += '：' + upd.map(x => '『' + x.title + '』+' + x.missing_count + '话').join('、').slice(0, 150);
+    } else if (err.length) {
+      msg += '（' + String(err[0].error || '').slice(0, 60) + '）';
+    }
+    color = upd.length ? '#e8b34b' : '#f66';
+    if (!quiet) toast(upd.length ? ('🔔 ' + upd.length + ' 部漫画有更新') : ('⚠ ' + err.length + ' 部检查失败'), upd.length ? '' : 'error');
+  }
+  if (bar) {
+    bar.style.display = '';
+    bar.style.color = color;
+    let btnHtml = '';
+    if (upd.length) {
+      btnHtml = ' <button id="manga-bar-dl" style="margin-left:10px;padding:4px 12px;border-radius:6px;'
+        + 'border:1px solid #e8b34b;background:rgba(232,179,75,.12);color:#e8b34b;font-size:.78rem;cursor:pointer;">'
+        + '⭳ 补下 ' + upd.length + ' 部</button>';
+    }
+    bar.innerHTML = esc(msg) + btnHtml
+      + ' <a href="javascript:void(0)" id="manga-bar-close" style="color:var(--text-dim);font-size:.72rem;margin-left:10px;">✕ 关闭</a>';
+    const ca = bar.querySelector('#manga-bar-close');
+    if (ca) ca.onclick = () => { bar.style.display = 'none'; };
+    const dbtn = bar.querySelector('#manga-bar-dl');
+    if (dbtn) dbtn.onclick = async () => {
+      dbtn.disabled = true;
+      dbtn.textContent = '⏳ 下载中…';
+      try {
+        const dl = await fetch('/api/manga/check-updates-download', {method:'POST'});
+        const dd = await dl.json().catch(() => ({}));
+        if (dd.ok) { dbtn.textContent = '✅ 已开始补下 ' + (dd.started || 0) + ' 部'; toast('🔄 已开始补充下载 ' + (dd.started || 0) + ' 部', 'ok'); }
+        else { dbtn.textContent = '⚠ 启动失败'; toast('⚠ ' + (dd.error || '启动失败'), 'error'); }
+      } catch (e) { dbtn.textContent = '⚠ 启动失败'; }
+    };
+  }
+  return {upd, err};
+}
+
+async function mangaPollThenFinish(resumed) {
+  const bar = document.getElementById('manga-check-status');
+  const s = await mangaPollLoop(bar);
+  // 轮询连续失败返回 null：明确报失败，不得落入"无结果=无漫画"分支
+  if (s === null) { mangaShowResult({results: []}, resumed, true); return; }
+  let fd;
+  try { fd = await (await fetch('/api/manga/library/check-updates/status')).json(); }
+  catch (e) { fd = null; }   // 末次状态请求失败同样属"获取失败"，不得当作无漫画
+  if (!fd) { mangaShowResult({results: []}, resumed, true); return; }
+  mangaShowResult(fd, resumed, false);
+}
+
+function mangaSetBtn(busy) {
+  const btn = document.getElementById('btn-manga-check-all');
+  if (!btn) return;
+  btn.disabled = busy;
+  btn.textContent = busy ? '⏳ 检查中…' : '🔄 一键检查更新';
+}
+
+async function mangaCheckRun() {
+  if (_mangaPollActive) return;
+  _mangaPollActive = true;
+  const bar = document.getElementById('manga-check-status');
+  mangaSetBtn(true);
+  if (bar) { bar.style.display = ''; bar.style.color = ''; bar.textContent = '⏳ 正在启动检查…'; }
+  try {
+    const r = await fetch('/api/manga/library/check-updates', {method:'POST'});
+    const d = await r.json().catch(() => ({}));
+    if (r.status === 409) {
+      // 已有任务在跑(刷新前触发的) → 直接接管轮询显示进度
+      await mangaPollThenFinish(true);
+    } else if (!r.ok) {
+      throw new Error(d.error || ('HTTP ' + r.status));
+    } else if (!d.total) {
+      if (bar) { bar.textContent = '📭 书库暂无已下载漫画可检查'; bar.style.color = 'var(--text-dim)'; }
+    } else {
+      await mangaPollThenFinish(false);
+    }
+  } catch (e) {
+    if (bar) { bar.textContent = '⚠ 检查失败: ' + String(e.message || e).slice(0, 120); bar.style.color = '#f66'; }
+  } finally {
+    _mangaPollActive = false;
+    mangaSetBtn(false);
+  }
+}
+
+async function mangaCheckResume() {
+  // 页面加载/刷新: 后端有进行中任务 → 恢复轮询; 有 10 分钟内结果 → 展示
+  if (_mangaPollActive) return;
+  let st;
+  try { st = await (await fetch('/api/manga/library/check-updates/status')).json(); }
+  catch (e) { return; }
+  const bar = document.getElementById('manga-check-status');
+  if (!bar) return;
+  const recent = st.finished_at && (Date.now() / 1000 - st.finished_at) < 600;
+  if (st.running) {
+    _mangaPollActive = true;
+    mangaSetBtn(true);
+    if (bar) { bar.style.display = ''; bar.style.color = ''; bar.textContent = '⏳ 正在恢复检查进度…'; }
+    try { await mangaPollThenFinish(true); }
+    finally { _mangaPollActive = false; mangaSetBtn(false); }
+  } else if ((st.results || []).length && recent) {
+    mangaShowResult(st, true);
+  }
+}
+
+document.getElementById('btn-manga-check-all').onclick = mangaCheckRun;
+mangaCheckResume();
+</script>
+</body>
+</html>

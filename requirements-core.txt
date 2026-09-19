@@ -1,0 +1,14 @@
+# ── 核心运行时（Web 服务 + 规则引擎）──
+# 版本同时给出下限与上限：无 lockfile 时防止主版本跳跃引入破坏性变更
+flask>=3.0,<4
+cloudscraper>=1.2.71,<2
+requests>=2.31,<3
+lxml>=5.0,<7           # 同时提供 lxml.cssselect（规则引擎 CSS 选择器）
+cssselect>=1.2,<2
+jsonpath-ng>=1.6,<2
+
+# ── 可选能力（缺失时代码有降级分支，非硬依赖）──
+# curl_cffi：首选 TLS 指纹后端；缺失时 Fetcher 回落 cloudscraper
+curl-cffi>=0.7,<1
+# OpenCC：繁简归一化；engine/app_utils.py 在 ImportError 时直接返回原文
+opencc-python-reimplemented>=0.1.7,<0.2

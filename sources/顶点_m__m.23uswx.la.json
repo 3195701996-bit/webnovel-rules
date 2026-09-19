@@ -1,0 +1,27 @@
+{
+ "bookSourceName": "顶点(m版)",
+ "bookSourceUrl": "http://m.23uswx.la",
+ "searchUrl": "/s.php?keyword={{key}}",
+ "ruleSearch": {
+  "bookList": "div.hot_sale",
+  "name": "p.title@text",
+  "bookUrl": "a[href*='/book/']@href",
+  "author": "p.author@text##作者[:：]?##"
+ },
+ "ruleBookInfo": {
+  "name": "h1@text",
+  "tocUrl": "a[href$='all.html']@href"
+ },
+ "ruleToc": {
+  "chapterList": "#chapterlist p a[href*='.html']",
+  "chapterName": "a@text",
+  "chapterUrl": "a@href"
+ },
+ "ruleContent": {
+  "content": "#chaptercontent@text##最新网址[:：]m\\.23uswx\\.la\\s*####\\(第\\d+/\\d+页\\)\\s*####（本章未完[^\\n]*?继续阅读）\\s*####『加入书签[^\\n]*?』\\s*##",
+  "nextContentUrl": "#pt_next@href"
+ },
+ "tocSort": "url",
+ "uid": "顶点_m__m.23uswx.la",
+ "enabled": false
+}

@@ -1,0 +1,27 @@
+{
+ "bookSourceName": "夜天连看(info)",
+ "bookSourceUrl": "http://www.yetianlian.info",
+ "searchUrl": "/s.php?ie=utf-8&q={{key}}",
+ "ruleSearch": {
+  "bookList": "div.bookinfo",
+  "name": "h4.bookname a@text",
+  "bookUrl": "h4.bookname a@href",
+  "author": "div.author@text##作者[:：]?##",
+  "lastChapter": "div.update a@text"
+ },
+ "ruleToc": {
+  "chapterList": "dd",
+  "chapterName": "a@text",
+  "chapterUrl": "a@href"
+ },
+ "ruleContent": {
+  "content": "#content@text"
+ },
+ "uid": "夜天连看_info__www.yetianlian.info",
+ "enabled": false,
+ "imported_at": "2026-09-04 17:51:20",
+ "valid": true,
+ "valid_error": "",
+ "valid_tested_at": "",
+ "tocSort": "url"
+}

@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>书源管理 · webnovel_rules</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+<header class="topbar">
+  <span class="logo">📚 webnovel_rules<small>书源驱动 · 小说爬虫</small></span>
+  <nav>
+    <a href="/">🔍 搜索/书库</a>
+    <a href="/sources" class="active">书源管理</a>
+    <a href="/library">📖 我的书库</a>
+    <a href="/tasks_page">📋 任务管理</a>
+    <a href="/manga">🎨 漫画</a>
+  </nav>
+  <div class="spacer"></div>
+</header>
+
+<div class="container">
+  <h1 class="page-title">书源管理</h1>
+  <p class="page-sub">导入 legado（阅读 App）格式书源，导入时自动校验可用性；支持启用/禁用与重新校验。</p>
+
+  <div class="form-card">
+    <h2>📥 导入书源（自动校验）</h2>
+    <textarea id="import-area" class="import-textarea" placeholder='粘贴书源 JSON（单个对象、数组，或 {"data":[...]} 包装），例如：&#10;[{"bookSourceName":"苦读书","bookSourceUrl":"https://m.kudushu.org",...}]'></textarea>
+    <div style="margin-top:10px;display:flex;gap:10px;align-items:center;">
+      <button class="btn primary" id="btn-import">导入并校验</button>
+      <span class="hint" style="margin:0;">支持从 <a href="https://github.com/liufuyou/read" target="_blank">liufuyou/read</a>、<a href="https://github.com/aoaostar/legado" target="_blank">aoaostar/legado</a> 等开源书源合集复制 JSON</span>
+    </div>
+    <div class="import-result" id="import-result"></div>
+  </div>
+
+  <h3 style="margin:20px 0 10px;">已导入书源（<span id="src-count">0</span>）
+    <span id="src-stats" style="font-size:.8rem;color:var(--text-dim);font-weight:400;margin-left:8px;"></span>
+    <button class="btn small primary" id="btn-check-all" style="margin-left:12px;">🔍 一键检验全部源</button>
+    <span id="check-all-status" style="font-size:.78rem;color:var(--text-dim);margin-left:8px;"></span></h3>
+  <div id="check-all-result" style="margin-bottom:12px;"></div>
+  <div class="src-filter">
+    <input type="text" id="src-filter-input" placeholder="🔍 过滤书源（名称 / 网址 / 分组）…">
+    <select id="src-group-filter" style="padding:9px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);">
+      <option value="">全部分组</option>
+    </select>
+  
+
+  <div class="batch-bar" id="batch-bar" style="display:none;">
+    <label style="display:flex;align-items:center;gap:6px;font-size:.85rem;cursor:pointer;">
+      <input type="checkbox" id="sel-all"> 全选 <span id="sel-count" style="color:var(--text-dim);"></span>
+    </label>
+    <button class="btn small primary" id="batch-enable">启用选中</button>
+    <button class="btn small" id="batch-disable">停用选中</button>
+    <button class="btn small danger" id="batch-del">删除选中</button>
+  </div>
+</div>
+  <div id="source-list"><div class="empty">加载中…</div></div>
+</div>
+
+<script src="/static/js/common.js"></script>
+<script>
+// R53: 一键检验全部启用书源——后台异步逐源检验，前端轮询实时反馈
+let _checkingAll = false;
+$('#btn-check-all').onclick = async () => {
+  if (_checkingAll) return;
+  _checkingAll = true;
+  const btn = $('#btn-check-all');
+  const st = $('#check-all-status');
+  const box = $('#check-all-result');
+  btn.disabled = true;
+  st.style.color = '';
+  st.textContent = '⏳ 启动检验…';
+  box.innerHTML = '';
+  try {
+    const r = await fetch('/api/sources/check-all', {method:'POST'});
+    const d = await r.json().catch(() => ({}));
+    if (r.status === 409) {
+      // 已有任务在跑(如刷新前触发) → 接管轮询显示进度
+      await pollSrcCheckAll(st, box, true);
+      return;
+    }
+    if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
+    if (!d.total) {
+      st.textContent = '✅ 没有启用的书源';
+      st.style.color = '#34a853';
+      return;
+    }
+    await pollSrcCheckAll(st, box, false);
+  } catch (e) {
+    st.textContent = '⚠ 检验失败: ' + esc(String(e).slice(0,120));
+    st.style.color = '#f66';
+  } finally {
+    _checkingAll = false;
+    btn.disabled = false;
+  }
+};
+
+function renderSrcCheckTable(box, results) {
+  if (!results.length) { box.innerHTML = ''; return; }
+  const sorted = results.slice().sort((a, b) =>
+    (a.ok ? 1 : 0) - (b.ok ? 1 : 0) || String(a.name).localeCompare(String(b.name)));
+  let html = '<div style="border:1px solid var(--border);border-radius:10px;overflow:hidden;font-size:.8rem;">';
+  html += '<table style="width:100%;border-collapse:collapse;"><thead><tr style="background:var(--bg-2,#1c2230);">'
+    + '<th style="padding:6px 10px;text-align:left;">书源</th><th style="padding:6px 10px;">状态</th>'
+    + '<th style="padding:6px 10px;text-align:left;">结果/备注</th></tr></thead><tbody>';
+  sorted.forEach(x => {
+    const bad = !x.ok;
+    html += `<tr style="border-top:1px solid var(--border);${bad ? 'background:rgba(224,92,92,.06);' : ''}">`
+      + `<td style="padding:6px 10px;">${esc(x.name)}</td>`
+      + `<td style="padding:6px 10px;text-align:center;"><span class="dot ${bad ? 'error' : 'done'}"></span>${bad ? '异常' : '可用'}</td>`
+      + `<td style="padding:6px 10px;color:var(--text-dim);">${esc((x.error || x.note || x.sample || '').slice(0, 120))}</td></tr>`;
+  });
+  html += '</tbody></table></div>';
+  box.innerHTML = html;
+}
+
+async function pollSrcCheckAll(st, box, quiet) {
+  let lastDone = -1;
+  let fails = 0;
+  for (;;) {
+    await new Promise(res => setTimeout(res, 900));
+    let d;
+    try {
+      const r = await fetch('/api/sources/check-all/status');
+      d = await r.json();
+      fails = 0;
+    } catch (e) {
+      if (++fails > 15) return;   // 网络长时间中断退出
+      continue;
+    }
+    const results = d.results || [];
+    renderSrcCheckTable(box, results);
+    const okN = results.filter(x => x.ok).length;
+    const badN = results.length - okN;
+    if (d.running) {
+      if (results.length !== lastDone) {
+        st.textContent = '⏳ 正在检验 ' + results.length + '/' + (d.total || '?')
+          + (badN ? '（已发现 ' + badN + ' 个异常）' : '');
+        st.style.color = badN ? '#ff9d5c' : 'var(--text-dim)';
+        lastDone = results.length;
+      }
+    } else {
+      st.textContent = '✅ 完成：' + okN + '/' + (d.total || results.length) + ' 可用'
+        + (badN ? '，' + badN + ' 个异常 ↓' : '');
+      st.style.color = badN ? '#ff9d5c' : '#34a853';
+      if (!quiet) {
+        if (badN) toast('⚠ ' + badN + ' 个书源异常，详见下方列表', 'error');
+        else toast('✅ 全部 ' + results.length + ' 个书源可用', 'ok');
+        if (badN) box.scrollIntoView({behavior: 'smooth', block: 'nearest'});
+      }
+      loadSources();  // 刷新列表上的校验状态
+      return;
+    }
+  }
+}
+
+// R56: 页面加载/刷新恢复——进行中的检验继续轮询, 10 分钟内的结果直接展示
+async function resumeSrcCheck() {
+  if (_checkingAll) return;
+  let st;
+  try { st = await (await fetch('/api/sources/check-all/status')).json(); }
+  catch (e) { return; }
+  const stEl = $('#check-all-status');
+  const box = $('#check-all-result');
+  if (!stEl || !box) return;
+  const recent = st.finished_at && (Date.now() / 1000 - st.finished_at) < 600;
+  if (st.running) {
+    _checkingAll = true;
+    const btn = $('#btn-check-all');
+    btn.disabled = true;
+    stEl.style.color = '';
+    stEl.textContent = '⏳ 正在恢复检验进度…';
+    await pollSrcCheckAll(stEl, box, true);
+    _checkingAll = false;
+    btn.disabled = false;
+  } else if ((st.results || []).length && recent) {
+    renderSrcCheckTable(box, st.results);
+    const okN = (st.results || []).filter(x => x.ok).length;
+    const badN = (st.results || []).length - okN;
+    stEl.textContent = '✅ 上次检验：' + okN + '/' + (st.total || (st.results || []).length)
+      + ' 可用' + (badN ? '，' + badN + ' 个异常 ↓' : '');
+    stEl.style.color = badN ? '#ff9d5c' : '#34a853';
+  }
+}
+resumeSrcCheck();
+
+$('#btn-import').onclick = async () => {
+  const content = $('#import-area').value.trim();
+  if (!content) { toast('请粘贴书源 JSON', 'error'); return; }
+  const btn = $('#btn-import');
+  btn.disabled = true; btn.textContent = '导入校验中…（每个书源需网络测试）';
+  $('#import-result').innerHTML = '<div class="hint">正在逐源校验，请稍候…</div>';
+  try {
+    const r = await fetch('/api/sources/import', {method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({content})});
+    const d = await r.json();
+    if (!r.ok) { toast('⚠ ' + (d.error || '导入失败'), 'error'); return; }
+    const res = d.results || [];
+    $('#import-result').innerHTML = res.map(x => {
+      const cls = x.ok && x.valid ? 'ok' : 'bad';
+      const mark = x.ok && x.valid ? '✅' : '❌';
+      return `<div class="${cls}">${mark} ${esc(x.name)}：${x.valid ? '可用' : '不可用'} ${x.error ? '（' + esc(x.error) + '）' : ''}</div>`;
+    }).join('');
+    toast('导入 ' + d.imported + ' 个书源', 'ok');
+    loadSources();
+  } catch (e) { toast('⚠ ' + e, 'error'); }
+  btn.disabled = false; btn.textContent = '导入并校验';
+};
+
+let _srcLoadSeq = 0;   // 代际：迟到的旧响应不得覆盖新列表/新选择
+// 业务失败判定：接口用 HTTP 200 + {ok:false} 表示业务失败，而 requestJSON 只对
+// HTTP/网络/非 JSON 抛错，不会 reject 业务失败。写操作（切换/删除）须显式检错。
+// 兼容：无 ok 字段视为成功（旧接口/无该约定），仅 ok===false 才抛。
+function assertOk(d, fallback) {
+  if (d && d.ok === false) {
+    const e = new Error((d.error || d.message) || fallback);
+    e.name = 'BizError';
+    throw e;
+  }
+  return d;
+}
+async function loadSources() {
+  const mySeq = ++_srcLoadSeq;
+  let sources;
+  try {
+    // requestJSON：检查 HTTP 状态与非 JSON 响应；业务字段缺失也视为失败
+    const d = await requestJSON('/api/sources');
+    sources = d && d.sources;
+    if (!Array.isArray(sources)) throw new Error('响应缺少书源列表');
+  } catch (e) {
+    if (mySeq === _srcLoadSeq) {
+      const box0 = $('#source-list');
+      if (box0) box0.innerHTML = '<div class="empty">书源加载失败：'
+        + esc((e && e.message) || e)
+        + '<br><button class="btn small" onclick="loadSources()" style="margin-top:10px;">重试</button></div>';
+      updateBatchUI();   // 列表已清空：同步复位批量条/“已选”计数，勾选数量不悬空
+    }
+    return;
+  }
+  if (mySeq !== _srcLoadSeq) return;   // 已被更新的请求取代
+  $('#src-count').textContent = sources.length;
+  // 统计：可用 / 不可用 / 未校验 / 已停用
+  const nValid = sources.filter(s => s.valid === true).length;
+  const nInvalid = sources.filter(s => s.valid === false).length;
+  const nUnknown = sources.length - nValid - nInvalid;
+  const nDisabled = sources.filter(s => !s.enabled).length;
+  const statsEl = $('#src-stats');
+  if (statsEl) statsEl.textContent =
+    `✅${nValid} ❌${nInvalid} ⏳${nUnknown}` + (nDisabled ? ` · 已停用${nDisabled}` : '');
+  // 分组下拉
+  const groups = [...new Set(sources.map(s => s.bookSourceGroup || '未分组').filter(Boolean))].sort();
+  const gf = $('#src-group-filter');
+  const prevGroup = gf.value;
+  gf.innerHTML = '<option value="">全部分组</option>' +
+    groups.map(g => `<option value="${esc(g)}">${esc(g)}</option>`).join('');
+  gf.value = prevGroup;   // 15s 自动刷新后保留分组选择
+  const box = $('#source-list');
+  // 刷新保留勾选：重建 DOM 前记录，重建后回填（自动刷新/校验后不丢选择）
+  const prevSel = new Set(selectedUids());
+  if (!sources.length) { box.innerHTML = '<div class="empty">暂无书源，请在上方导入</div>'; updateBatchUI(); return; }
+  box.innerHTML = '';
+
+  // 过滤
+  const kw = ($('#src-filter-input').value || '').trim().toLowerCase();
+  const gsel = gf.value;
+  let filtered = sources;
+  if (kw) {
+    filtered = filtered.filter(x =>
+      (x.bookSourceName || '').toLowerCase().includes(kw) ||
+      (x.bookSourceUrl || '').toLowerCase().includes(kw) ||
+      (x.bookSourceGroup || '').toLowerCase().includes(kw));
+  }
+  if (gsel) filtered = filtered.filter(x => (x.bookSourceGroup || '未分组') === gsel);
+
+  // 按分组渲染（组内排序：启用+可用 优先，未校验居中，不可用/停用沉底）
+  const rank = s => (!s.enabled ? 3 : s.valid === true ? 0 : s.valid === undefined ? 1 : 2);
+  const byGroup = {};
+  for (const s of filtered) {
+    const g = s.bookSourceGroup || '未分组';
+    (byGroup[g] = byGroup[g] || []).push(s);
+  }
+  for (const g of Object.keys(byGroup).sort()) {
+    byGroup[g].sort((a, b) => rank(a) - rank(b) ||
+      String(a.bookSourceName || '').localeCompare(String(b.bookSourceName || ''), 'zh'));
+    const gt = document.createElement('div');
+    gt.className = 'group-title';
+    gt.textContent = g + '（' + byGroup[g].length + '）';
+    box.appendChild(gt);
+    for (const s of byGroup[g]) {
+      const row = document.createElement('div');
+      row.className = 'source-row';
+      const selCb = `<input type="checkbox" class="sel-check" data-uid="${s.uid}"${prevSel.has(s.uid) ? ' checked' : ''} style="flex-shrink:0;">`;
+      const validMark = s.valid === undefined ? '<span style="color:var(--text-dim);">未校验</span>'
+        : (s.valid ? '<span class="tag done">✅ 可用</span>'
+                   : `<span class="tag err">❌ ${esc((s.valid_error || '不可用').slice(0, 40))}</span>`);
+      // C06: 可点击 div → 可聚焦 <button role="switch">：键盘可达（Enter/Space
+      // 触发原生 click），aria-checked 反映启停状态；视觉沿用 .switch 样式不变
+      const switchBtn = `<button type="button" role="switch" aria-checked="${s.enabled ? 'true' : 'false'}" `
+        + `class="switch ${s.enabled ? 'on' : ''}" data-uid="${s.uid}" data-on="${s.enabled}" `
+        + `title="启用/禁用" aria-label="启用/禁用 ${esc(s.bookSourceName)}"></button>`;
+      row.innerHTML = `
+        ${selCb}
+        ${switchBtn}
+        <div class="sname" title="${esc(s.bookSourceName)}">${esc(s.bookSourceName)}</div>
+        <div class="surl">${esc(s.bookSourceUrl)}</div>
+        <div class="sstatus">${validMark}</div>
+        <div class="ops">
+          <button class="btn small val-btn" data-uid="${s.uid}">重新校验</button>
+          <button class="btn small danger del-btn" data-uid="${s.uid}" data-name="${esc(s.bookSourceName)}">🗑</button>
+        </div>`;
+      box.appendChild(row);
+    }
+  }
+  updateBatchUI();   // 与“全选”状态同步（选择已回填）
+  if (!filtered.length) {
+    box.innerHTML = '<div class="empty">没有匹配的书源</div>';
+    updateBatchUI();
+    return;
+  }
+  box.querySelectorAll('.switch').forEach(sw => sw.onclick = async () => {
+    const on = sw.dataset.on === 'true';
+    try {
+      const d = await requestJSON('/api/sources/' + encodeURIComponent(sw.dataset.uid) + '/toggle',
+        {method: 'POST', body: {enabled: !on}, button: sw});
+      assertOk(d, '切换失败');   // HTTP 200 但 ok:false → 视为失败，不刷新不误判
+      await loadSources();
+    } catch (e) {
+      toast('⚠ 操作失败：' + ((e && e.message) || e), 'error');
+      sw.disabled = false;   // 失败绝不留下永久禁用
+    }
+  });
+  box.querySelectorAll('.val-btn').forEach(b => b.onclick = async () => {
+    b.disabled = true; b.textContent = '校验中…';
+    try {
+      // validate 的 ok 是“书源是否可用”的业务结果，非请求成败；HTTP 错误由 requestJSON 抛出
+      const d = await requestJSON('/api/sources/' + encodeURIComponent(b.dataset.uid) + '/validate',
+        {method: 'POST'});
+      toast(d.ok ? '✅ 书源可用' : '❌ ' + (d.error || '不可用'), d.ok ? 'ok' : 'error');
+    } catch (e) {
+      toast('⚠ 校验失败：' + ((e && e.message) || e), 'error');
+    } finally {
+      b.disabled = false; b.textContent = '重新校验';
+    }
+    loadSources();
+  });
+  box.querySelectorAll('.del-btn').forEach(b => b.onclick = async () => {
+    if (!confirm('删除书源「' + b.dataset.name + '」？')) return;
+    b.disabled = true;
+    try {
+      const d = await requestJSON('/api/sources/' + encodeURIComponent(b.dataset.uid), {method: 'DELETE'});
+      assertOk(d, '删除失败');   // HTTP 200 但 ok:false → 视为失败，不误报“已删除”
+      toast('已删除', 'ok');
+    } catch (e) {
+      toast('⚠ 删除失败：' + ((e && e.message) || e), 'error');
+      b.disabled = false;   // 失败恢复可点
+      return;
+    }
+    loadSources();
+  });
+}
+
+loadSources();
+// 15s 自动刷新状态：可见性感知 + 单飞（上一步完成后才排下一次，慢请求不叠发），
+// 用户有勾选或正在过滤输入时暂停刷新（避免打断操作/丢勾选）。
+let _srcPollTimer = null;
+function scheduleSrcPoll() {
+  if (_srcPollTimer) return;
+  _srcPollTimer = setTimeout(async () => {
+    _srcPollTimer = null;
+    await srcAutoRefresh();
+    scheduleSrcPoll();
+  }, 15000);
+}
+let _srcAutoInFlight = false;   // 自动刷新单飞锁：仅约束自动入口，不拦用户输入
+async function srcAutoRefresh() {
+  // 定时器（scheduleSrcPoll）与 visibilitychange 可能同时触发 → 单飞去重。
+  // 该锁独立于 loadSources：用户输入/显式重试仍可随时发起新代请求，不被阻塞。
+  if (_srcAutoInFlight) return;
+  if (document.hidden) return;   // 后台标签不轮询；回前台时补刷一次
+  _srcAutoInFlight = true;
+  try {
+    const hasSel = document.querySelectorAll('.sel-check:checked').length > 0;
+    const filtering = document.activeElement === $('#src-filter-input');
+    if (!hasSel && !filtering) await loadSources();
+  } finally {
+    _srcAutoInFlight = false;    // 成功/失败/异常都释放在途锁，允许下一轮
+  }
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) srcAutoRefresh(); });
+scheduleSrcPoll();
+$('#src-filter-input').addEventListener('input', loadSources);
+// R12 批量操作（自行实现）
+function updateBatchUI() {
+  const checks = document.querySelectorAll('.sel-check');
+  const batch = document.getElementById('batch-bar');
+  const cnt = document.getElementById('sel-count');
+  const selAll = document.getElementById('sel-all');
+  if (!batch) return;
+  const n = Array.from(checks).filter(c => c.checked).length;
+  if (batch) batch.style.display = checks.length ? 'flex' : 'none';
+  if (cnt) cnt.textContent = '已选 ' + n;
+  if (selAll) selAll.checked = checks.length > 0 && n === checks.length;
+}
+document.addEventListener('change', (e) => {
+  if (e.target.classList && e.target.classList.contains('sel-check')) updateBatchUI();
+});
+function selectedUids() {
+  return Array.from(document.querySelectorAll('.sel-check:checked')).map(c => c.dataset.uid);
+}
+const selAllEl = document.getElementById('sel-all');
+if (selAllEl) selAllEl.addEventListener('change', () => {
+  document.querySelectorAll('.sel-check').forEach(c => c.checked = selAllEl.checked);
+  updateBatchUI();
+});
+// 批量开关：逐个请求，如实统计成功/失败（失败不再被笼统报成成功），按钮期间禁用
+async function batchToggle(uids, enabled, btn) {
+  const verb = enabled ? '启用' : '停用';
+  if (btn) btn.disabled = true;
+  let ok = 0, fail = 0;
+  try {
+    for (const uid of uids) {
+      try {
+        const d = await requestJSON('/api/sources/' + encodeURIComponent(uid) + '/toggle',
+          {method: 'POST', body: {enabled}});   // 幂等：显式置 enabled
+        assertOk(d, '切换失败');   // 业务失败计为失败，不被笼统报成成功
+        ok++;
+      } catch (e) { fail++; }
+    }
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+  if (fail) toast('⚠ ' + verb + '完成：成功 ' + ok + ' 个，失败 ' + fail + ' 个', 'error');
+  else toast('已' + verb + ' ' + ok + ' 个', 'ok');
+  await loadSources();
+}
+const be = document.getElementById('batch-enable');
+if (be) be.onclick = () => batchToggle(selectedUids(), true, be);
+const bd = document.getElementById('batch-disable');
+if (bd) bd.onclick = () => batchToggle(selectedUids(), false, bd);
+const bdel = document.getElementById('batch-del');
+if (bdel) bdel.onclick = async () => {
+  const uids = selectedUids();
+  if (!uids.length || !confirm('删除选中的 ' + uids.length + ' 个书源？')) return;
+  bdel.disabled = true;
+  let ok = 0, fail = 0;
+  try {
+    for (const uid of uids) {
+      try {
+        const d = await requestJSON('/api/sources/' + encodeURIComponent(uid), {method: 'DELETE'});
+        assertOk(d, '删除失败');   // 业务失败计为失败，不被笼统报成成功
+        ok++;
+      } catch (e) { fail++; }
+    }
+  } finally {
+    bdel.disabled = false;
+  }
+  if (fail) toast('⚠ 删除完成：成功 ' + ok + ' 个，失败 ' + fail + ' 个', 'error');
+  else toast('已删除 ' + ok + ' 个', 'ok');
+  loadSources();
+};
+$('#src-group-filter').addEventListener('change', loadSources);
+</script>
+</body>
+</html>

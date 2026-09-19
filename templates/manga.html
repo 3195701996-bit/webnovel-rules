@@ -1,0 +1,700 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>漫画 · webnovel_rules</title>
+<link rel="stylesheet" href="/static/css/style.css">
+<style>
+.grid-c { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:14px; }
+.manga-card { background:var(--bg-2,#1c2230); border-radius:10px; overflow:hidden; cursor:pointer; border:1px solid var(--border); transition:.15s; }
+.manga-card:hover { transform:translateY(-2px); border-color:var(--accent); }
+.manga-card img { width:100%; aspect-ratio:3/4; object-fit:cover; display:block; background:#0d1117; }
+.manga-card .mc-info { padding:8px 10px; }
+.manga-card .mc-title { font-size:.85rem; font-weight:600; line-height:1.35; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+.manga-card .mc-meta { font-size:.72rem; color:var(--text-dim); margin-top:3px; display:flex; gap:6px; flex-wrap:wrap; }
+.manga-card .mc-tag { background:rgba(90,120,255,.15); color:#8ab4ff; padding:1px 6px; border-radius:4px; }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <span class="logo">📚 webnovel_rules<small>书源驱动 · 小说爬虫</small></span>
+  <nav>
+    <a href="/">🔍 搜索/书库</a>
+    <a href="/sources">书源管理</a>
+    <a href="/library">📖 我的书库</a>
+    <a href="/tasks_page">📋 任务管理</a>
+    <a href="/manga" class="active">🎨 漫画</a>
+  </nav>
+  <div class="spacer"></div>
+</header>
+<div class="container">
+  <div id="manga-tab-row" style="display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap;">
+    <button class="btn primary" id="tab-search" onclick="switchTab('search')">🔍 搜索</button>
+    <button class="btn" id="tab-fav" onclick="switchTab('fav')">⭐ 收藏</button>
+    <button class="btn" id="tab-hist" onclick="switchTab('hist')">🕐 历史</button>
+  </div>
+  <div class="section-title">🎨 漫画搜索</div>
+  <div id="manga-search-row" style="display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap;">
+    <input id="q" class="input" placeholder="输入漫画名 / 禁漫码(如 JM559440) 搜索" style="flex:1;min-width:200px;"
+           onkeydown="if(event.key==='Enter')search()">
+    <select id="src" class="input" style="max-width:180px;padding:10px;" onchange="onSrcChange()">
+      <option value="">全部源</option>
+    </select>
+    <select id="order" class="input" style="max-width:150px;padding:10px;display:none;" title="禁漫天堂排序">
+      <option value="mr">最近更新</option>
+      <option value="mv">最多观看</option>
+      <option value="mp">最多图片</option>
+      <option value="tf">最多点赞</option>
+      <option value="tr">评分</option>
+      <option value="md">评论</option>
+    </select>
+    <button class="btn primary" onclick="search()">搜索</button>
+    <button class="btn" onclick="setCopymangaToken()" title="配置拷贝漫画登录 Token（降低风控权重）">🔑 Token</button>
+  </div>
+  <div id="src-status" style="color:var(--text-dim);font-size:.78rem;margin-bottom:8px;"></div>
+  <div id="status" class="search-status" style="margin-bottom:12px;"></div>
+  <div id="results" class="grid-c"></div>
+  <div id="fav-list" class="grid-c" style="display:none;"></div>
+  <div id="hist-list" style="display:none;"></div>
+</div>
+<script src="/static/js/common.js"></script>
+<script>
+// R51: 源选择与当前标签页持久化——用户手动选的源(含"全部源")优先于
+// 默认禁漫;从详情页回退/重载后保持原样,不再被拉回默认源重搜
+const SRC_KEY = 'manga_src_last_v1';
+const TAB_KEY = 'manga_tab_v1';
+function onSrcChange() {
+  saveLastSrc();
+  toggleSortSel();
+}
+function saveLastSrc() {
+  try { localStorage.setItem(SRC_KEY, $('#src').value || ''); } catch (e) {}
+  // 地址栏已有关键词时同步并入当前源(未点搜索前 URL 也保持源一致)
+  try {
+    const p = new URLSearchParams(location.search);
+    if (p.get('q')) {
+      const v = $('#src').value;
+      if (v) p.set('source', v); else p.delete('source');
+      history.replaceState(null, '', '?' + p.toString());
+    }
+  } catch (e) {}
+}
+async function loadSources() {
+  try {
+    const r = await fetch('/api/manga/sources');
+    const d = await r.json();
+    const sel = $('#src');
+    (d.sources || []).forEach(s => {
+      const o = document.createElement('option');
+      o.value = s.key; o.textContent = s.name;
+      sel.appendChild(o);
+    });
+    $('#src-status').textContent = '可用源: ' + (d.sources || []).map(s => s.name).join('、');
+    // 源恢复优先级: URL source 参数 > 上次选择(localStorage,含"全部源") > 默认禁漫
+    // (仅完全无记忆的首访才落到默认禁漫——"以禁漫为默认源"保留)
+    const p = new URLSearchParams(location.search);
+    const urlSrc = p.get('source');
+    const okOpt = v => v === '' || Array.from(sel.options).some(o => o.value === v);
+    if (urlSrc && okOpt(urlSrc)) {
+      sel.value = urlSrc;
+    } else if (!urlSrc) {
+      let last = null;
+      try { last = localStorage.getItem(SRC_KEY); } catch (e) {}
+      if (last !== null && okOpt(last)) {
+        sel.value = last;          // 尊重上次选择(空串=全部源)
+      } else {
+        const jmIdx = Array.from(sel.options).findIndex(o => o.value === 'jm');
+        if (jmIdx > 0) sel.selectedIndex = jmIdx;   // 默认源: 禁漫
+      }
+    }
+    toggleSortSel();  // 根据当前选中源显示/隐藏排序下拉
+  } catch (e) { $('#src-status').textContent = '源加载失败'; }
+}
+function saveSearchState() {
+  const q = $('#q').value.trim();
+  if (!q) return;
+  const params = new URLSearchParams();
+  params.set('q', q);
+  if ($('#src').value) params.set('source', $('#src').value);
+  history.replaceState(null, '', '?' + params.toString());
+}
+
+// 多源结果：弹层选择来源
+function pickMangaSource(c, srcs) {
+  const overlay = document.createElement('div');
+  overlay.className = 'src-picker';
+  overlay.innerHTML = `<div class="src-picker-box">
+    <div class="src-picker-title">${esc(c.title)}</div>
+    <div class="src-picker-sub">选择来源打开</div>
+    ${srcs.map((s, i) => `<button class="src-picker-btn" data-i="${i}">${esc(s.source_name || s.source || ('来源' + (i + 1)))}</button>`).join('')}
+    <button class="src-picker-btn cancel" data-i="-1">取消</button>
+  </div>`;
+  document.body.appendChild(overlay);
+  overlay.onclick = (e) => {
+    const b = e.target.closest('.src-picker-btn');
+    if (!b) return;
+    const i = parseInt(b.dataset.i, 10);
+    overlay.remove();
+    if (i >= 0) {
+      const s = srcs[i];
+      if (s && s.source && s.id) {
+        location.href = '/manga_detail?source=' + s.source + '&id=' + encodeURIComponent(s.id);
+      } else { toast('该来源缺少信息，请换一个'); }
+    }
+  };
+}
+
+// ── 搜索结果缓存（回退时不丢失）──
+const MANGA_CACHE_KEY = 'manga_search_cache_v1';
+function cacheMangaSearch(q, src, page, list) {
+  try { sessionStorage.setItem(MANGA_CACHE_KEY, JSON.stringify({q, src, page, list, ts: Date.now()})); } catch (e) {}
+}
+function getCachedMangaSearch() {
+  try { return JSON.parse(sessionStorage.getItem(MANGA_CACHE_KEY) || 'null'); } catch (e) { return null; }
+}
+
+// ── 分页搜索状态 ──
+// gen: 搜索/翻页请求代际——每次发起自增，响应落地前比对，过期响应不得写共享状态
+const SEARCH = {q:'', src:'', order:'mr', page:1, list:[], rendered:new Set(), hasMore:false, fetching:false, gen:0};
+let pagerEl = null;
+const SCROLL_KEY = 'manga_scroll_pos_v1';
+
+// 保存滚动位置（节流）；点击详情/翻页时也调用
+function saveScrollPos() {
+  try {
+    sessionStorage.setItem(SCROLL_KEY, JSON.stringify({
+      q: SEARCH.q, src: SEARCH.src, page: SEARCH.page, y: window.scrollY, ts: Date.now()
+    }));
+  } catch (e) {}
+}
+let _scrollTimer = null;
+window.addEventListener('scroll', () => {
+  if (!SEARCH.q) return;
+  if (_scrollTimer) clearTimeout(_scrollTimer);
+  _scrollTimer = setTimeout(saveScrollPos, 300);
+}, {passive: true});
+
+// 构建单张卡片（供首屏/加载更多/缓存恢复共用）
+function makeMangaCard(c) {
+    const card = document.createElement('div');
+    card.className = 'manga-card';
+      const srcs = (c.sources && c.sources.length) ? c.sources : [{id:c.id, source:c.source, source_name:c.source_name}];
+      const primary = srcs[0];
+      const srcTag = srcs.length > 1
+        ? `<span class="mc-tag">🔀 ${srcs.length}源</span>`
+        : `<span class="mc-tag">${esc((srcs[0]||{}).source_name || '')}</span>`;
+      // 多源时显示全部来源名（卡片底部小字）
+      const srcNames = srcs.length > 1
+        ? `<div class="mc-srcs">${srcs.map(sm => esc(sm.source_name || '')).join(' · ')}</div>`
+        : '';
+      card.innerHTML = `
+        <div class="cover-wrap">
+          <img src="${esc(c.cover || '')}" loading="lazy" onerror="this.onerror=null;this.src='';this.classList.add('error')">
+        </div>
+        <div class="mc-info">
+          <div class="mc-title">${esc(c.title)}</div>
+          <div class="mc-meta">
+            <span>${esc(c.author || '佚名')}</span>
+            ${srcTag}
+          </div>
+          ${srcNames}
+        </div>`;
+      // 多源时点击弹来源选择；单源直接打开
+      card.onclick = () => {
+        saveScrollPos();
+        if (srcs.length > 1) {
+          pickMangaSource(c, srcs);
+        } else {
+          if (!primary || !primary.source || !primary.id) { toast('该结果缺少源信息，请换一个'); return; }
+          location.href = '/manga_detail?source=' + primary.source + '&id=' + encodeURIComponent(primary.id);
+        }
+      };
+    return card;
+}
+
+// 追加渲染（去重）；返回新增数量
+function appendResults(list, box) {
+  let added = 0;
+  (list || []).forEach(c => {
+    const src0 = (c.sources && c.sources[0]) || {};
+    const key = (src0.source || '') + '|' + (src0.id || c.id || c.title);
+    if (SEARCH.rendered.has(key)) return;
+    SEARCH.rendered.add(key);
+    box.appendChild(makeMangaCard(c));
+    added++;
+  });
+  return added;
+}
+
+// 空结果提示；fail=true 表示搜索失败/超时(区别于源站真空)
+function showEmpty(box, fail) {
+  box.innerHTML = fail
+    ? '<div class="empty" style="grid-column:1/-1;"><div class="big">⚠️</div>搜索失败（源站无响应或超时）<br>点上方"搜索"按钮重试</div>'
+    : '<div class="empty" style="grid-column:1/-1;"><div class="big">😕</div>没有找到相关漫画<br>试试其他关键词或切换书源</div>';
+}
+
+// ── 目录翻页控件（上一页/页码/下一页）──
+function updatePager(box) {
+  if (pagerEl) { pagerEl.remove(); pagerEl = null; }
+  if (!SEARCH.q) return;
+  pagerEl = document.createElement('div');
+  pagerEl.id = 'manga-pager';
+  pagerEl.style.gridColumn = '1/-1';
+  pagerEl.style.display = 'flex';
+  pagerEl.style.flexWrap = 'wrap';
+  pagerEl.style.alignItems = 'center';
+  pagerEl.style.justifyContent = 'center';
+  pagerEl.style.gap = '8px';
+  pagerEl.style.marginTop = '14px';
+  // 页码组：已翻过的页确定存在，可回溯；往后只有 hasMore 能保证再有一页，
+  // 更远的页数源站不返回 total 无从得知，因此只延伸一页 + 省略号表示未知。
+  const cur = SEARCH.page;
+  const start = Math.max(1, cur - 2);
+  const end = SEARCH.hasMore ? cur + 1 : cur;
+  const pages = [];
+  if (start > 1) pages.push('1', '..');
+  for (let i = start; i <= end; i++) pages.push(i);
+  if (SEARCH.hasMore) pages.push('..');
+  let btns = '<button class="btn pager-prev" data-p="' + (cur - 1) + '">◀ 上一页</button>';
+  pages.forEach(pg => {
+    if (pg === '..') { btns += '<span class="pager-dots">…</span>'; return; }
+    btns += '<button class="pager-num' + (pg === cur ? ' active' : '') + '" data-p="' + pg + '">' + pg + '</button>';
+  });
+  btns += '<button class="btn pager-next" data-p="' + (cur + 1) + '">下一页 ▶</button>';
+  pagerEl.innerHTML = btns;
+  pagerEl.querySelectorAll('[data-p]').forEach(b => {
+    const pg = parseInt(b.dataset.p);
+    b.disabled = SEARCH.fetching || pg < 1 || (!SEARCH.hasMore && pg > cur);
+    b.onclick = () => fetchPage(pg);
+  });
+  box.appendChild(pagerEl);
+}
+
+// 拉取并切换到指定页（替换当前渲染，翻页后回到顶部）
+async function fetchPage(page) {
+  if (SEARCH.fetching || page < 1) return;
+  // P0-1: 翻页前中止进行中的流式搜索（否则流会继续往结果区追加旧页卡片）
+  if (window._mangaSearchCtrl) { try { window._mangaSearchCtrl.abort(); } catch (e) {} }
+  const myGen = ++SEARCH.gen;
+  SEARCH.fetching = true;
+  $('#status').setAttribute('aria-busy', 'true');
+  updatePager($('#results'));
+  try {
+    const url = '/api/manga/search?q=' + encodeURIComponent(SEARCH.q) +
+      (SEARCH.src ? '&source=' + encodeURIComponent(SEARCH.src) : '') + '&page=' + page + '&order=' + (SEARCH.order || 'mr');
+    const d = await requestJSON(url, {timeout: 30000});
+    // 期间用户已发起新搜索/翻页：本响应过期，不得覆盖新结果与状态
+    if (myGen !== SEARCH.gen) return;
+    const list = d.results || [];
+    const totalHits = parseInt(d.total_hits || 0, 10) || 0;
+    const box = $('#results');
+    if (list.length) {
+      // 取到数据后再替换渲染：先清空后判断会在越界页把结果区清成白屏
+      Array.from(box.children).forEach(el => {
+        if (el.id !== 'manga-pager') el.remove();
+      });
+      SEARCH.page = page;
+      SEARCH.rendered = new Set();
+      appendResults(list, box);
+      SEARCH.list = list;
+      // 分页判定以服务端 has_more 为准（服务端按每源 raw_count/total 计算，
+      // 前端用 page*页大小 反推会在多源/去重/末页失准）
+      SEARCH.hasMore = !!d.has_more;
+      cacheMangaSearch(SEARCH.q, SEARCH.src, SEARCH.page, list);
+      $('#status').textContent = '第 ' + page + ' 页 · ' + list.length + ' 部'
+        + (totalHits ? '（源站共约 ' + totalHits + ' 条）' : '');
+    } else {
+      // 越界/空结果：保留当前页内容与页码，仅提示到底
+      SEARCH.hasMore = false;
+      const errs = d.errors || {};
+      const errKeys = Object.keys(errs);
+      if (errKeys.length) {
+        $('#status').textContent = '加载失败：' + errs[errKeys[0]] + '（可点搜索重试）';
+      } else {
+        $('#status').textContent = totalHits
+          ? '已全部加载（源站共约 ' + totalHits + ' 条）'
+          : '已经是最后一页';
+      }
+    }
+    SEARCH.fetching = false;   // 先复位再重建翻页控件（否则按钮仍禁用，需刷新才能再翻页）
+    updatePager(box);
+    window.scrollTo({top: 0, behavior: 'auto'});
+  } catch (e) {
+    if (myGen !== SEARCH.gen) return;
+    SEARCH.fetching = false;
+    toast('翻页失败: ' + e);
+    updatePager($('#results'));
+  } finally {
+    if (myGen === SEARCH.gen) $('#status').removeAttribute('aria-busy');
+  }
+}
+
+// 禁漫码解析：JM1234567 / jm 1234567 / 1234567 → "1234567"
+// 三种写法指向同一 album（数字部分才是 ID）。非禁漫码返回 null。
+// 与后端 engine.manga.jm.Jm.normalize_id 保持同一语义。
+function parseJmCode(s) {
+  const m = /^\s*(?:jm)?\s*(\d{4,10})\s*$/i.exec(s || '');
+  return m ? m[1] : null;
+}
+
+// 排序下拉：仅选中禁漫天堂(jm)时显示
+function toggleSortSel() {
+  const sel = document.getElementById('order');
+  if (!sel) return;
+  sel.style.display = (document.getElementById('src').value === 'jm') ? '' : 'none';
+}
+
+// P0-1: 流式搜索状态栏（spinner + 进度 + 取消按钮），对齐 index.html 模式
+// C02: 状态栏稳定子节点（复用 index.html P2-3 模式）——spinner/关键词/进度/
+// 取消按钮整个搜索过程只挂载一次，逐源进度仅更新文案 textContent；取消按钮
+// 节点不被高频 innerHTML 重绘 detach，流式更新期间取消可稳定触发。
+function _mangaStatusNodes(st) {
+  if (!st._nodes || !st._nodes.btn.isConnected) {
+    st.innerHTML = '';
+    const spinner = document.createElement('span');
+    spinner.className = 'spinner';
+    const q = document.createElement('span');
+    const prog = document.createElement('span');
+    prog.style.cssText = 'color:var(--text-dim);font-size:.8rem;';
+    const btn = document.createElement('button');
+    btn.className = 'cancel-search';
+    btn.id = 'btn-cancel-manga-search';
+    btn.textContent = '✕ 取消';
+    btn.onclick = () => { if (window._mangaSearchCtrl) { try { window._mangaSearchCtrl.abort(); } catch (e) {} } };
+    st.appendChild(spinner); st.appendChild(q); st.appendChild(prog); st.appendChild(btn);
+    st._nodes = {spinner, q, prog, btn};
+  }
+  return st._nodes;
+}
+function setSearchStatus(st, q, done, total, count) {
+  const n = _mangaStatusNodes(st);
+  n.q.textContent = '🔍 ' + q;
+  n.prog.textContent = (done != null ? '已搜 ' + done + '/' + total + ' 源 · ' : '正在搜索… · ') + count + ' 部';
+}
+
+// C02: 克制的 aria-live 播报——逐源进度不播报，仅在搜索到达终态
+// （完成/取消/失败）时向专用 live 区播报一句结果。
+function announceManga(msg) {
+  let live = $('#manga-live');
+  if (!live) {
+    live = document.createElement('span');
+    live.id = 'manga-live';
+    live.setAttribute('aria-live', 'polite');
+    live.style.cssText = 'position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;';
+    document.body.appendChild(live);
+  }
+  live.textContent = msg;
+}
+
+async function search(silent) {
+  const q = $('#q').value.trim();
+  if (!q) return;
+  // 禁漫码直达：JM1234567 与 1234567 是同一部漫画（前缀仅书写差异，
+  // 数字部分才是 album ID），两种写法等价处理。
+  if (!silent) {
+    const code = parseJmCode(q);
+    // 纯数字可能是普通书名（如 "1998"），仅在"全部源"或已选 jm 时询问；
+    // 带 JM 前缀属明确意图，任何源下都识别
+    const _selSrc = $('#src').value;
+    const _explicit = /^jm/i.test(q);
+    if (code && (_explicit || !_selSrc || _selSrc === 'jm')) {
+      if (confirm('🔞 识别到禁漫码 JM' + code + '\n\n[确定] 直接打开该漫画详情\n[取消] 按普通关键词搜索')) {
+        location.href = '/manga_detail?source=jm&id=' + code + '&title=' + encodeURIComponent('JM' + code);
+        return;
+      }
+    }
+  }
+  saveSearchState();
+  saveLastSrc();   // R51: 搜索即记忆所选源(回退/重载后保持,不落回默认禁漫)
+  // 取消上一次未完成的搜索（避免两次流式渲染交错）
+  if (window._mangaSearchCtrl) { try { window._mangaSearchCtrl.abort(); } catch (e) {} }
+  const box = $('#results');
+  const st = $('#status');
+  st.setAttribute('aria-busy', 'true');   // C02: 流式期间加载态走 aria-busy，不清空状态栏节点
+  const src = $('#src').value;
+  const ord = document.getElementById('order') ? document.getElementById('order').value : 'mr';
+  if (!silent) {
+    SEARCH.q = q; SEARCH.src = src; SEARCH.order = ord; SEARCH.page = 1;
+    SEARCH.list = []; SEARCH.rendered = new Set(); SEARCH.hasMore = true; SEARCH.fetching = false;
+    if (pagerEl) { pagerEl.remove(); pagerEl = null; }
+    saveScrollPos();
+    box.innerHTML = '<div class="empty" style="grid-column:1/-1;"><div class="big">🔍</div>搜索中…</div>';
+    setSearchStatus(st, q, null, null, 0);
+  } else {
+    // 静默刷新：保持当前页码（回退恢复第 N 页后刷新同一页）
+    SEARCH.q = q; SEARCH.src = src; SEARCH.fetching = false;
+  }
+  // P0-1: 改走 SSE 流式端点——每个源完成即增量渲染该源卡片，
+  // 不再同步等待最慢源（原 /api/manga/search 全源最坏 75s 白屏）
+  const url = '/api/manga/search/stream?q=' + encodeURIComponent(q) +
+    (src ? '&source=' + encodeURIComponent(src) : '') +
+    '&page=' + SEARCH.page + '&order=' + (SEARCH.order || 'mr');
+  const ctrl = new AbortController();
+  window._mangaSearchCtrl = ctrl;
+  // 代际自增：在途翻页/旧搜索的后续响应一律作废（fetching 复位由此保证安全）
+  const myGen = ++SEARCH.gen;
+  // 30s 超时自动中止：服务端最慢源 deadline 25s，留 5s 余量
+  const timeout = setTimeout(() => ctrl.abort(), 30000);
+  let cleared = silent;   // 非静默：首个结果到达后才清"搜索中…"占位
+  let streamDone = false;
+  try {
+    const r = await fetch(url, {signal: ctrl.signal});
+    if (myGen !== SEARCH.gen) return;
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const reader = r.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    while (true) {
+      const {done, value} = await reader.read();
+      if (myGen !== SEARCH.gen) return;   // 新搜索已接管，旧流不再渲染
+      if (done) break;
+      buf += dec.decode(value, {stream: true});
+      let idx;
+      while ((idx = buf.indexOf('\n\n')) >= 0) {
+        const evt = buf.slice(0, idx);
+        buf = buf.slice(idx + 2);
+        if (!evt.startsWith('data:')) continue;
+        let d;
+        try { d = JSON.parse(evt.slice(5).trim()); } catch (e) { continue; }
+        // 增量渲染该源分组（appendResults 按 source|id 去重——
+        // 漫画按源分组不去重是设计意图，判重键与非流式路径一致）
+        const groups = d.groups || [];
+        const newGroups = groups.filter(g => {
+          const s0 = (g.sources && g.sources[0]) || {};
+          return !SEARCH.rendered.has((s0.source || '') + '|' + (s0.id || g.id || g.title));
+        });
+        if (newGroups.length) {
+          if (!cleared) { box.innerHTML = ''; cleared = true; }
+          appendResults(newGroups, box);
+          SEARCH.list = SEARCH.list.concat(newGroups);
+        }
+        if (d.finished) {
+          streamDone = true;
+          const totalHits = parseInt(d.total_hits || 0, 10) || 0;
+          const errs = d.errors || {};
+          const errKeys = Object.keys(errs);
+          if (SEARCH.list.length) {
+            if (!cleared) { box.innerHTML = ''; cleared = true; }
+            SEARCH.hasMore = !!d.has_more;
+            cacheMangaSearch(SEARCH.q, SEARCH.src, SEARCH.page, SEARCH.list);
+            st.textContent = (silent ? '已刷新' : '找到') + ' ' + SEARCH.list.length +
+              ' 部漫画（第 ' + SEARCH.page + ' 页）' + (d.cached ? ' · 缓存' : '') +
+              ' · 用时 ' + (d.elapsed || 0) + 's';
+            // R66: 部分源失败时附加提示（多源搜索场景）
+            if (errKeys.length) {
+              st.textContent += '　⚠ ' + errs[errKeys[0]] + '（点击搜索可重试该源）';
+            }
+            announceManga(st.textContent);   // C02: 终态播报一句
+            updatePager(box);
+            if (silent) {
+              // 刷新后保持滚动位置（回退恢复场景）
+              try {
+                const sp = JSON.parse(sessionStorage.getItem(SCROLL_KEY) || 'null');
+                if (sp && sp.q === SEARCH.q && (sp.page || 1) === SEARCH.page) {
+                  const restoreScroll = () => {
+                    if (myGen === SEARCH.gen) window.scrollTo(0, sp.y);
+                  };
+                  setTimeout(restoreScroll, 60);
+                  setTimeout(restoreScroll, 400);
+                }
+              } catch (e) {}
+            }
+          } else if (!silent) {
+            // 静默刷新拿到空结果时保留缓存显示（如源站短暂风控）
+            if (errKeys.length) {
+              // R66: 失败/超时 ≠ 没结果——明确提示,避免误以为源站没有
+              showEmpty(box, true);
+              st.textContent = '搜索失败：' + errs[errKeys[0]] + '（点击搜索重试）';
+            } else {
+              showEmpty(box);
+              // 保持所选源结果纯净(不自动混其它源); 源站偶发失败时重试即可
+              st.textContent = '当前源无结果——可换关键词或在上方切换其它源；若源站刚抽风，点搜索重试';
+            }
+            announceManga(st.textContent);   // C02: 终态播报一句
+          }
+          break;
+        }
+        // 逐源进度（静默刷新时不打扰现有内容）
+        if (!silent) setSearchStatus(st, q, d.done, d.total, SEARCH.rendered.size);
+      }
+      if (streamDone) break;
+    }
+  } catch (e) {
+    // 被新搜索/翻页 abort 的旧请求：不得把"已取消"写到新搜索的状态栏
+    if (myGen !== SEARCH.gen) return;
+    if (e.name === 'AbortError') {
+      // 用户取消或 30s 超时：已渲染的部分结果保留
+      if (SEARCH.list.length) {
+        st.textContent = '⏹ 搜索已取消/超时（已加载 ' + SEARCH.list.length +
+          ' 部，可点搜索重试补全）';
+        SEARCH.hasMore = false;   // 结果不完整，不再引导翻页
+        updatePager(box);
+        announceManga(st.textContent);   // C02: 终态播报一句
+      } else if (!silent) {
+        box.innerHTML = '<div class="empty" style="grid-column:1/-1;"><div class="big">⏹</div>搜索已取消或超时（30s）<br>点上方"搜索"按钮重试</div>';
+        st.textContent = '';
+        announceManga('搜索已取消或超时，可重试');   // C02
+      }
+    } else if (!silent) {
+      box.innerHTML = '<div class="error-state" style="grid-column:1/-1;">⚠ 搜索失败: ' + esc(String(e)) + '<br><button class="btn" onclick="search()">重试</button></div>';
+      announceManga('搜索失败，可点击重试');   // C02
+    }
+  } finally {
+    clearTimeout(timeout);
+    ctrl.abort();
+    if (myGen === SEARCH.gen) st.removeAttribute('aria-busy');   // C02: 终态解除加载态（仅当前代）
+    if (window._mangaSearchCtrl === ctrl) window._mangaSearchCtrl = null;
+  }
+}
+
+// 页面加载恢复：仅 URL 带关键词时恢复(回退自搜索详情页);源由 loadSources
+// 恢复(URL>上次选择>默认禁漫)。收藏/历史回退、直接访问不带参数 → 不自动
+// 搜索,页面保持干净。
+// R51: 缓存渲染要求"同词同源"——源不同(如 URL 无 source)不渲染旧缓存,
+// 直接以当前源静默搜索,避免把别的源的结果错当本次结果。
+function initRestoreSearch() {
+  const p = new URLSearchParams(location.search);
+  const urlQ = p.get('q');
+  if (!urlQ) return;
+  const saved = getCachedMangaSearch();
+  const selSrc = $('#src').value || '';
+  $('#q').value = urlQ;
+  const cacheOk = saved && saved.q === urlQ && saved.src === selSrc &&
+    saved.list && saved.list.length;
+  // 命中同词同源缓存 → 立即渲染，不等待网络
+  if (cacheOk) {
+    const box = $('#results');
+    box.innerHTML = '';
+    SEARCH.q = saved.q; SEARCH.src = saved.src;
+    SEARCH.page = saved.page || 1;
+    SEARCH.list = saved.list; SEARCH.rendered = new Set(); SEARCH.hasMore = true; SEARCH.fetching = false;
+    appendResults(saved.list, box);
+    $('#status').textContent = '已恢复上次结果（第 ' + SEARCH.page + ' 页 · ' + saved.list.length + ' 部，后台刷新中…）';
+    updatePager(box);
+    // 恢复滚动位置（回退到原位，而非顶端）
+    try {
+      const sp = JSON.parse(sessionStorage.getItem(SCROLL_KEY) || 'null');
+      if (sp && sp.q === saved.q && (sp.page || 1) === SEARCH.page) {
+        setTimeout(() => window.scrollTo(0, sp.y), 60);
+      }
+    } catch (e) {}
+  }
+  search(true);  // 静默刷新；空结果不会覆盖已显示内容
+}
+async function setCopymangaToken() {
+  const token = prompt(
+    '粘贴拷贝漫画登录 Token（降低风控权重，可选）\n' +
+    '获取方式：浏览器登录 www.2026copy.com → F12 → Application → Local Storage → 复制 token 值。\n' +
+    '留空则查询当前是否已配置。');
+  if (token === null) return;
+  try {
+    if (!token) {
+      const r = await fetch('/api/manga/copymanga/token');
+      const d = await r.json();
+      toast(d.token_set ? '已配置 Token（请求头 authorization: Token xxx）' : '未配置 Token（匿名请求，风控权重较高）');
+      return;
+    }
+    const r = await fetch('/api/manga/copymanga/token', {method:'POST',
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify({token})});
+    const d = await r.json();
+    if (d.ok) toast('✅ Token 已保存，后续请求携带认证头');
+    else toast('⚠ ' + (d.error || '保存失败'), 'error');
+  } catch(e) { toast('网络错误', 'error'); }
+}
+function switchTab(tab) {
+  // R51: 记忆当前标签页——收藏/历史里进详情后回退,重载仍回到该页,
+  // 不再被重置回"搜索"并自动刷出上次搜索
+  try { sessionStorage.setItem(TAB_KEY, tab); } catch (e) {}
+  const show = (id, on) => document.getElementById(id).style.display = on ? '' : 'none';
+  show('results', tab === 'search');
+  show('fav-list', tab === 'fav');
+  show('hist-list', tab === 'hist');
+  // 搜索栏区域显隐
+  document.querySelector('.section-title').textContent =
+    tab === 'fav' ? '⭐ 我的收藏' : (tab === 'hist' ? '🕐 阅读历史' : '🎨 漫画搜索');
+  ['tab-search','tab-fav','tab-hist'].forEach(id => {
+    document.getElementById(id).className = id === ('tab-' + tab) ? 'btn primary' : 'btn';
+  });
+  if (tab === 'fav') loadFavs();
+  if (tab === 'hist') loadHist();
+}
+async function loadFavs() {
+  const box = document.getElementById('fav-list');
+  box.style.display = '';
+  box.innerHTML = '<div style="grid-column:1/-1;text-align:center;padding:40px;color:var(--text-dim);">加载中…</div>';
+  try {
+    const r = await fetch('/api/manga/favorites');
+    const d = await r.json();
+    const list = d.favorites || [];
+    if (!list.length) { box.innerHTML = '<div style="grid-column:1/-1;text-align:center;padding:40px;color:var(--text-dim);">暂无收藏</div>'; return; }
+    box.innerHTML = '';
+    list.forEach(c => {
+      const card = document.createElement('div');
+      card.className = 'manga-card';
+      card.innerHTML = `
+        <div class="cover-wrap">
+          <img src="${esc(c.cover || '')}" loading="lazy" onerror="this.onerror=null;this.src='';this.classList.add('error')">
+        </div>
+        <div class="mc-info">
+          <div class="mc-title">${esc(c.title)}</div>
+          <div class="mc-meta"><span class="mc-tag">${esc(c.source)}</span></div>
+        </div>`;
+      card.onclick = () => {
+        if (!c.source || !c.comic_id) { toast('该收藏缺少源信息'); return; }
+        location.href = '/manga_detail?source=' + encodeURIComponent(c.source) + '&id=' + encodeURIComponent(c.comic_id);
+      };
+      card.oncontextmenu = (e) => {
+        e.preventDefault();
+        if (confirm('取消收藏《' + c.title + '》？')) {
+          fetch('/api/manga/favorites/' + c.source + '/' + encodeURIComponent(c.comic_id), {method:'DELETE'})
+            .then(() => loadFavs());
+        }
+      };
+      box.appendChild(card);
+    });
+  } catch(e) { box.innerHTML = '<div style="grid-column:1/-1;text-align:center;color:#f66;">加载失败</div>'; }
+}
+async function loadHist() {
+  const box = document.getElementById('hist-list');
+  box.style.display = '';
+  box.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-dim);">加载中…</div>';
+  try {
+    const r = await fetch('/api/manga/history');
+    const d = await r.json();
+    const list = d.history || [];
+    if (!list.length) { box.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-dim);">暂无阅读历史</div>'; return; }
+    box.innerHTML = list.map(h => `
+      <div style="display:flex;align-items:center;gap:12px;padding:12px 16px;background:var(--bg-2,#1c2230);border-radius:10px;margin-bottom:8px;cursor:pointer;" class="hist-item" data-src="${esc(h.source)}" data-cid="${encodeURIComponent(h.comic_id)}" data-idx="${h.idx||0}" data-title="${encodeURIComponent(h.title||'')}">
+        <div style="flex:1;">
+          <div style="font-weight:600;font-size:.9rem;">${esc(h.title || h.comic_id)}</div>
+          <div style="font-size:.75rem;color:var(--text-dim);margin-top:2px;">📖 ${esc(h.pos||'')} · ${esc(h.source)}</div>
+        </div>
+        <span style="font-size:.72rem;color:var(--text-dim);">▶ 继续阅读</span>
+      </div>`).join('');
+    box.querySelectorAll('.hist-item').forEach(el => {
+      // 历史项也是“继续阅读”：由详情 resume 按 chapter_id/章节名定位，
+      // 不能把旧 idx 变成显式 ch 参数，否则目录变化后会跳错或退回第一话。
+      el.onclick = () => location.href = '/manga_reader?source=' + encodeURIComponent(el.dataset.src)
+        + '&cid=' + el.dataset.cid + '&title=' + el.dataset.title;
+    });
+  } catch(e) { box.innerHTML = '<div style="text-align:center;color:#f66;">加载失败</div>'; }
+}
+// 初始化：恢复上次标签页(搜索/收藏/历史)；仅搜索页执行搜索状态恢复
+let _initTab = 'search';
+try {
+  const t = sessionStorage.getItem(TAB_KEY);
+  if (t === 'fav' || t === 'hist') _initTab = t;
+} catch (e) {}
+loadSources().then(() => {
+  setTimeout(() => {
+    if (_initTab !== 'search') {
+      switchTab(_initTab);
+    } else {
+      initRestoreSearch();
+    }
+  }, 50);
+});
+</script>
+</body>
+</html>

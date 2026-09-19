@@ -1,0 +1,42 @@
+{
+ "bookSourceName": "www.yuzhaiwuh.xyz#🎃",
+ "bookSourceUrl": "https://www.yuzhaiwuh.xyz#🎃",
+ "bookSourceType": 0,
+ "bookSourceGroup": "自制",
+ "bookSourceComment": "自适应制作（known）",
+ "enabled": false,
+ "searchUrl": "https://www.yuzhaiwuh.xyz#🎃/modules/article/search.php,{\n'charset':'utf-8',\n'method':'POST',\n'body':'searchkey={{key}}'\n}",
+ "ruleSearch": {
+  "bookList": "ul>li",
+  "name": "a@text",
+  "author": ".author a@text",
+  "bookUrl": "a@href",
+  "coverUrl": "img@src",
+  "lastChapter": "",
+  "kind": ""
+ },
+ "ruleBookInfo": {
+  "name": "",
+  "author": "[property=og:novel:author]@content",
+  "intro": "[property=og:description]@content",
+  "coverUrl": "[property=og:image]@content",
+  "kind": "[property=og:novel:category]@content",
+  "lastChapter": "[property=og:novel:latest_chapter_name]@content",
+  "tocUrl": ""
+ },
+ "ruleToc": {
+  "chapterList": "dd a",
+  "chapterName": "text",
+  "chapterUrl": "href",
+  "nextTocUrl": ""
+ },
+ "ruleContent": {
+  "content": ".content@textNodes",
+  "nextContentUrl": "",
+  "replaceRegex": ""
+ },
+ "uid": "www.yuzhaiwuh.xyz__",
+ "imported_at": "2026-08-21 16:22:01",
+ "valid": true,
+ "valid_tested_at": "2026-08-21 16:22:03"
+}

@@ -1,0 +1,3 @@
+# Core web/server runtime dependencies.
+-r requirements-core.txt
+# For manga/browser features, install requirements-manga.txt separately.

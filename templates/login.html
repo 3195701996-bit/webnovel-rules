@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>登录 · webnovel_rules</title>
+<link rel="stylesheet" href="/static/css/style.css">
+<style>
+  .login-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
+  .login-box { width: 100%; max-width: 360px; background: var(--bg-2,#1c2230); border: 1px solid var(--border);
+    border-radius: 14px; padding: 30px 26px; }
+  .login-box h1 { font-size: 1.2rem; margin-bottom: 6px; text-align: center; }
+  .login-box .sub { text-align: center; color: var(--text-dim); font-size: .82rem; margin-bottom: 20px; }
+  .login-box input { width: 100%; padding: 12px 14px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--bg,#0f1216); color: var(--text); font-size: 1rem; margin-bottom: 14px; }
+  .login-box .btn { width: 100%; min-height: 46px; font-size: .95rem; }
+  .login-box .err { color: #ff9d9d; font-size: .82rem; text-align: center; margin-bottom: 10px; }
+</style>
+</head>
+<body>
+<div class="login-wrap">
+  <form class="login-box" method="POST" action="/login">
+    <h1>🔐 webnovel_rules</h1>
+    <div class="sub">请输入访问密码</div>
+    {% if error %}<div class="err">{{ error }}</div>{% endif %}
+    <input type="password" name="password" placeholder="访问密码" autofocus required>
+    <button class="btn primary" type="submit">登 录</button>
+  </form>
+</div>
+</body>
+</html>

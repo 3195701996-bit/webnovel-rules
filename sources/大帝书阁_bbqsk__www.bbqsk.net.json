@@ -1,0 +1,25 @@
+{
+ "bookSourceName": "大帝书阁(bbqsk)",
+ "bookSourceUrl": "http://www.bbqsk.net",
+ "searchUrl": "/modules/article/search.php?searchkey={{key}}",
+ "ruleSearch": {
+  "bookList": "tr",
+  "name": "td a@text",
+  "bookUrl": "td a@href"
+ },
+ "ruleToc": {
+  "chapterList": "div.dccss a",
+  "chapterName": "a@text",
+  "chapterUrl": "a@href"
+ },
+ "ruleContent": {
+  "content": "#content@text##天才一秒记住本站地址[^\\n]*?无广告!\\s*##"
+ },
+ "tocSort": "url",
+ "uid": "大帝书阁_bbqsk__www.bbqsk.net",
+ "enabled": false,
+ "imported_at": "2026-09-04 19:19:18",
+ "valid": true,
+ "valid_error": "",
+ "valid_tested_at": ""
+}

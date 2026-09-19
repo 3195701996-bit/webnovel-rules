@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<link rel="icon" href="data:,">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>任务进度 · webnovel_rules</title>
+<link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+<header class="topbar">
+  <span class="logo">📚 webnovel_rules<small>小说爬虫与阅读中心</small></span>
+  <nav>
+    <a href="/">书库</a>
+    <a href="/">新建任务</a>
+    <a href="/manga">🎨 漫画</a>
+  </nav>
+  <div class="spacer"></div>
+</header>
+
+<div class="container" style="max-width:820px;">
+  <a href="/" style="font-size:.88rem;">← 返回书库</a>
+  <h1 class="page-title" id="task-title">任务加载中…</h1>
+  <p class="page-sub" id="task-meta"></p>
+
+  <div class="form-card">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
+      <span class="dot" id="status-dot"></span>
+      <strong id="status-text">—</strong>
+      <span style="flex:1"></span>
+      <button class="btn small" id="btn-pause" style="display:none;">⏸ 暂停</button>
+      <button class="btn small" id="btn-resume" style="display:none;">▶ 恢复</button>
+      <button class="btn danger small" id="btn-stop" style="display:none;">⏹ 停止</button>
+      <button class="btn danger small" id="btn-del" style="display:none;">🗑 删除任务</button>
+      <button class="btn small" id="btn-refresh" title="手动刷新">🔄</button>
+    </div>
+    <div class="progress-wrap">
+      <div class="progress"><i id="bar" style="width:0%"></i></div>
+      <span class="progress-num" id="pct">0%</span>
+    </div>
+    <p id="progress-detail" style="margin-top:12px;font-size:.9rem;color:var(--text-dim);"></p>
+  </div>
+
+  <h3 style="margin:22px 0 10px;font-size:1rem;">运行日志</h3>
+  <div class="log-box" id="log"><div class="line">等待日志…</div></div>
+
+  <div style="margin-top:22px;" id="after-actions"></div>
+</div>
+
+<script src="/static/js/common.js"></script>
+<script>
+const TASK_ID = {{ task_id | tojson }};
+
+async function load() {
+  try {
+    const r = await fetch('/api/tasks/' + TASK_ID);
+    const t = await r.json();
+    if (!t.id) { $('#task-title').textContent = '任务不存在'; return null; }
+    const p = t.progress || {};
+    $('#task-title').textContent = ('书源爬取')
+      + ' · ' + (p.book_name || t.book_key || t.book_url);
+    $('#task-meta').textContent = '创建于 ' + (t.created_at || '').replace('T', ' ').slice(0, 19)
+      + (t.finished_at ? ' ｜ 结束于 ' + t.finished_at.replace('T', ' ').slice(0, 19) : '');
+
+    const st = t.status;
+    const dot = $('#status-dot');
+    dot.className = 'dot ' + (st === 'running' ? 'running' : st === 'done' ? 'done' : st === 'error' ? 'error' : 'stopped');
+    const labels = {running: '爬取中…', done: '✅ 已完成', error: '❌ 出错', stopped: '已停止', paused: '⏸ 已暂停（可恢复）'};
+    // C06: 完成但有失败章节 → 区分"部分失败"，不与全部成功/出错混淆
+    $('#status-text').textContent =
+      (st === 'done' && (p.failed || 0) > 0) ? `⚠ 部分失败（${p.failed} 章失败，可重试）` : (labels[st] || st);
+    $('#btn-stop').style.display = (st === 'running') ? '' : 'none';
+    $('#btn-pause').style.display = (st === 'running') ? '' : 'none';
+    $('#btn-resume').style.display = (st === 'paused' || st === 'stopped' || st === 'error') ? '' : 'none';
+    $('#btn-del').style.display = '';
+
+    if (p.total) {
+      const pct = Math.round(p.completed / p.total * 100);
+      $('#bar').style.width = pct + '%';
+      $('#pct').textContent = pct + '%';
+      $('#progress-detail').textContent =
+        `已完成 ${p.completed || 0} / ${p.total} 章` +
+        (p.failed ? ` ｜ 失败 ${p.failed} 章` : '') +
+        (p.current ? ` ｜ 当前：${p.current}` : '') +
+        (p.message ? ` ｜ ${p.message}` : '');
+    } else {
+      // 目录发现等准备阶段：进度条显示不确定状态
+      $('#bar').style.width = '100%';
+      $('#bar').style.opacity = '0.35';
+      $('#pct').textContent = '…';
+      $('#progress-detail').textContent = p.message || '准备中…';
+    }
+
+    const log = t.log || [];
+    const box = $('#log');
+    if (log.length) {
+      box.innerHTML = log.map(l =>
+        `<div class="line"><span class="t">${(l.t || '').replace('T', ' ').slice(11, 19)}</span>${escapeHtml(l.msg)}</div>`).join('');
+      box.scrollTop = box.scrollHeight;
+    }
+
+    const actions = $('#after-actions');
+    if (t.book_key) {
+      actions.innerHTML = `<a class="btn primary" href="/reader/${encodeURIComponent(t.book_key)}">📖 前往阅读</a>`;
+    }
+    return st;   // B03: 返回任务状态供轮询器调速
+  } catch (e) {
+    $('#task-title').textContent = '加载失败';
+    return null;   // B03: 失败供轮询器指数退避
+  }
+}
+
+$('#btn-stop').addEventListener('click', async () => {
+  await fetch('/api/tasks/' + TASK_ID + '/stop', {method: 'POST'});
+  $('#btn-stop').disabled = true;
+  $('#btn-stop').textContent = '停止中…';
+});
+
+$('#btn-pause').addEventListener('click', async () => {
+  const r = await fetch('/api/tasks/' + TASK_ID + '/pause', {method: 'POST'});
+  if (!r.ok) { toast('暂停失败', 'error'); return; }
+  toast('已请求暂停…', 'ok');
+  $('#btn-pause').disabled = true;
+  $('#btn-pause').textContent = '暂停中…';
+});
+
+$('#btn-resume').addEventListener('click', async () => {
+  const r = await fetch('/api/tasks/' + TASK_ID + '/resume', {method: 'POST'});
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) { alert(d.error || '恢复失败'); return; }
+  $('#btn-resume').disabled = true;
+  $('#btn-resume').textContent = '恢复中…';
+});
+
+$('#btn-del').addEventListener('click', async () => {
+  if (!confirm('确定删除该任务记录？（不会删除已下载的书籍数据）')) return;
+  const r = await fetch('/api/tasks/' + TASK_ID, {method: 'DELETE'});
+  if (r.ok) { toast('任务已删除', 'ok'); setTimeout(() => location.href = '/', 800); }
+  else { toast('删除失败', 'error'); }
+});
+
+// B03: 轮询治理——createPoller（common.js）：setTimeout 链（请求完成后才排
+// 下一次，慢请求不重叠）+ 页面隐藏停轮 + 失败指数退避。running 2s 高频；
+// paused 10s；done/stopped/error 终态 30s 低频。🔄 按钮为手动刷新入口。
+const taskPoller = createPoller(load, {
+  baseMs: 2000,
+  interval: (st) => st === 'running' ? 2000 : (st === 'paused' ? 10000 : 30000),
+});
+document.getElementById('btn-refresh').addEventListener('click', () => taskPoller.kick());
+</script>
+</body>
+</html>

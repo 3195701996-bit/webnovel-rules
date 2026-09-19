@@ -1,0 +1,8 @@
+// 版本成组锁定（设计 §4）：不使用浮动版本
+plugins {
+    id 'com.android.application' version '8.7.3' apply false
+    id 'org.jetbrains.kotlin.android' version '2.0.21' apply false
+    id 'com.chaquo.python' version '17.0.0' apply false
+    // Compose 编译器随 Kotlin 2.x 插件发布（设计建议：原生 UI 用 Jetpack Compose）
+    id 'org.jetbrains.kotlin.plugin.compose' version '2.0.21' apply false
+}

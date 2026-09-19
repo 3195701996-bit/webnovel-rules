@@ -1,0 +1,27 @@
+{
+ "bookSourceName": "思路客(isiluke)",
+ "bookSourceUrl": "http://www.isiluke.net",
+ "searchUrl": "/search.html?name={{key}}",
+ "tocSort": "url",
+ "ruleSearch": {
+  "bookList": "div.novelslist2 ul li",
+  "name": "span.s2 a@text",
+  "bookUrl": "span.s2 a@href",
+  "author": "span.s4 a@text",
+  "lastChapter": "span.s3 a@title"
+ },
+ "ruleToc": {
+  "chapterList": "dd",
+  "chapterName": "a@text",
+  "chapterUrl": "a@href"
+ },
+ "ruleContent": {
+  "content": "#content@text##read2\\(\\);##"
+ },
+ "uid": "思路客_isiluke__www.isiluke.net",
+ "enabled": false,
+ "imported_at": "2026-09-04 19:10:47",
+ "valid": true,
+ "valid_error": "",
+ "valid_tested_at": ""
+}

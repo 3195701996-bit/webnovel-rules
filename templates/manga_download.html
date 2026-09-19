@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>漫画下载 · webnovel_rules</title>
+<link rel="stylesheet" href="/static/css/style.css">
+<style>
+.dl-card { max-width:560px; margin:20px auto; background:var(--bg-2,#1c2230); border-radius:14px; padding:22px; }
+.dl-bar { height:10px; background:#2a3140; border-radius:6px; overflow:hidden; margin:14px 0; }
+.dl-bar i { display:block; height:100%; background:linear-gradient(90deg,#34a853,#8b5cf6); width:0%; transition:.3s; }
+.dl-status { display:flex; justify-content:space-between; color:var(--text-dim); font-size:.85rem; }
+.dl-current { color:var(--text); margin-top:8px; font-size:.85rem; }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <span class="logo">📚 webnovel_rules<small>书源驱动</small></span>
+  <nav>
+    <a href="/">🔍 搜索/书库</a>
+    <a href="/library">📖 我的书库</a>
+    <a href="/tasks_page">📋 任务管理</a>
+    <a href="/manga" class="active">🎨 漫画</a>
+  </nav>
+</header>
+<div class="container">
+  <div class="dl-card">
+    <div id="title" style="font-weight:700;font-size:1.05rem;"></div>
+    <div class="dl-bar"><i id="bar"></i></div>
+    <div class="dl-status">
+      <span id="status">准备中…</span>
+      <span id="progress">0/0</span>
+    </div>
+    <div class="dl-current" id="current"></div>
+    <div style="display:flex;gap:10px;margin-top:18px;">
+      <button class="btn primary" id="start-btn" onclick="startDl()">开始下载</button>
+      <button class="btn" id="zip-btn" onclick="downloadZip()" disabled>打包 ZIP</button>
+    </div>
+  </div>
+</div>
+<script src="/static/js/common.js"></script>
+<script>
+const params = new URLSearchParams(location.search);
+const SOURCE = params.get('source');
+// B2: 畸形 % 序列抛 URIError 会毁掉整段脚本；参数缺失得到 "null" 继续发请求——统一拦截
+let CID = '', TITLE = '', CH_NAME = '', CH_ID = '';
+try {
+  CID = decodeURIComponent(params.get('cid') || '');
+  TITLE = decodeURIComponent(params.get('title') || '');
+  CH_NAME = decodeURIComponent(params.get('ch') || '');
+  CH_ID = decodeURIComponent(params.get('chid') || '');
+} catch (e) { CID = ''; TITLE = ''; CH_NAME = ''; CH_ID = ''; }
+const MODE = params.get('mode') || '';
+document.title = TITLE + ' · 下载';
+$('#title').textContent = TITLE;
+// B03: 轮询器句柄（createPoller，common.js）——替代裸 setInterval；
+// pollerStopped 记录终态 stop（stop 后 kick 无效，续传重启须重建轮询器）
+let poller = null, pollerStopped = false;
+if (!SOURCE || !CID) {
+  // 参数缺失/解码失败：禁用下载入口，不发请求
+  $('#status').textContent = '⚠️ 链接参数缺失或无效（source/cid），无法下载';
+  $('#start-btn').disabled = true;
+}
+
+async function startDl() {
+  const btn = $('#start-btn');
+  btn.disabled = true;
+  let chapters = [];
+  if (MODE === 'single') {
+    if (CH_ID) {
+      // A02: 入口已传稳定 chapter_id——只提交该 ID，不再按名称定位
+      chapters = [CH_ID];
+    } else if (CH_NAME) {
+      // 兼容旧链接：无 chid 时按名称定位该话 id
+      // C01: 定位请求失败（断网/错误页）也走"未找到"分支——停止提交并可重试，
+      // 绝不把请求失败静默吞掉后扩大为整本下载
+      try {
+        const d = await requestJSON(`/api/manga/${SOURCE}/${encodeURIComponent(CID)}`);
+        const hit = (d.chapters || []).find(c =>
+          c.name === CH_NAME || c.name.includes(CH_NAME) || CH_NAME.includes(c.name));
+        if (hit) chapters = [hit.id];
+      } catch (e) {}
+    }
+    if (!chapters.length) {
+      // A02: 定位失败就停止提交——绝不擅自扩大为整本下载；
+      // 提供重试（重新定位）或返回目录，整本下载由用户另行选择
+      $('#status').textContent = '⚠️ 未找到该话，已取消提交（不会自动下载整本）';
+      $('#current').innerHTML = '<a href="javascript:void(0)" onclick="startDl()" style="color:#8ab4ff;">重试</a>'
+        + ' · <a href="javascript:history.back()" style="color:#8ab4ff;">返回目录</a>';
+      btn.disabled = false;
+      return;
+    }
+  }
+  // C01: POST 失败（断网/HTML 错误页/服务端拒绝）显示可恢复错误并恢复按钮，
+  // 不假成功、不自动重试提交；成功后只提示"请求已接受"，终态以轮询确认为准
+  let d;
+  try {
+    d = await requestJSON(`/api/manga/${SOURCE}/${encodeURIComponent(CID)}/download`,
+      {method: 'POST', body: {title: TITLE, chapters: chapters}});
+  } catch (e) {
+    $('#status').textContent = '⚠️ 下载请求失败: ' + e.message;
+    $('#current').innerHTML = '<a href="javascript:void(0)" onclick="startDl()" style="color:#8ab4ff;">重试</a>';
+    btn.disabled = false;
+    return;
+  }
+  $('#status').textContent = d.status === 'running' ? '请求已接受，下载进行中…' : '请求已接受，等待任务状态…';
+  pollErrors = 0;
+  // B03: 启动/重启轮询——createPoller（common.js）：setTimeout 链（一次请求
+  // 完成后才排下一次，状态接口慢于间隔也不叠请求）+ 页面隐藏停轮 +
+  // 失败指数退避 + 按状态调速：running 1.5s 高频；queued/cancel 3s；
+  // 其余（paused/stopped/idle）10s 低频。createPoller 创建即首刷，替代原
+  // 先独立的 poll() 调用；终态 stop 后 kick 无效，续传重启须重建轮询器
+  if (!poller || pollerStopped) {
+    poller = createPoller(poll, {
+      baseMs: 10000,
+      interval: (st) => !st ? 10000
+        : st.status === 'running' ? 1500
+        : (st.status === 'queued' || st.status === 'cancel') ? 3000 : 10000,
+    });
+    pollerStopped = false;
+  } else {
+    poller.kick();   // 已在轮询：立即补刷一次并重排计时
+  }
+}
+let pollErrors = 0;
+async function poll() {
+  // C01: 轮询统一异常恢复——单次失败不清空进度、不假成功、不停轮询；
+  // B03: 失败返回 null 交给 createPoller 指数退避（连续失败间隔自动拉长，
+  // 封顶 60s），恢复成功后自动回到按状态调速的正常频率
+  let d;
+  try {
+    d = await requestJSON(`/api/manga/download/status?source=${SOURCE}&cid=${encodeURIComponent(CID)}`);
+  } catch (e) {
+    pollErrors++;
+    $('#status').textContent = '⚠️ 状态获取失败（' + pollErrors + ' 次）: ' + e.message;
+    if (pollErrors >= 10) {
+      // 连续失败：退避已把间隔拉长，给出手动立即重试入口，按钮恢复可用
+      $('#status').textContent = '⚠️ 状态持续获取失败，自动刷新已降频退避';
+      $('#current').innerHTML = '<a href="javascript:void(0)" onclick="resumePoll()" style="color:#8ab4ff;">立即重试</a>';
+      $('#start-btn').disabled = false;
+    }
+    return null;   // B03: null 视为本次失败 → createPoller 退避
+  }
+  pollErrors = 0;
+  // C06: 状态文案细分——cancel=停止中（worker 收尾）、paused/stopped 可恢复、
+  // error 为部分失败可续传
+  $('#status').textContent = ({running:'⏳ 下载中…',done:'✅ 完成',error:'⚠️ 部分失败：'+(d.error||'有章节失败')+'（可重新启动续传）',idle:'等待开始',queued:'排队中…',paused:'⏸ 已暂停',stopped:'已停止',cancel:'⏹ 停止中…'}[d.status]||d.status);
+  // R49h: 图片级进度优先(单张实时); 章级兜底; 附速度与剩余时间
+  if (d.images_total) {
+    $('#progress').textContent = d.images_done + '/' + d.images_total + ' 张'
+      + (d.done ? ' · 第' + d.done + '/' + (d.total||'?') + '章' : '');
+    if (d.speed) $('#progress').textContent += ' · ' + d.speed + '张/s';
+    if (d.eta) $('#progress').textContent += ' · 约' + Math.ceil(d.eta/60) + '分';
+  } else {
+    $('#progress').textContent = d.done + '/' + (d.total||'?');
+  }
+  $('#current').textContent = d.current || '';
+  const denom = d.images_total || d.total;
+  const pct = denom ? Math.round((d.images_total ? d.images_done : d.done)/denom*100) : 0;
+  $('#bar').style.width = pct + '%';
+  // B03: 终态停止轮询（续传重启时 startDl 重建轮询器）
+  // 终态：done 同样恢复开始按钮（否则完成后需刷新页面才能再次续传/重下）
+  if (d.status === 'done') { poller.stop(); pollerStopped = true; $('#zip-btn').disabled = false; $('#start-btn').disabled = false; }
+  if (d.status === 'error') { poller.stop(); pollerStopped = true; $('#start-btn').disabled = false; }
+  return d;   // B03: 返回数据供轮询器按状态调速
+}
+function resumePoll() {
+  // C01: 连续失败后的手动恢复入口——立即重试并重排计时（退避靠下次成功自动复位）
+  pollErrors = 0;
+  if (poller && !pollerStopped) poller.kick();
+  $('#status').textContent = '⏳ 已恢复状态刷新…';
+}
+function downloadZip() { window.open(`/api/manga/${SOURCE}/${encodeURIComponent(CID)}/zip`, '_blank'); }
+</script>
+</body>
+</html>

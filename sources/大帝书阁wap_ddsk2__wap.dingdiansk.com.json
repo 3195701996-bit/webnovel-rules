@@ -1,0 +1,11 @@
+{
+ "bookSourceName": "大帝书阁wap(ddsk2)",
+ "bookSourceUrl": "http://wap.dingdiansk.com",
+ "searchUrl": "/s.php?keyword={{key}}&t=1",
+ "uid": "大帝书阁wap_ddsk2__wap.dingdiansk.com",
+ "enabled": false,
+ "imported_at": "2026-09-04 19:08:11",
+ "valid": true,
+ "valid_error": "",
+ "valid_tested_at": ""
+}

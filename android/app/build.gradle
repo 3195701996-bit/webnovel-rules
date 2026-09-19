@@ -1,0 +1,369 @@
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+    id 'org.jetbrains.kotlin.plugin.compose'
+    id 'com.chaquo.python'
+}
+
+// 发布签名材料：keystore.properties（不入库）+ 用户目录下的 keystore。
+// 文件不存在时**不静默产出未签名包**：release 构建会明确失败（见下方 signingConfig 判定）。
+def keystorePropsFile = rootProject.file("keystore.properties")
+def keystoreProps = new Properties()
+def hasReleaseSigning = keystorePropsFile.exists()
+if (hasReleaseSigning) {
+    keystorePropsFile.withInputStream { keystoreProps.load(it) }
+}
+
+android {
+    namespace 'com.webnovel.mobile'
+    compileSdk 35
+
+    // 产物基线（方向基线 P0-A）：把 revision 与构建时间编进包，
+    // 用户截图里能对得上"到底是哪个包"，不用靠"最新版"这种说法。
+    def gitRev = "unknown"
+    def gitDirty = "unknown"
+    try {
+        def repoRoot = rootProject.file('..')
+        gitRev = ['git', 'rev-parse', '--short', 'HEAD']
+            .execute(null, repoRoot).text.trim()
+        // 只统计**会被打进包的那部分源码**是否与本提交一致。
+        //   · 排除 `data/`（运行时数据）、`android/app/build/`（构建产物）；
+        //   · 排除未跟踪文件（文档/脚本不进包，不该让标记变噪）；
+        //   · git 对非 ASCII 路径会加引号，必须去掉引号再比对（否则 runtime 数据
+        //     会被误判成源码改动——实测把 3 个真实改动报成了 14 个）。
+        // 这样 GIT_DIRTY=clean 就等价于"包的源码就是 GIT_REVISION 这个提交"。
+        def dirtyFiles = ['git', 'status', '--porcelain', '--',
+                          'engine', 'server', 'app.py', 'static', 'templates',
+                          'android/app/src', 'android/app/build.gradle',
+                          'android/app/src/main', 'requirements-android.txt']
+            .execute(null, repoRoot).text.readLines().findAll { line ->
+                !line.startsWith('??') && line.trim().length() > 3
+            }
+        gitDirty = dirtyFiles.isEmpty() ? "clean" : "${dirtyFiles.size()} files"
+    } catch (Exception ignored) { }
+
+    defaultConfig {
+        applicationId "com.webnovel.mobile"
+        minSdk 24
+        targetSdk 35          // 不为了绕过后台规则而降 targetSdk（设计 §4）
+        // 版本号与阶段对应，避免交付物名不符实
+        versionCode 126
+        versionName "1.2.4-demo"
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        ndk { abiFilters "arm64-v8a" }   // 只出 ARM64，不默认全 ABI
+        buildConfigField "String", "GIT_REVISION", "\"${gitRev}\""
+        buildConfigField "String", "GIT_DIRTY", "\"${gitDirty}\""
+        buildConfigField "String", "BUILD_TIME", "\"${new Date().format('yyyy-MM-dd HH:mm')}\""
+    }
+
+    buildFeatures {
+        compose true
+        buildConfig true      // 版本号单一来源：界面显示的版本取自 BuildConfig
+    }
+    signingConfigs {
+        release {
+            if (hasReleaseSigning) {
+                storeFile file(keystoreProps['storeFile'])
+                storePassword keystoreProps['storePassword']
+                keyAlias keystoreProps['keyAlias']
+                keyPassword keystoreProps['keyPassword']
+            }
+        }
+    }
+    // 仪器化测试默认对准 debug；用 -PtestBuildType=release 可以让同一批用例跑在
+    // release（已签名）产物上——阶段 E 需要"验的就是要交付的那个包"。
+    testBuildType project.findProperty("testBuildType") ?: "debug"
+    buildTypes {
+        debug { }
+        release {
+            minifyEnabled false
+            // 阶段 E：有签名材料才签名；没有材料就让构建失败，不产出"看起来能发布"的未签名包
+            if (hasReleaseSigning) {
+                signingConfig signingConfigs.release
+            }
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    kotlinOptions { jvmTarget = '17' }
+
+    packaging {
+        jniLibs { useLegacyPackaging false }
+    }
+}
+
+// Chaquopy 17 的 DSL 已从 python{} 改为按变体的 chaquopy{defaultConfig{}}（实测确认）
+chaquopy {
+    defaultConfig {
+        // Chaquopy 17 + CPython 3.13（设计 §4 候选工具链）
+        version = "3.13"
+        // 构建机需要同主次版本的 Python 来跑 pip（设计 §4：构建机器 Python
+        // 主次版本与目标一致）。本机用 Homebrew python@3.13。
+        buildPython = ["/opt/homebrew/opt/python@3.13/bin/python3.13"]
+        pip {
+            // 阶段 A 要验证的关键依赖：原生四件套 + WSGI + Web 框架
+            install "flask==3.1.2"
+            install "waitress==3.0.2"
+            install "lxml==5.3.0"
+            install "pillow==11.0.0"
+            install "cryptography==42.0.8"
+            // 小说域/图片通道的降级引擎（设计 §4）：curl-cffi 在 Android 无可用
+            // wheel（要求 cffi>=2.0.0 而索引只到 1.17.1），故按设计走
+            // requests/cloudscraper 路径；能力台账会如实标注受影响能力。
+            install "requests"
+            install "cloudscraper"
+            // PySocks（0.73.0）：用户配 socks5:// 代理时 requests 需要它；
+            // 没有它 requests 会直接抛 "Missing dependencies for SOCKS support"，
+            // 表现成"代理填了却全都不通"。纯 Python 包，无 C 扩展。
+            install "pysocks"
+            // 业务代码的其余纯 Python 依赖（实测缺一会直接 ImportError 起不来）：
+            //   cssselect —— lxml.cssselect（规则引擎的 CSS 选择器）
+            //   jsonpath-ng —— 规则引擎的 JSONPath 提取
+            //   opencc-python-reimplemented —— 提供 opencc 模块（简体/繁体转换）；
+            //     不用 opencc（C++ 绑定，无 Android wheel）
+            install "cssselect"
+            install "jsonpath-ng"
+            install "opencc-python-reimplemented"
+            // curl-cffi 在 Android 暂不可用（阶段 A 实测结论，见能力清单）：
+            //   0.15.0~0.16.3 的 android_24_arm64_v8a wheel 均要求 cffi>=2.0.0，
+            //   而 Chaquopy 轮子索引（pypi-13.1/14.1/15.1）只提供 cffi 1.17.1。
+            // 按设计处理：显式走 requests/cloudscraper 降级路径并在能力清单标注
+            // 受影响源；**不创建同名 curl_cffi shim 冒充**该依赖。
+        }
+    }
+    // Python 源目录 = 构建期白名单快照（唯一维护源在仓库，不提交副本）
+    sourceSets {
+        main { srcDir layout.buildDirectory.dir('generated/python-snapshot') }
+    }
+}
+
+dependencies {
+    // 原生阅读器界面（设计 §5 推荐：Compose + 复用现有 Python 引擎）
+    implementation platform('androidx.compose:compose-bom:2024.10.01')
+    implementation 'androidx.compose.ui:ui'
+    implementation 'androidx.compose.ui:ui-graphics'
+    implementation 'androidx.compose.material3:material3'
+    implementation 'androidx.compose.material:material-icons-extended'
+    implementation 'androidx.activity:activity-compose:1.9.3'
+    implementation 'androidx.lifecycle:lifecycle-runtime-compose:2.8.7'
+    implementation 'androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7'
+    // 封面加载（本机回环地址 + 会话凭据由 ImageLoader 注入）
+    implementation 'io.coil-kt:coil-compose:2.7.0'
+    implementation 'io.coil-kt:coil:2.7.0'
+
+    // 设备证据：用仪器化测试在真机上启动内嵌服务并自检
+    // ── JVM 单测（0.74.20）───────────────────────────────────────────
+    // 纯逻辑（解析/文案/判定）不该只能在真机上验：androidTest 需要设备，
+    // 而我改一次文案就得等用户插线才能验证——实测吃过这个亏（检查更新的
+    // 缺失数文案曾被误改成"已是最新"，却没有任何用例）。
+    // org.json 在 JVM 上没有实现，必须显式带入真实实现（android.jar 里是桩）。
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.json:json:20240303'
+    androidTestImplementation 'androidx.test.ext:junit:1.2.1'
+    androidTestImplementation 'androidx.test:runner:1.6.2'
+    androidTestImplementation 'androidx.test:rules:1.6.1'
+    androidTestImplementation 'androidx.test:core:1.6.1'
+    androidTestImplementation platform('androidx.compose:compose-bom:2024.10.01')
+    // 冷启动验收（诊断第七节：必须从点击 App 图标开始，而不是只测服务路径）
+    androidTestImplementation 'androidx.compose.ui:ui-test-junit4'
+    debugImplementation 'androidx.compose.ui:ui-test-manifest'
+}
+
+// 白名单快照：唯一维护源 → 构建输出目录（阶段 C 起是**真实业务**）
+// 设计 §10：不把整个仓库作为 Python source set，不把桌面 venv/data/.git/测试
+// 混入产物；所有清单化文件按内容校验。
+def snapshotDir = layout.buildDirectory.dir('generated/python-snapshot')
+def repoRoot = rootProject.file('..')
+tasks.register('syncPythonSnapshot', Copy) {
+    // Python 业务包与静态资源
+    from(repoRoot) {
+        include 'app.py'
+        include 'server/**'
+        include 'engine/**'
+        include 'templates/**'
+        include 'static/**'
+        exclude '**/__pycache__/**'
+        exclude '**/*.pyc'
+        exclude 'server/mobile_entry_phase*'
+    }
+    into snapshotDir
+    // 内置书源**不在**这里生成：改走 assets（见下面的 syncBundledSources）+ 原生侧解出。
+    // 原因：构建期新生成的 .py 赶不上 Chaquopy 的编译输入快照，只会以未编译 .py
+    // 入包，设备上 import 必失败（实测踩坑）。
+    doLast {
+        // 内容校验：真实业务入口与内置书源都必须就位
+        def checks = ['server/mobile_entry.py', 'app.py', 'server/state.py',
+                      'server/runtime.py', 'server/capabilities.py',
+                      'engine/config.py', 'templates/index.html']
+        checks.each { rel ->
+            def f = new File(snapshotDir.get().asFile, rel)
+            if (!f.exists() || f.length() < 200) {
+                throw new GradleException("Python 快照缺少必要文件: ${rel}")
+            }
+        }
+        println "Python 快照就绪（真实业务 + 静态资源）"
+    }
+}
+
+// 内置书源 → Python 模块（Chaquopy 从打包的 .pyc 导入；普通数据文件不可靠）。
+// 关键：本任务声明 outputs，Gradle 才会把它算作 Chaquopy 编译的输入。
+// 内置书源 → Android assets（由 Kotlin 在启动前解出到应用私有目录）。
+// 为什么不用"生成 Python 模块"：Chaquopy 只从构建期编译的 .pyc 导入，
+// 构建期新生成的文件实测只会以未编译 .py 入包、设备上 import 必失败。
+def bundledAssetsDir = layout.buildDirectory.dir('generated/bundled-assets')
+tasks.register('syncBundledSources', Copy) {
+    from(rootProject.file('../sources')) { include '*.json' }
+    into bundledAssetsDir.map { it.dir('sources') }
+    doLast {
+        def n = bundledAssetsDir.get().dir('sources').asFile.listFiles()?.length ?: 0
+        if (n == 0) {
+            throw new GradleException('内置书源复制失败：sources/*.json 为空')
+        }
+        println "内置书源已复制到 assets：${n} 个"
+    }
+}
+// 移动端内置源**种子清单**（方向基线 §6.4）：
+//   为什么需要：APK 直接复制桌面 sources/*.json，会把"该时点桌面的启用状态"一起带入，
+//   首装体验不稳定（实测桌面 34 个源里 28 个是停用的，手机端一装就只有 6 个源可用）。
+//   这里在构建期生成一份清单：schema 版本 + 每个源的稳定 ID（uid + 内容 sha256）+
+//   是否默认启用 + 理由。App 只在**首次解包**时按它设置启用状态，之后绝不覆盖用户改动。
+//   同时做**凭据体检**：源里若带真实 Cookie/密码，构建直接失败（不能把私人凭据打进包）。
+def seedPolicyFile = new File(rootProject.projectDir, 'mobile-seed-policy.json')
+// 出厂内容历史（**提交进仓库**的数据文件，不是构建产物）：
+//   为什么需要：设备上的源文件如果内容既不是"当前清单内容"、也没被我们记录过
+//   （.seed-applied 的 ours），旧实现只能判定"用户改过"→ 跳过；
+//   于是**旧版本出厂文件**在新清单里改了规则时会被误判成用户改动，规则升级永远
+//   到不了设备（2026-09-15 评审 P1-内置源）。
+//   这里每出现一个新的内容版本（revision）就追加一条"文件名 → 内容 sha256"，
+//   清单里给每个文件带上出厂历史哈希集合，App 才能分辨
+//   "这是某一版出厂内容" 与 "这是用户自己改的"。
+//   它同时让"生产 sources 目录变化"在 git 里可见（不会悄悄改变候选包）。
+def seedHistoryFile = new File(rootProject.projectDir, 'seed-history.json')
+tasks.register('generateSeedManifest') {
+    def srcDir = new File(repoRoot, 'sources')
+    inputs.dir(srcDir)
+    inputs.file(seedPolicyFile)
+    inputs.file(seedHistoryFile)
+    outputs.file(bundledAssetsDir.map { it.file('mobile-sources.json') })
+    doLast {
+        def policy = new groovy.json.JsonSlurper().parseText(seedPolicyFile.getText('UTF-8'))
+        def disable = policy.disable ?: [:]
+        def files = (srcDir.listFiles() ?: []).findAll { it.name.endsWith('.json') }.sort { it.name }
+        def out = new StringBuilder()
+        def entries = []
+        def secretHits = []
+        files.each { f ->
+            def text = f.getText('UTF-8')
+            def d = new groovy.json.JsonSlurper().parseText(text)
+            def uid = (d.uid ?: f.name[0..-6]).toString()
+            def md = java.security.MessageDigest.getInstance('SHA-256')
+            def sha = md.digest(text.getBytes('UTF-8')).collect { String.format('%02x', it) }.join()
+            // 凭据体检：真出现取值形态的 Cookie/密码才拦（字段名/规则文本里出现不算）
+            def lower = text.toLowerCase()
+            if (lower.contains('"cookie":"') || lower.contains('password:') ||
+                lower.contains('authorization: bearer')) {
+                secretHits << f.name
+            }
+            entries << [name: f.name, uid: uid,
+                        title: (d.bookSourceName ?: uid).toString(),
+                        url: (d.bookSourceUrl ?: '').toString(),
+                        sha256: sha,
+                        enabled_by_default: !disable.containsKey(uid),
+                        reason: (disable[uid] ?: '').toString()]
+        }
+        if (secretHits) {
+            throw new GradleException("内置源疑似带私人凭据，拒绝打包：${secretHits}")
+        }
+        // 内容 revision：任一源文件内容或源集合变化都会变（与 schema 分开，
+        // schema 只管清单**格式**；策略/规则变化靠 revision 触发重新合并）
+        // 内容 + **策略**都要进 revision。只算内容的话，"只改策略"（例如把一批死域源
+        // 改成默认停用）不会改变 revision → 已安装的设备因 schema/revision/logic 全都没变
+        // 而直接 return 0，**策略永远到不了设备**（2026-09-18 实测：把 8 个死域源加入停用表后
+        // revision 仍是 4eb8fe063497，升级路径不生效；注释里写的"策略变化靠 revision 触发"
+        // 当时并没有实现）。
+        def policyLines = (disable.collect { k, v -> "policy:${k}" } ?: []).sort()
+        def revLines = (entries.collect { "${it.name}:${it.sha256}" } + policyLines).sort()
+        def revMd = java.security.MessageDigest.getInstance('SHA-256')
+        def revision = revMd.digest(revLines.join('\n').getBytes('UTF-8'))
+                .collect { String.format('%02x', it) }.join()
+
+        // 追加/读取出厂内容历史（首次运行时文件不存在 → 视为空历史）
+        def history = [schema: 1, revisions: []]
+        if (seedHistoryFile.exists()) {
+            history = new groovy.json.JsonSlurper().parseText(seedHistoryFile.getText('UTF-8'))
+            if (history.revisions == null) history.revisions = []
+        }
+        def curFiles = [:]
+        entries.each { curFiles[it.name] = it.sha256 }
+        if (!history.revisions.any { it.revision == revision }) {
+            history.revisions << [revision: revision,
+                                  at: new Date().format('yyyy-MM-dd HH:mm'),
+                                  files: curFiles]
+            // 只保留最近 40 个版本，避免历史无限膨胀（够覆盖若干代升级）
+            if (history.revisions.size() > 40) {
+                history.revisions = history.revisions.subList(history.revisions.size() - 40,
+                                                              history.revisions.size())
+            }
+            seedHistoryFile.setText(new groovy.json.JsonBuilder(history).toPrettyString(), 'UTF-8')
+            println "出厂内容历史：新增 revision ${revision.substring(0, 12)}（共 ${history.revisions.size()} 版）"
+        }
+        // 出厂历史哈希集合（文件名 → 该文件在历史各版本里的 sha256）
+        def factoryHashes = [:]
+        entries.each { factoryHashes[it.name] = [it.sha256] }
+        history.revisions.each { r ->
+            (r.files ?: [:]).each { n, h ->
+                if (factoryHashes.containsKey(n) && !factoryHashes[n].contains(h)) {
+                    factoryHashes[n] << h
+                }
+            }
+        }
+        def manifest = [schema: 1,
+                        revision: revision,
+                        generated_at: new Date().format('yyyy-MM-dd HH:mm'),
+                        policy: '默认启用全部内置源，仅停用 mobile-seed-policy.json 中列出的（附理由）',
+                        source_count: entries.size(),
+                        enabled_by_default: entries.count { it.enabled_by_default },
+                        factory_hashes: factoryHashes,
+                        sources: entries]
+        out.append(new groovy.json.JsonBuilder(manifest).toPrettyString())
+        def f = bundledAssetsDir.get().file('mobile-sources.json').asFile
+        f.parentFile.mkdirs()
+        f.setText(out.toString(), 'UTF-8')
+        def histN = factoryHashes.values().sum { it.size() } ?: 0
+        println "内置源种子清单：${entries.size()} 个源，默认启用 ${manifest.enabled_by_default} 个" +
+                "，revision ${revision.substring(0, 12)}，出厂历史哈希 ${histN} 条"
+    }
+}
+tasks.named('syncBundledSources') { finalizedBy 'generateSeedManifest' }
+// 显式声明依赖：合并 assets 的任务必须等清单生成完（Gradle 会校验这一点）
+// 所有**消费** assets 的任务都要等清单生成（含 lint 模型任务——它同样读 assets 目录，
+// 早先只匹配名字含 assets 的任务，release 构建在
+// generateReleaseLintVitalReportModel 上直接失败）
+tasks.matching { t ->
+        def n = t.name.toLowerCase()
+        (n.contains('assets') || n.contains('lint')) &&
+            t.name != 'syncBundledSources' && t.name != 'generateSeedManifest'
+     }.configureEach { dependsOn 'generateSeedManifest' }
+
+android.sourceSets.main.assets.srcDirs += bundledAssetsDir.get().asFile
+tasks.matching { it.name == 'preBuild' || it.name.toLowerCase().contains('assets') }
+     .configureEach { dependsOn 'syncBundledSources' }
+// Chaquopy 17 的 python 任务名为 generate*Python* / extract*Python*（实测），
+// 这里按名字含 python 统一接线，保证任何 Python 打包任务之前快照已就位
+tasks.matching { it.name != 'syncPythonSnapshot' &&
+                 (it.name.toLowerCase().contains('python') || it.name == 'preBuild') }
+     .configureEach { dependsOn 'syncPythonSnapshot' }
+
+// 缺签名材料时明确报错（而不是静默产出未签名 release 包）
+gradle.taskGraph.whenReady { graph ->
+    def wantsRelease = graph.allTasks.any { it.name.toLowerCase().contains('release') &&
+        (it.name.startsWith('assemble') || it.name.startsWith('bundle') ||
+         it.name.startsWith('package') || it.name.startsWith('install')) }
+    if (wantsRelease && !hasReleaseSigning) {
+        throw new GradleException(
+            "缺少发布签名材料：android/keystore.properties 不存在。" +
+            "请先生成 keystore（keytool）并写入该文件；不要用未签名包对外发布。")
+    }
+}

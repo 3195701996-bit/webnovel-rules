@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>小说详情 · webnovel_rules</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/static/css/style.css">
+<style>
+/* ── 小说详情页（对齐漫画详情设计）── */
+.detail-wrap { max-width: 860px; margin: 0 auto; }
+.manga-topbar { display:flex; align-items:center; gap:10px; padding:10px 4px; }
+.manga-topbar .back { font-size:1.3rem; cursor:pointer; background:none; border:none; color:var(--text); padding:6px 10px; border-radius:8px; }
+.manga-topbar .back:hover { background:var(--bg-2); }
+.manga-topbar .sp { flex:1; }
+.manga-head { display:flex; gap:16px; padding:8px 4px 16px; }
+.manga-head .cover {
+  width:120px; height:168px; border-radius:10px; flex-shrink:0;
+  background:var(--bg-2,#1c2230); display:flex; align-items:center; justify-content:center;
+  font-size:2.6rem; box-shadow:0 4px 14px rgba(0,0,0,.4); overflow:hidden;
+}
+.manga-head .cover img { width:100%; height:100%; object-fit:cover; }
+.manga-head .hi { flex:1; display:flex; flex-direction:column; gap:6px; min-width:0; }
+.manga-head .title { font-size:1.15rem; font-weight:700; line-height:1.4; }
+.manga-head .sub { font-size:.8rem; color:var(--text-dim); }
+.info-sec { display:flex; flex-wrap:wrap; gap:6px; }
+.info-item { background:var(--bg-2,#1c2230); padding:3px 10px; border-radius:8px; font-size:.75rem; color:var(--text-dim); }
+/* 主按钮区（复用漫画详情 R3 风格） */
+.fn-row { display:grid; grid-template-columns:1fr 1fr; gap:10px; padding:4px 0 10px; }
+.fn-btn { min-height:46px; display:flex; align-items:center; justify-content:center; gap:6px;
+  border-radius:12px; border:none; cursor:pointer; font-size:.95rem; font-weight:600; color:#fff; transition:.15s; }
+.fn-btn:hover { filter:brightness(1.08); }
+.fn-continue { background:var(--accent); color:#1a1400; box-shadow:0 2px 10px rgba(232,179,75,.25); }
+.fn-download { background:#9b7bd6; }
+.fn-btn:disabled { opacity:.4; cursor:not-allowed; }
+/* 次按钮 */
+.ops-row { display:flex; gap:8px; padding:0 0 12px; flex-wrap:wrap; }
+.op-btn { display:flex; align-items:center; gap:6px; min-height:36px; padding:8px 14px; border-radius:10px;
+  border:1px solid var(--border); background:var(--bg-2,#1c2230); color:var(--text-dim);
+  cursor:pointer; font-size:.82rem; transition:.15s; }
+.op-btn:hover { color:var(--text); border-color:var(--accent-2); }
+.op-btn.danger:hover { color:var(--red); border-color:var(--red); }
+/* 进度提示 */
+.history-tip {
+  display:flex; align-items:center; gap:8px; padding:10px 14px; margin-bottom:14px;
+  border:1px solid rgba(232,179,75,.35); border-left:3px solid var(--accent);
+  background:rgba(232,179,75,.07); color:var(--text); font-weight:500;
+  border-radius:10px; font-size:.85rem;
+}
+/* 简介 */
+.novel-intro { color:var(--text-dim); font-size:.88rem; line-height:1.7; margin-bottom:16px; white-space:pre-wrap; }
+/* 章节列表 */
+.chap-sec { background:var(--bg-2,#1c2230); border-radius:12px; padding:14px; margin-bottom:16px; }
+.chap-head { display:flex; align-items:center; justify-content:space-between; padding-bottom:10px; font-size:.95rem; font-weight:700; position:sticky; top:0; background:var(--bg); z-index:5; }
+.chap-list { display:grid; grid-template-columns:repeat(auto-fill,minmax(160px,1fr)); gap:8px; max-height:55vh; overflow-y:auto; }
+.chap-item { padding:9px 12px; border-radius:8px; background:var(--bg); font-size:.85rem;
+  color:var(--text-dim); cursor:pointer; display:flex; align-items:center; gap:6px;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; transition:.12s; }
+.chap-item:hover { color:var(--text); background:var(--bg-hover); }
+.chap-item.dl { color:var(--green); }
+.chap-item.failed { color:var(--red); }
+/* C04 目录分段展开按钮（与阅读器共用 static/js/toc_render.js；网格中独占整行） */
+.chap-sec .toc-expand {
+  display:block; grid-column:1 / -1; margin:4px 0; padding:8px 10px; border-radius:8px;
+  border:1px dashed var(--border); color:var(--text-dim);
+  font-size:.78rem; text-align:center; cursor:pointer; user-select:none;
+}
+.chap-sec .toc-expand:hover { color:var(--accent); border-color:var(--accent); text-decoration:none; }
+.loading-bar-wrap { position:fixed; top:0; left:0; right:0; height:4px; z-index:1000; display:none; }
+@media (max-width:768px){
+  .manga-head { flex-direction:row; }
+  .manga-head .cover { width:100px; height:140px; }
+  .fn-row { gap:8px; }
+  .op-btn { min-height:34px; padding:6px 10px; font-size:.78rem; }
+  .chap-list { grid-template-columns:repeat(auto-fill,minmax(140px,1fr)); max-height:60vh; }
+}
+</style>
+</head>
+<body>
+<div class="manga-topbar">
+  <button class="back" onclick="history.back()">←</button>
+  <span class="sp"></span>
+  <span style="font-size:.8rem;color:var(--text-dim);" id="book-progress"></span>
+</div>
+
+<div class="container detail-wrap">
+  <div class="manga-head">
+    <div class="cover" id="cover">📖</div>
+    <div class="hi">
+      <div class="title" id="title">加载中…</div>
+      <div class="sub" id="sub"></div>
+      <div class="info-sec" id="info-sec"></div>
+    </div>
+  </div>
+
+  <div class="fn-row">
+    <button class="fn-btn fn-continue" id="read-btn" style="display:none;">▶ 继续阅读</button>
+    <button class="fn-btn fn-download" id="dl-btn" style="display:none;">⭳ 下载本书</button>
+  </div>
+
+  <div class="ops-row" id="ops-row" style="display:none;">
+    <button class="op-btn" id="check-btn">↻ 检查更新</button>
+    <button class="op-btn" id="missing-btn">⤓ 补下缺失</button>
+    <button class="op-btn danger" id="del-btn">🗑 删除</button>
+    <select class="op-btn" id="src-select" style="display:none;" title="切换书源"></select>
+  </div>
+
+  <div class="history-tip" id="history-tip" style="display:none;">🕐 <span id="history-pos"></span></div>
+  <div class="novel-intro" id="intro" style="display:none;"></div>
+
+  <div class="chap-sec" id="chap-sec" style="display:none;">
+    <div class="chap-head"><span>章节列表</span><span id="chap-count"></span></div>
+    <div style="padding:0 0 10px;">
+      <input id="chap-search" placeholder="🔍 搜索章节…" style="width:100%;box-sizing:border-box;padding:8px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:.82rem;">
+    </div>
+    <div class="chap-list" id="chap-list"><div class="loading" style="padding:20px;color:var(--text-dim);">加载章节…</div></div>
+  </div>
+</div>
+
+<script src="/static/js/common.js"></script>
+<script src="/static/js/toc_render.js"></script>
+<script>
+const params = new URLSearchParams(location.search);
+const KEY = params.get('key') || '';
+const SRC_UID = params.get('source_uid') || '';
+const BOOK_URL = params.get('book_url') || '';
+// B2: 畸形 % 序列抛 URIError 会毁掉整段脚本——拦截并保留原始值兜底
+let NAME = '';
+try { NAME = decodeURIComponent(params.get('name') || ''); } catch (e) { NAME = params.get('name') || ''; }
+function fmtWords(w) { if (!w) return ''; const n = parseInt(w); if (!n) return w; return n >= 10000 ? Math.round(n/10000) + '万字' : n + '字'; }
+
+// C04: 目录分段渲染视图（书库/搜索两种模式共用 static/js/toc_render.js）。
+// 长目录首屏只挂载当前章附近分段（200 章/段），上下「展开」按钮按需扩段；
+// 目录内搜索作用于全量章节数组，未挂载章节同样可被找到。
+let detailToc = null;
+const chapSearch = $('#chap-search');
+if (chapSearch) chapSearch.oninput = () => {
+  if (!detailToc) return;
+  detailToc.setFilter(chapSearch.value);
+  detailToc.render();
+};
+
+// ═══════ 书库模式（已下载小说：章节+阅读）═══════
+async function loadLibraryMode() {
+  document.title = NAME || '小说详情';
+  $('#title').textContent = NAME || '加载中…';
+  try {
+    const d = await requestJSON('/api/books/' + encodeURIComponent(KEY));
+    $('#title').textContent = d.name || NAME;
+    $('#sub').textContent = [d.author, '来源：' + (d.source_uid || '')].filter(Boolean).join(' · ');
+    $('#book-progress').textContent = d.done + '/' + d.total + ' 章（' + d.percent + '%）';
+    if (d.intro) { $('#intro').textContent = d.intro; $('#intro').style.display = ''; }
+    const info = [];
+    if (d.total) info.push('<span class="info-item">共 ' + d.total + ' 章</span>');
+    if (d.done !== undefined) info.push('<span class="info-item">已下载 ' + d.done + ' 章</span>');
+    if (d.failed_count) info.push('<span class="info-item" style="color:var(--red);">' + d.failed_count + ' 章失败</span>');
+    $('#info-sec').innerHTML = info.join('');
+    // 继续阅读
+    $('#read-btn').style.display = '';
+    $('#read-btn').textContent = d.done > 0 ? '▶ 继续阅读' : '▶ 开始阅读';
+    $('#read-btn').onclick = () => location.href = '/reader/' + encodeURIComponent(KEY);
+    // 操作区
+    $('#ops-row').style.display = '';
+    $('#check-btn').onclick = () => checkUpdate(KEY);
+    $('#missing-btn').onclick = async (ev) => {
+      // C01: 服务端拒绝/断网/错误页如实提示，不假成功；按钮 finally 恢复
+      try {
+        const d = await requestJSON('/api/books/' + encodeURIComponent(KEY) + '/download-missing',
+          {method: 'POST', button: ev.currentTarget});
+        if (d.error) { toast('⚠ ' + d.error, 'error'); return; }
+        toast('已开始补下缺失章节', 'ok');
+      } catch (e) { toast('⚠ 补下失败: ' + e.message, 'error'); }
+    };
+    $('#del-btn').onclick = async (ev) => {
+      // C06: 与 server/novel_api.py 软删除语义一致——移入回收站（data/trash/），
+      // 书库不再显示；目前没有界面恢复入口，如实说明，不承诺恢复能力
+      if (!confirm('删除《' + d.name + '》？\n文件将移入回收站（data/trash/），书库中不再显示。\n（暂无界面恢复入口；如需找回，需手动从回收站目录还原。）')) return;
+      try {
+        await requestJSON('/api/books/' + encodeURIComponent(KEY), {method: 'DELETE', button: ev.currentTarget});
+      } catch (e) { toast('⚠ 删除失败: ' + e.message, 'error'); return; }
+      toast('已删除'); setTimeout(() => history.back(), 800);
+    };
+    // 章节列表（C04: 分段渲染——长目录首屏只挂载第一段，不等待全量 DOM 建立；
+    // 点击跳章仍走 ?ch=N 链接，语义不变）
+    $('#chap-sec').style.display = '';
+    const list = $('#chap-list');
+    list.innerHTML = '';
+    const chs = d.chapters || [];
+    $('#chap-count').textContent = chs.length + ' 章';
+    if (!chs.length) { list.innerHTML = '<div style="color:var(--text-dim);">暂无章节（可点检查更新）</div>'; }
+    else {
+      detailToc = TocRender.makeTocView({
+        container: list,
+        makeItem: (c) => {
+          const it = document.createElement('div');
+          it.dataset.chIdx = c.index;
+          it.className = 'chap-item' + (c.downloaded ? ' dl' : '') + (c.failed ? ' failed' : '');
+          it.textContent = (c.downloaded ? '⬇ ' : '') + c.index + '. ' + c.name + (c.failed ? ' ⚠' : '');
+          // C03: 点已下载章节携带章节参数，阅读器直接打开该章（而非一律续读）
+          it.onclick = () => { if (c.downloaded) location.href = '/reader/' + encodeURIComponent(KEY) + '?ch=' + c.index; };
+          return it;
+        },
+      });
+      detailToc.setData(chs);
+      detailToc.setFilter(chapSearch ? chapSearch.value : '');
+      detailToc.render();
+      // 定位当前阅读章：异步取服务器进度（不阻塞首屏核心信息），到达后切到该章所在段
+      fetch('/api/books/' + encodeURIComponent(KEY) + '/progress')
+        .then(r => r.json()).then(pd => {
+          const idx = (pd && pd.ok) ? (parseInt(pd.idx, 10) || 0) : 0;
+          if (idx < 1 || idx > chs.length || !detailToc) return;
+          if (detailToc.locate(idx)) {
+            detailToc.render();
+            const el = list.querySelector('.chap-item[data-ch-idx="' + idx + '"]');
+            if (el && el.scrollIntoView) el.scrollIntoView({block: 'center'});
+          }
+        }).catch(() => {});
+    }
+  } catch (e) {
+    $('#title').textContent = '加载失败';
+    toast('详情加载失败: ' + e, 'error');
+  }
+}
+
+// C01: 检查更新——POST 只代表"请求已接受"，随后轮询既有 check-status 接口
+// 直到服务端确认终态，不再固定 setTimeout 后整页 reload；启动失败 / 轮询
+// 失败 / 超时均显示可恢复错误，按钮最终一定恢复可用
+async function checkUpdate(key) {
+  const btn = $('#check-btn');
+  btn.disabled = true;
+  const orig = btn.textContent;
+  btn.textContent = '⏳ 检查中…';
+  const restore = () => { btn.disabled = false; btn.textContent = orig; };
+  try {
+    await requestJSON('/api/books/' + encodeURIComponent(key) + '/check-update',
+      {method: 'POST', timeout: 20000});
+  } catch (e) {
+    toast('⚠ 检查启动失败: ' + e.message, 'error');
+    restore();
+    return;
+  }
+  toast('请求已接受，正在检查更新…');
+  // 轮询任务终态（最长 150s）；网络抖动继续，连续失败才中止
+  const deadline = Date.now() + 150000;
+  let netErr = 0;
+  while (Date.now() < deadline) {
+    await new Promise(res => setTimeout(res, 2000));
+    let sd;
+    try {
+      sd = await requestJSON('/api/books/' + encodeURIComponent(key) + '/check-status',
+        {timeout: 10000});
+    } catch (e) {
+      if (++netErr >= 5) {
+        restore();
+        toast('⚠ 检查状态获取失败: ' + e.message, 'error');
+        return;
+      }
+      continue;  // 网络抖动继续轮询
+    }
+    netErr = 0;
+    if (sd.status === 'checking') continue;
+    // 终态（done / error）以服务端确认为准
+    restore();
+    if (sd.error) { toast('⚠ ' + (sd.message || sd.error), 'error'); return; }
+    toast(sd.message || '已是最新', 'ok');
+    location.reload();   // 终态确认后再刷新章节/进度展示
+    return;
+  }
+  restore();
+  toast('⚠ 检查超时，请稍后重试', 'error');
+}
+
+// ═══════ 搜索模式（全网搜索结果：详情+换源+目录+下载）═══════
+let SEARCH_SOURCES = [];
+
+async function loadSearchMode() {
+  document.title = NAME || '小说详情';
+  $('#title').textContent = NAME || '加载中…';
+  // 全部来源（从搜索结果页 sessionStorage 传入；兜底为当前源）
+  try {
+    SEARCH_SOURCES = JSON.parse(sessionStorage.getItem('novel_detail_sources') || '[]') || [];
+  } catch (e) { SEARCH_SOURCES = []; }
+  const curSrc = {source_uid: SRC_UID, book_url: BOOK_URL, source_name: '当前书源', chapter_count: 0};
+  if (!SEARCH_SOURCES.length) SEARCH_SOURCES = [curSrc];
+  // 换源下拉（多个源时）
+  const sel = $('#src-select');
+  if (SEARCH_SOURCES.length > 1) {
+    sel.style.display = '';
+    SEARCH_SOURCES.forEach((s, i) => {
+      const o = document.createElement('option');
+      o.value = i;
+      o.textContent = s.source_name + (s.chapter_count ? '（' + s.chapter_count + '章）' : '');
+      sel.appendChild(o);
+    });
+    sel.onchange = () => selectSource(SEARCH_SOURCES[parseInt(sel.value, 10)]);
+  } else {
+    sel.style.display = 'none';
+  }
+  // 目录区（搜索模式也显示）
+  $('#chap-sec').style.display = '';
+  $('#chap-count').textContent = '';
+  selectSource(SEARCH_SOURCES[0]);
+}
+
+// A04: 换源竞态防护——每次切源生成统一序号（generation），并取消旧请求；
+// 详情/目录/错误提示/finally 清理/下载按钮绑定全部校验序号（AbortController 之外的双保险），
+// 保证旧源请求后返回时绝不覆盖新源的任何字段与下载参数
+let _srcGen = 0;
+let _srcAbort = null;
+function selectSource(src) {
+  if (!src) return;
+  const gen = ++_srcGen;
+  if (_srcAbort) _srcAbort.abort();
+  _srcAbort = new AbortController();
+  const signal = _srcAbort.signal;
+  // 切源时清理上一源专有字段：新源无简介/封面/统计时不得沿用旧值
+  $('#intro').textContent = ''; $('#intro').style.display = 'none';
+  $('#cover').innerHTML = '📖';
+  $('#info-sec').innerHTML = '';
+  $('#dl-btn').onclick = null;
+  loadSearchDetail(src, gen, signal);
+  loadSearchToc(src, gen, signal);
+}
+
+// 加载该源目录
+async function loadSearchToc(src, gen, signal) {
+  const list = $('#chap-list');
+  list.innerHTML = '<div style="padding:16px;color:var(--text-dim);">⏳ 加载目录…</div>';
+  try {
+    const r = await fetch('/api/search-toc', {method:'POST', headers:{'Content-Type':'application/json'}, signal,
+      body: JSON.stringify({source_uid: src.source_uid, book_url: src.book_url})});
+    const d = await r.json();
+    if (gen !== _srcGen) return;   // A04: 已换源，过期目录响应直接丢弃
+    if (!d.ok) throw new Error(d.error || '目录获取失败');
+    const chs = d.chapters || [];
+    $('#chap-count').textContent = chs.length ? chs.length + ' 章' : '';
+    list.innerHTML = '';
+    if (!chs.length) { list.innerHTML = '<div style="color:var(--text-dim);">该源未返回章节目录</div>'; return; }
+    // C04: 搜索模式目录同样分段渲染（长目录不一次性全量挂载）
+    detailToc = TocRender.makeTocView({
+      container: list,
+      makeItem: (c) => {
+        const it = document.createElement('div');
+        it.className = 'chap-item';
+        it.textContent = c.index + '. ' + c.name;
+        it.title = '下载本书后可阅读';
+        it.onclick = () => {
+          // 搜索模式未下载：点击章节 → 提示下载后阅读（在线阅读已移除）
+          toast('请先点击「⭳ 下载本书」，完成后在书库阅读', '');
+        };
+        return it;
+      },
+    });
+    detailToc.setData(chs);
+    detailToc.setFilter(chapSearch ? chapSearch.value : '');
+    detailToc.render();
+  } catch (e) {
+    if (e.name === 'AbortError' || gen !== _srcGen) return;  // A04: 已换源，旧源错误提示不落地
+    list.innerHTML = '<div style="color:var(--text-dim);">目录加载失败: ' + esc(e) + '</div>';
+  }
+}
+
+async function loadSearchDetail(src, gen, signal) {
+  $('#dl-btn').style.display = '';
+  $('#dl-btn').disabled = true;
+  $('#dl-btn').textContent = '⏳ 获取详情…';
+  try {
+    const d = await (await fetch('/api/search-detail', {method:'POST', headers:{'Content-Type':'application/json'}, signal,
+      body: JSON.stringify({source_uid: src.source_uid, book_url: src.book_url})})).json();
+    if (gen !== _srcGen) return;   // A04: 已换源，过期详情响应直接丢弃
+    if (!d.ok) throw new Error(d.error || '详情获取失败');
+    // 封面
+    if (d.cover) {
+      const cv = $('#cover');
+      cv.innerHTML = '<img src="' + esc(d.cover) + '" loading="lazy" decoding="async" onerror="this.parentNode.innerHTML=\'📖\'" alt="封面" style="width:100%;height:100%;object-fit:cover;border-radius:8px;">';
+    }
+    $('#sub').textContent = (src.source_name || '') + (d.update_time ? ' · 更新：' + d.update_time : '');
+    const info = [];
+    if (d.chapter_count) info.push('<span class="info-item">共 ' + d.chapter_count + ' 章</span>');
+    if (d.word_count) info.push('<span class="info-item">' + fmtWords(d.word_count) + '</span>');
+    if (d.last_chapter) info.push('<span class="info-item">最新章节：' + esc(d.last_chapter.slice(0, 24)) + '</span>');
+    $('#info-sec').innerHTML = info.join('');
+    if (d.intro) { $('#intro').textContent = d.intro; $('#intro').style.display = ''; }
+    else { $('#intro').textContent = ''; $('#intro').style.display = 'none'; }  // A04: 新源无简介不得沿用旧简介
+    $('#history-tip').style.display = '';
+    $('#history-pos').textContent = '全网搜索 · ' + (src.source_name || '当前书源') + ' · 点击下载后自动进入书库';
+    $('#dl-btn').textContent = '⭳ 下载本书' + (d.chapter_count ? '（' + d.chapter_count + '章）' : '');
+    $('#dl-btn').disabled = false;
+    $('#dl-btn').onclick = async () => {
+      if (gen !== _srcGen) return;   // A04: 按钮闭包仍属旧源时拒绝下载（双保险）
+      $('#dl-btn').disabled = true; $('#dl-btn').textContent = '⏳ 加入任务…';
+      try {
+        const r = await (await fetch('/api/tasks', {method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({source_uid: src.source_uid, book_url: src.book_url})})).json();
+        if (r.error) { toast('下载失败: ' + r.error, 'error'); $('#dl-btn').disabled = false; $('#dl-btn').textContent = '⭳ 下载本书'; }
+        else { toast('已加入下载任务，完成后可在书库阅读'); $('#dl-btn').textContent = '✓ 已加入任务'; }
+      } catch (e) { toast('下载失败: ' + e, 'error'); $('#dl-btn').disabled = false; $('#dl-btn').textContent = '⭳ 下载本书'; }
+    };
+  } catch (e) {
+    if (e.name === 'AbortError' || gen !== _srcGen) return;  // A04: 已换源，旧源错误提示与按钮回退不落地
+    $('#dl-btn').textContent = '⭳ 下载本书';
+    $('#dl-btn').disabled = false;
+    $('#dl-btn').onclick = async () => {
+      if (gen !== _srcGen) return;   // A04: 按钮闭包仍属旧源时拒绝下载（双保险）
+      try {
+        const r = await (await fetch('/api/tasks', {method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({source_uid: src.source_uid, book_url: src.book_url})})).json();
+        if (r.error) toast('下载失败: ' + r.error, 'error');
+        else toast('已加入下载任务');
+      } catch (e2) { toast('下载失败: ' + e2, 'error'); }
+    };
+    toast('详情信息获取失败（可仍直接下载）: ' + e, 'error');
+  }
+}
+
+if (KEY) loadLibraryMode();
+else if (SRC_UID && BOOK_URL) loadSearchMode();
+else {
+  // 参数缺失：两种模式都无从加载，明确提示而非静默发无效请求
+  $('#title').textContent = '链接参数缺失或无效';
+  toast('缺少书籍参数（key 或 source_uid/book_url）', 'error');
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,37 @@
+{
+ "bookSourceName": "www.biquge.company",
+ "bookSourceUrl": "https://www.biquge.company",
+ "bookSourceType": 0,
+ "bookSourceGroup": "自动生成",
+ "bookSourceComment": "自动分析生成（搜索规则自适应，目录/正文用引擎兜底）",
+ "enabled": false,
+ "searchUrl": "https://www.biquge.company/modules/article/search.php?searchkey={{key}}",
+ "ruleSearch": {
+  "bookList": "body > div.container > div.content.book > div.bookbox > div.p10 > div.bookinfo",
+  "name": "a@text",
+  "author": "",
+  "bookUrl": "a@href",
+  "intro": "",
+  "kind": ""
+ },
+ "ruleBookInfo": {
+  "intro": "[property=og:description]@content",
+  "coverUrl": "[property=og:image]@content",
+  "author": "[property=og:novel:author]@content",
+  "kind": "[property=og:novel:category]@content",
+  "lastChapter": "[property=og:novel:latest_chapter_name]@content"
+ },
+ "ruleToc": {
+  "chapterList": "dd a"
+ },
+ "ruleContent": {
+  "content": ".content@textNodes"
+ },
+ "uid": "www.biquge.company_www.biquge.company",
+ "imported_at": "2026-08-20 17:30:21",
+ "valid": true,
+ "valid_error": "",
+ "valid_tested_at": "",
+ "backfilled_at": "2026-08-21 15:25:38",
+ "upgraded_at": "2026-08-21 16:01:33"
+}

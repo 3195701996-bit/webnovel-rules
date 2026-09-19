@@ -1,0 +1,26 @@
+{
+ "bookSourceName": "爱下书(aixiashu)",
+ "bookSourceUrl": "http://www.aixiashu.la",
+ "searchUrl": "/modules/article/search.php?searchkey={{key}}&submit=",
+ "ruleSearch": {
+  "bookList": "table tr",
+  "name": "td a@text",
+  "bookUrl": "td a@href",
+  "author": "td.td3@text"
+ },
+ "ruleToc": {
+  "chapterList": "#list dd",
+  "chapterName": "a@text",
+  "chapterUrl": "a@href"
+ },
+ "ruleContent": {
+  "content": "#content@text"
+ },
+ "uid": "爱下书_aixiashu__www.aixiashu.net",
+ "enabled": false,
+ "imported_at": "2026-09-04 17:53:15",
+ "valid": true,
+ "valid_error": "",
+ "valid_tested_at": "",
+ "tocSort": "url"
+}

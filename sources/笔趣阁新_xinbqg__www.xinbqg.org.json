@@ -1,0 +1,25 @@
+{
+ "bookSourceName": "笔趣阁新(xinbqg)",
+ "bookSourceUrl": "http://www.xinbqg.org",
+ "searchUrl": "/modules/article/search.php?s=0000&q={{key}}",
+ "ruleSearch": {
+  "bookList": "tr",
+  "name": "td a@text",
+  "bookUrl": "td a@href"
+ },
+ "ruleToc": {
+  "chapterList": "dd",
+  "chapterName": "a@text",
+  "chapterUrl": "a@href"
+ },
+ "ruleContent": {
+  "content": "#content@text"
+ },
+ "uid": "笔趣阁新_xinbqg__www.xinbqg.org",
+ "enabled": false,
+ "imported_at": "2026-09-04 18:39:29",
+ "valid": true,
+ "valid_error": "",
+ "valid_tested_at": "",
+ "tocSort": "url"
+}

@@ -1,0 +1,26 @@
+{
+ "bookSourceName": "啃书网(kenshuwx)",
+ "bookSourceUrl": "http://www.kenshuzw.la",
+ "searchUrl": "/modules/article/search.php?searchkey={{key}}",
+ "ruleSearch": {
+  "bookList": "ul.search-list li.item",
+  "name": "div.col-r h3 a@text",
+  "bookUrl": "div.col-r h3 a@href",
+  "author": "div.col-r p.author@text##作者[:：]?##"
+ },
+ "ruleBookInfo": {
+  "name": "h1@text",
+  "tocUrl": "a.catalogbtn@href"
+ },
+ "ruleToc": {
+  "chapterList": "ul.chapter-list li",
+  "chapterName": "a@text",
+  "chapterUrl": "a@href"
+ },
+ "ruleContent": {
+  "content": "div.article-con@text##[^\\n]*(?:最新网址[:：]www\\.kenshuzw\\.la|啃书小说网KenShu\\.CC收集并整理,版权归作者或出版社。)[^\\n]*\\n?##"
+ },
+ "tocSort": "url",
+ "uid": "啃书网_kenshuwx__www.kenshuzw.la",
+ "enabled": false
+}

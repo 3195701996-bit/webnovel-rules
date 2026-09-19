@@ -1,0 +1,25 @@
+{
+ "bookSourceName": "顶点镜像(23us)",
+ "bookSourceUrl": "http://www.23us.tw",
+ "searchUrl": "/modules/article/search.php?q={{key}}",
+ "ruleSearch": {
+  "bookList": "tr",
+  "name": "td a@text",
+  "bookUrl": "td a@href"
+ },
+ "ruleToc": {
+  "chapterList": "dd",
+  "chapterName": "a@text",
+  "chapterUrl": "a@href"
+ },
+ "ruleContent": {
+  "content": "#content@text"
+ },
+ "uid": "顶点镜像_23us__www.23us.tw",
+ "enabled": false,
+ "imported_at": "2026-09-04 18:39:29",
+ "valid": true,
+ "valid_error": "",
+ "valid_tested_at": "",
+ "tocSort": "url"
+}

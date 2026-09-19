@@ -1,0 +1,18 @@
+// 手机独立服务器 APK —— 阶段 A（可行性最小 APK）
+// 单一源码原则：本工程不保存 Python 业务源码副本，构建时由 Gradle 任务从
+// 仓库唯一维护源（server/ engine/ templates/ static/）按白名单生成快照。
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+dependencyResolutionManagement {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+rootProject.name = "webnovel-mobile"
+include ':app'

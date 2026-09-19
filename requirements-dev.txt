@@ -1,0 +1,4 @@
+# ── 开发/测试工具 ──
+-r requirements-core.txt
+pytest>=8.0
+pytest-timeout>=2.3

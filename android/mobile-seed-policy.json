@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "comment": "移动端内置源种子策略：默认启用全部内置源，只有这里列出的才默认停用。改这个文件必须写清理由与证据。 2026-09-18 追加：按 tools/probe_novel_sources.py 的手机口径逐源实测（24 个源：15 三段全通、9 个失败全在搜索阶段），把其中 8 个确认不可用的加入停用表——源文件仍在内置清单里，用户可在书源管理里手动启用。",
+  "disable": {
+    "81zw.org": "设备逐源实测失败：域名解析到 0.0.0.0 占位（已被 DNS 封锁）",
+    "kcshu.com": "设备逐源实测失败：域名解析到 0.0.0.0 占位（已被 DNS 封锁）",
+    "qb5200.org": "设备逐源实测失败：域名解析到 0.0.0.0 占位（已被 DNS 封锁）",
+    "quanben8.com": "设备逐源实测失败：域名解析到 0.0.0.0 占位（已被 DNS 封锁）",
+    "quanbenw.com": "设备逐源实测失败：域名解析到 0.0.0.0 占位（已被 DNS 封锁）",
+    "quanbenxiaoshuo.com": "设备逐源实测失败：域名解析到 0.0.0.0 占位（已被 DNS 封锁）",
+    "quanben5.com": "桌面逐源实测（2026-09-18）：域名连接失败（不可达），搜索 30s 超时",
+    "quanben.io": "站点对直连 IP 封锁，适配器**依赖公共代理池**（data/proxies.txt，实测 0 个可用）：桌面搜索 30s 超时；手机端不打包 data/，没有代理池数据 → 无法使用",
+    "www.biquge.company_www.biquge.company": "桌面逐源实测（2026-09-18）：域名解析到占位 ::，DNS 已封锁，搜索 42ms 即失败",
+    "夜天连看_com__www.yetianlian.com": "同上（DNS 已封锁）；同站 .la/.info/xyetianlian 三个域三段全通，站点仍被覆盖",
+    "大帝书阁_bbqsk__www.bbqsk.net": "同上（DNS 已封锁）；同站 ddsk.la / dingdiansk.com 三段全通",
+    "思路客_isiluke__www.isiluke.net": "同上（DNS 已封锁）；同站 isiluke.la / isiluke.org 三段全通",
+    "思路客_m__m.isiluke.net": "同上（DNS 已封锁，与 www.isiluke.net 同站）",
+    "爱下书_aixiaxsw__www.aixiaxsw.com": "同上（DNS 已封锁）；同站 aixiashu.net / aixiawx.com 三段全通",
+    "爱下书_aixiawx__www.aixiawx.com": "桌面逐源实测（2026-09-18）：域名解析到 0.0.0.0 / ::（占位解析 = DNS 已封锁），搜索即失败；同站 www.aixiashu.net 解析正常、三段全通，站点仍被覆盖"
+  }
+}

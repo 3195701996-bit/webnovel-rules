@@ -1,0 +1,32 @@
+{
+  "bookSourceComment": "爱下电子书(ixdzs8.com 现役镜像)。走 engine.adapters.ixdzs 适配器: 搜索 /bsearch, 目录 POST /novel/clist/, 正文 /read/{bid}/p{n}.html, 自动跟随 JS challenge",
+  "bookSourceGroup": "常规",
+  "bookSourceName": "爱下电子书(ixdzs8)",
+  "bookSourceType": 0,
+  "bookSourceUrl": "https://ixdzs8.com/",
+  "customOrder": -4,
+  "enabled": true,
+  "enabledCookieJar": false,
+  "enabledExplore": false,
+  "enabledReview": false,
+  "exploreUrl": "",
+  "loginUrl": "",
+  "searchUrl": "/bsearch?q={{key}}",
+  "ruleSearch": {
+    "bookList": "ul.u-list li.burl",
+    "name": "h3.bname a@text",
+    "bookUrl": "h3.bname a@href",
+    "author": ".bauthor a@text"
+  },
+  "ruleToc": {
+    "chapterList": "",
+    "chapterName": "",
+    "chapterUrl": ""
+  },
+  "ruleContent": {
+    "content": ""
+  },
+  "tocSort": 0,
+  "uid": "爱下书_ixdzs8__ixdzs8.com",
+  "weight": 0
+}

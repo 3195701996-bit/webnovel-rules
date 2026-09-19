@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>任务管理 · webnovel_rules</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+<header class="topbar">
+  <span class="logo">📚 webnovel_rules<small>书源驱动 · 小说爬虫</small></span>
+  <nav>
+    <a href="/">🔍 搜索/书库</a>
+    <a href="/sources">书源管理</a>
+    <a href="/library">📖 我的书库</a>
+    <a href="/tasks_page" class="active">📋 任务管理</a>
+    <a href="/manga">🎨 漫画</a>
+  </nav>
+  <div class="spacer"></div>
+</header>
+
+<div class="container">
+  <div class="section-title">📋 任务管理</div>
+  <p class="page-sub">爬取任务：暂停 / 恢复（启动） / 取消 / 删除；失败章节自动优先重试。</p>
+  <div style="display:flex;gap:8px;margin-bottom:12px;">
+    <button class="btn" id="pause-all-btn" onclick="pauseAll()">⏸ 全部暂停（漫画）</button>
+    <button class="btn primary" id="resume-all-btn" onclick="resumeAll()">▶ 全部开始（漫画）</button>
+    <button class="btn" id="refresh-btn" title="手动刷新">🔄 刷新</button>
+    <span id="batch-msg" style="font-size:.8rem;color:var(--text-dim);align-self:center;"></span>
+  </div>
+  <!-- C02: aria-busy 表达加载态；tasks-live 为克制的 aria-live 播报区
+       （仅已有任务的状态迁移播报一句，不整表播报） -->
+  <div id="tasks" aria-busy="true"><div class="empty"><div class="big">⏳</div>加载任务中…</div></div>
+  <span id="tasks-live" aria-live="polite" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;"></span>
+</div>
+
+<script src="/static/js/common.js"></script>
+<script>
+function fmtEta(sec) {
+  if (!sec || sec <= 0) return '';
+  if (sec < 60) return sec + '秒';
+  if (sec < 3600) return Math.floor(sec/60) + '分' + (sec%60 ? ' ' + (sec%60) + '秒' : '');
+  return Math.floor(sec/3600) + '小时' + Math.floor((sec%3600)/60) + '分';
+}
+// C02: 行内容部件计算（纯函数，不触 DOM，可单测）——同样的任务数据产生
+// 同样的 rowSig；轮询拿到无变化数据时整行零 DOM 写入。opsSig（类型+状态）
+// 是操作按钮集合的签名：按钮集合只随状态切换变化，与进度刷新无关。
+function _taskRowParts(t) {
+  const p = t.progress || {};
+  const isManga = t.type === 'manga';
+  const stMap = {running:['爬取中','running'], paused:['已暂停','paused'], done:['已完成','done'], error:['出错','error'], stopped:['已停止','stopped']};
+  // C06: 漫画状态文案细分——cancel 是"停止请求已发、worker 收尾中"（原误标"已停止"）；
+  // error 语义为部分章节失败可续传（原"出错"过于笼统）；排队/暂停/完成保持原样
+  const stMap2 = isManga ? {running:['下载中','running'], done:['已完成','done'], error:['⚠ 部分失败（可续传）','error'], queued:['排队中','stopped'], paused:['⏸ 已暂停','paused'], stopped:['已停止','stopped'], cancel:['⏹ 停止中…','stopped']} : Object.assign({}, stMap);
+  // R27: 完成但有失败章节 → 状态显示警告（原 R11 代码误放在 for 循环外，
+  // 引用未定义的 t 抛 ReferenceError → 一旦有任务页面 JS 整体挂掉）
+  if (!isManga && t.status === 'done' && (t.has_failed_warning || (p && p.failed_chapters))) {
+    stMap2.done = ['⚠ 完成(有失败)','error'];
+  }
+  const [sl, sc] = stMap2[t.status] || [t.status, 'stopped'];
+  const done = isManga ? (p.done || 0) : (p.completed || 0);
+  const total = isManga ? (p.total || 0) : (p.total || 0);
+  const pct = total ? Math.round(done / total * 100) : 0;
+  // 速度/ETA 展示
+  // C06: ETA 未知（后端 rate=0 记 null）显示"估算中"，不再静默消失
+  let speedHtml = '';
+  if (isManga && t.status === 'running') {
+    const spd = p.speed ? (p.speed >= 1 ? p.speed.toFixed(1) + ' 图/秒' : Math.round(p.speed * 60) + ' 图/分') : '';
+    const eta = (p.eta === null || p.eta === undefined) ? '估算中' : fmtEta(p.eta);
+    if (spd) speedHtml = `<span style="color:var(--accent);font-size:.75rem;">⚡ ${spd}${eta ? ' · 剩余 ' + eta : ''}</span>`;
+  }
+  let ops = '';
+  if (isManga) {
+    const msrc = t.source_uid || '';
+    const mcid = t.book_key || '';
+    if (t.status === 'running' || t.status === 'queued') {
+      ops += `<button class="btn pause-btn" data-manga="1" data-src="${esc(msrc)}" data-cid="${encodeURIComponent(mcid)}">⏸ 暂停</button>`;
+      ops += `<button class="btn danger stop-btn" data-id="${t.id}">⏹ 停止</button>`;
+    } else if (t.status === 'paused' || t.status === 'stopped' || t.status === 'error' || t.status === 'cancel') {
+      ops += `<button class="btn primary resume-btn" data-manga="1" data-src="${esc(msrc)}" data-cid="${encodeURIComponent(mcid)}">▶ 启动</button>`;
+    }
+    ops += `<button class="btn danger del-task-btn" data-id="${t.id}">🗑 删除</button>`;
+  } else {
+    // 小说任务有独立详情页（/task/<id>），漫画任务没有，故仅此处加入口
+    ops += `<a class="btn" href="/task/${encodeURIComponent(t.id)}">详情</a>`;
+    if (t.status === 'running') {
+      ops += `<button class="btn pause-btn" data-id="${t.id}">⏸ 暂停</button>`;
+      ops += `<button class="btn danger stop-btn" data-id="${t.id}">⏹ 取消</button>`;
+    } else if (t.status === 'paused' || t.status === 'stopped' || t.status === 'error') {
+      ops += `<button class="btn primary resume-btn" data-id="${t.id}">▶ 启动</button>`;
+    }
+    ops += `<button class="btn danger del-task-btn" data-id="${t.id}">🗑 删除</button>`;
+  }
+  const nameHtml = isManga
+    // 任务列表的漫画标题是“继续阅读”，不能强制 ch=0；否则阅读器会把它
+    // 视为用户明确选了第一话并跳过服务端 resume。
+    ? `<a href="/manga_reader?source=${encodeURIComponent(t.source_uid || '')}&cid=${encodeURIComponent(t.book_key)}&title=${encodeURIComponent(t.title)}">🎨 ${esc(t.title)}</a>`
+    : (t.book_key ? `<a href="/reader/${encodeURIComponent(t.book_key)}">${esc(p.book_name || t.book_key)}</a>` : esc(t.book_key));
+  let novelSpeedHtml = '';
+  if (!isManga && t.status === 'running' && p.speed) {
+    const eta = p.eta ? fmtEta(p.eta) : '';
+    novelSpeedHtml = `<span style="color:var(--accent);font-size:.75rem;">⚡ ${p.speed} 章/秒${eta ? ' · 剩余 ' + eta : ''}</span>`;
+  }
+  const progHtml = isManga
+    ? (() => {
+        const id = p.images_done || 0, it = p.images_total || 0;
+        // C06: 进度分母（总图数/总话数）未知时不显示假百分比，改显"估算中"
+        const denomKnown = it > 0 || total > 0;
+        const ipct = it ? Math.round(id / it * 100) : (total ? Math.round(done / total * 100) : 0);
+        const failed = p.failed_chapters ? `<span style="color:#e8833a;font-size:.72rem;"> ⚠ ${p.failed_chapters} 章失败</span>` : '';
+        const progText = denomKnown
+          ? `${it ? id + '/' + it + ' 图' : done + '/' + total + ' 话'} (${ipct}%)`
+          : '总量估算中…';
+        return `<div style="display:flex;flex-direction:column;gap:3px;">
+          <div style="display:flex;align-items:center;gap:8px;"><div class="mini-bar"><i style="width:${ipct}%"></i></div><span style="color:var(--text-dim);font-size:.78rem;">${progText}</span></div>
+          <span style="color:var(--text-dim);font-size:.72rem;">📖 ${done}/${total || '?'} 话${failed}${p.current ? ' · ' + esc(String(p.current).slice(0,12)) : ''}</span>
+          ${speedHtml}
+        </div>`;
+      })()
+    : (total ? `<div style="display:flex;flex-direction:column;gap:3px;">
+        <div style="display:flex;align-items:center;gap:8px;"><div class="mini-bar"><i style="width:${pct}%"></i></div><span style="color:var(--text-dim);font-size:.78rem;">${done}/${total} (${pct}%)</span></div>
+        ${novelSpeedHtml}
+        ${p.current ? `<span style="color:var(--text-dim);font-size:.72rem;">${esc(String(p.current).slice(0,16))}</span>` : ''}
+      </div>` : '<span style="color:var(--text-dim);">' + esc(p.message || '准备中…') + '</span>');
+  const opsSig = (isManga ? 'm' : 'n') + ':' + t.status;
+  const stKey = sc + '|' + sl;
+  return {
+    nameHtml, stKey, progHtml, ops, opsSig, sl, sc,
+    bookLabel: isManga ? (t.title || '') : (p.book_name || t.book_key || ''),
+    rowSig: JSON.stringify([nameHtml, stKey, progHtml, opsSig]),
+  };
+}
+
+// C02: 克制的状态播报——只对已有行的状态迁移播报一句到专用 aria-live 区，
+// 不给整表挂 live 属性（进度刷新不打断读屏）。
+function announceTask(label, stLabel) {
+  const live = $('#tasks-live');
+  if (live) live.textContent = '「' + label + '」状态变为 ' + stLabel;
+}
+
+// C02: 焦点保全——ops 容器重建（状态切换导致按钮集合变化）前记录焦点所在
+// 行与按钮类型，重建后把焦点还给同位置的新按钮；未重建时节点不动、焦点
+// 天然保留（轮询刷新不再打断键盘连续操作）。
+function captureFocus(tbody) {
+  const el = document.activeElement;
+  if (!el || el === document.body || !tbody.contains(el)) return null;
+  const tr = el.closest('tr');
+  if (!tr || !tr.dataset.taskId) return null;
+  const m = el.className.match(/(pause-btn|stop-btn|resume-btn|del-task-btn)/);
+  return {id: tr.dataset.taskId, cls: m ? m[1] : ''};
+}
+function restoreFocus(tbody, saved) {
+  if (!saved) return;
+  const cur = document.activeElement;
+  if (cur && cur !== document.body && tbody.contains(cur)) return;   // 焦点未丢，不干预
+  for (const tr of tbody.children) {
+    if (tr.dataset.taskId !== saved.id) continue;
+    const btn = saved.cls ? tr.querySelector('.' + saved.cls) : null;
+    if (btn) { btn.focus(); return; }
+  }
+}
+
+// C02: 单行 upsert——按任务 ID 定位行；rowSig 未变直接返回（零 DOM 写入）；
+// 单元格逐个比较后才写；ops 容器仅当 opsSig 变化才重建并需重新绑定事件。
+function upsertTaskRow(tbody, rows, t) {
+  const id = String(t.id);
+  const parts = _taskRowParts(t);
+  let tr = rows.get(id);
+  if (tr && tr.dataset.rowSig === parts.rowSig) return false;   // 无变化不改 DOM
+  if (!tr) {
+    tr = document.createElement('tr');
+    tr.dataset.taskId = id;
+    tr.innerHTML = '<td class="cell-name"></td>'
+      + '<td class="cell-status"><span class="dot"></span><span class="st-label"></span></td>'
+      + '<td class="cell-prog"></td>'
+      + '<td class="cell-ops"><div class="ops"></div></td>';
+    tbody.appendChild(tr);
+    rows.set(id, tr);
+  } else if (tr.dataset.status && tr.dataset.status !== t.status) {
+    announceTask(parts.bookLabel, parts.sl);
+  }
+  tr.dataset.status = t.status;   // R6: 状态色条/进度样式挂钩
+  tr.dataset.rowSig = parts.rowSig;
+  if (tr._nameHtml !== parts.nameHtml) {
+    tr.cells[0].innerHTML = parts.nameHtml;
+    tr._nameHtml = parts.nameHtml;
+  }
+  if (tr._stKey !== parts.stKey) {
+    const dot = tr.querySelector('.dot');
+    dot.className = 'dot ' + parts.sc;
+    dot.nextElementSibling.textContent = parts.sl;
+    tr._stKey = parts.stKey;
+  }
+  if (tr._progHtml !== parts.progHtml) {
+    tr.cells[2].innerHTML = parts.progHtml;
+    tr._progHtml = parts.progHtml;
+  }
+  if (tr.dataset.opsSig !== parts.opsSig) {
+    tr.dataset.opsSig = parts.opsSig;
+    tr.querySelector('.ops').innerHTML = parts.ops;
+    return true;   // ops 已重建 → 调用方需重新绑定按钮事件
+  }
+  return false;
+}
+
+// C02: 表格只做一次创建；此后每轮轮询仅做行级 upsert / 消失行移除 /
+// 顺序校正（insertBefore 移动已有节点而非重建），操作按钮节点生命周期稳定。
+function renderTasks(box, tasks) {
+  box.dataset.view = 'table';
+  let tbl = box.querySelector('table.task-table');
+  if (!tbl) {
+    box.innerHTML = '';
+    tbl = document.createElement('table');
+    tbl.className = 'task-table';
+    tbl.innerHTML = '<thead><tr><th>书籍</th><th>状态</th><th>进度</th><th>操作</th></tr></thead><tbody></tbody>';
+    box.appendChild(tbl);
+  }
+  const tbody = tbl.tBodies[0];
+  const rows = new Map();
+  for (const tr of tbody.children) rows.set(tr.dataset.taskId, tr);
+  const focused = captureFocus(tbody);
+  const keep = new Set();
+  let opsRebuilt = false;
+  for (const t of tasks) {
+    keep.add(String(t.id));
+    if (upsertTaskRow(tbody, rows, t)) opsRebuilt = true;
+  }
+  // 已消失的任务行移除（删除操作后行在此真正脱离 DOM）
+  for (const tr of Array.from(tbody.children)) {
+    if (!keep.has(tr.dataset.taskId)) tr.remove();
+  }
+  // 顺序校正：仅当实际顺序与接口顺序不一致时才移动节点
+  let cursor = tbody.firstElementChild;
+  for (const t of tasks) {
+    const tr = rows.get(String(t.id));
+    if (!tr) continue;
+    if (tr !== cursor) tbody.insertBefore(tr, cursor);
+    else cursor = cursor.nextElementSibling;
+  }
+  if (opsRebuilt) {
+    bindTaskButtons(box);
+    restoreFocus(tbody, focused);
+  }
+}
+
+// C02: 事件绑定与节点重建解耦——仅在 ops 重建后重绑；行级 busy 标记使
+// 有未完成操作的任务禁止重复提交，期间按钮节点不被替换、焦点不丢。
+function bindTaskButtons(box) {
+  const guard = fn => async function () {
+    const b = this;
+    const tr = b.closest('tr');
+    if (tr && tr.dataset.busy === '1') return;   // 该任务有未完成操作，忽略重复提交
+    if (tr) tr.dataset.busy = '1';
+    try { await fn(b); } finally { if (tr) tr.dataset.busy = ''; }
+  };
+  box.querySelectorAll('.pause-btn').forEach(b => b.onclick = guard(async () => {
+    // C01: 统一 requestJSON——失败提示可恢复错误，按钮 finally 恢复，不再假成功
+    try {
+      if (b.dataset.manga) {
+        await requestJSON('/api/manga/download/pause?source=' + b.dataset.src + '&cid=' + b.dataset.cid, {method: 'POST', button: b});
+        toast('已请求暂停（当前章节完成后）', 'ok');
+      } else {
+        await requestJSON('/api/tasks/' + b.dataset.id + '/pause', {method: 'POST', button: b});
+        toast('已请求暂停', 'ok');
+      }
+    } catch (e) { toast('⚠ 暂停失败: ' + e.message, 'error'); return; }
+    loadTasks();
+  }));
+  box.querySelectorAll('.stop-btn').forEach(b => b.onclick = guard(async () => {
+    if (b.dataset.id.startsWith('manga_')) {
+      // 漫画任务：标记取消（C01: 不再盲吞错误，失败如实提示）
+      try {
+        await requestJSON('/api/tasks/' + b.dataset.id + '/stop', {method: 'POST', button: b});
+      } catch (e) { toast('⚠ 停止失败: ' + e.message, 'error'); return; }
+      toast('已请求停止', 'ok'); loadTasks();
+      return;
+    }
+    if (!confirm('确定取消（停止）该任务？进度保留，可随时启动。')) return;
+    try {
+      await requestJSON('/api/tasks/' + b.dataset.id + '/stop', {method: 'POST', button: b});
+    } catch (e) { toast('⚠ 停止失败: ' + e.message, 'error'); return; }
+    toast('已请求停止', 'ok'); loadTasks();
+  }));
+  box.querySelectorAll('.resume-btn').forEach(b => b.onclick = guard(async () => {
+    // C01: 原实现失败后按钮永久禁用；requestJSON finally 保证恢复
+    try {
+      if (b.dataset.manga) {
+        // 漫画任务：继续下载（图片缓存命中=断点续传）
+        await requestJSON('/api/manga/download/resume?source=' + b.dataset.src + '&cid=' + b.dataset.cid, {method: 'POST', button: b});
+        toast('已开始继续下载', 'ok');
+      } else {
+        await requestJSON('/api/tasks/' + b.dataset.id + '/resume', {method: 'POST', button: b});
+        toast('已请求启动', 'ok');
+      }
+    } catch (e) { toast('⚠ 启动失败: ' + e.message, 'error'); return; }
+    loadTasks();
+  }));
+  box.querySelectorAll('.del-task-btn').forEach(b => b.onclick = guard(async () => {
+    if (b.dataset.id.startsWith('manga_')) {
+      try {
+        await requestJSON('/api/tasks/' + b.dataset.id, {method: 'DELETE', button: b});
+      } catch (e) { toast('⚠ 删除失败: ' + e.message, 'error'); return; }
+      toast('已删除', 'ok'); loadTasks();
+      return;
+    }
+    if (!confirm('删除该任务记录？（不删除已下载数据）')) return;
+    try {
+      await requestJSON('/api/tasks/' + b.dataset.id, {method: 'DELETE', button: b});
+    } catch (e) { toast('⚠ 删除失败: ' + e.message, 'error'); return; }
+    toast('已删除', 'ok'); loadTasks();
+  }));
+}
+
+// C02: 加载态用 aria-busy 表达（不再整表 innerHTML 替换）；已有表格时单次
+// 失败仅 toast 提示、保留现有行与焦点；首屏/无表格时才显示错误占位。
+async function loadTasks() {
+  const box = $('#tasks');
+  let tasks;
+  box.setAttribute('aria-busy', 'true');
+  try {
+    // C01: 统一走 requestJSON（超时/非 2xx/非 JSON 都抛错进 catch），
+    // 不再出现 500 返回 HTML 让 json() 抛无意义错误的情况
+    ({tasks} = await requestJSON('/api/tasks'));
+  } catch (e) {
+    box.removeAttribute('aria-busy');
+    if (box.querySelector('.task-table')) {
+      toast('⚠ 任务刷新失败: ' + e.message, 'error');
+    } else if (box.dataset.view !== 'error') {
+      box.dataset.view = 'error';
+      box.innerHTML = '<div class="empty"><div class="big">⚠️</div>任务列表加载失败<br>'
+        + '<span style="font-size:.8rem;color:var(--text-dim);">' + esc(e.message || '网络错误')
+        + '</span><br><button class="btn small" onclick="loadTasks()" style="margin-top:10px;">重试</button></div>';
+    }
+    return null;   // B03: 失败供轮询器指数退避
+  }
+  box.removeAttribute('aria-busy');
+  if (!tasks.length) {
+    if (box.dataset.view !== 'empty') {   // 空态幂等：已为空态不重复写 DOM
+      box.dataset.view = 'empty';
+      box.innerHTML = '<div class="empty"><div class="big">📋</div>暂无任务<br>在搜索页爬取一本书后，这里会显示任务</div>';
+    }
+    return tasks;
+  }
+  renderTasks(box, tasks);
+  return tasks;   // B03: 返回任务列表供轮询器按状态调速
+}
+async function pauseAll() {
+  // C01: 统一错误处理；不再把失败响应当成功提示
+  const b = $('#pause-all-btn');
+  let d;
+  try {
+    d = await requestJSON('/api/manga/download/pause-all', {method: 'POST', button: b});
+  } catch (e) {
+    $('#batch-msg').textContent = '⚠ 批量暂停失败: ' + e.message;
+    toast('⚠ 批量暂停失败: ' + e.message, 'error');
+    return;
+  }
+  $('#batch-msg').textContent = d.paused ? `已暂停 ${d.paused} 个漫画任务` : '没有进行中的漫画任务';
+  toast(d.paused ? `已暂停 ${d.paused} 个` : '没有进行中的任务', d.paused ? 'ok' : '');
+  loadTasks();
+}
+async function resumeAll() {
+  const b = $('#resume-all-btn');
+  let d;
+  try {
+    d = await requestJSON('/api/manga/download/resume-all', {method: 'POST', button: b});
+  } catch (e) {
+    $('#batch-msg').textContent = '⚠ 批量启动失败: ' + e.message;
+    toast('⚠ 批量启动失败: ' + e.message, 'error');
+    return;
+  }
+  $('#batch-msg').textContent = d.resumed ? `已启动 ${d.resumed} 个漫画任务` : '没有可恢复的漫画任务';
+  toast(d.resumed ? `已启动 ${d.resumed} 个` : '没有可恢复的任务', d.resumed ? 'ok' : '');
+  loadTasks();
+}
+// B03: 轮询治理——createPoller（common.js）：setTimeout 链（请求完成后才排
+// 下一次，慢请求不重叠）+ 页面隐藏停轮 + 失败指数退避。有运行/排队任务
+// 4s 高频；全部暂停/完成/停止后降至 30s 低频。🔄 按钮为手动刷新入口。
+const tasksPoller = createPoller(loadTasks, {
+  baseMs: 4000,
+  interval: (tasks) => (tasks && tasks.some(t => t.status === 'running' || t.status === 'queued')) ? 4000 : 30000,
+});
+document.getElementById('refresh-btn').onclick = () => tasksPoller.kick();
+</script>
+</body>
+</html>
