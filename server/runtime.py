@@ -296,7 +296,7 @@ class RuntimeController:
         try:
             if kind == "waitress":
                 from waitress.server import create_server as _create
-                srv = _create(wsgi_app, host=host, port=port or 0, threads=8,
+                srv = _create(wsgi_app, host=host, port=port or 0, threads=16,
                               clear_untrusted_proxy_headers=True)
                 self._host = host
                 self._port = getattr(srv, "effective_port", None) or port

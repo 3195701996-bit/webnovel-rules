@@ -215,7 +215,7 @@ class MobileRuntime:
         并在 status 里**如实标注**用的是哪一个（不假装是 Waitress）。"""
         try:
             from waitress.server import create_server
-            srv = create_server(wsgi_app, host=self.host, port=port, threads=8,
+            srv = create_server(wsgi_app, host=self.host, port=port, threads=16,
                                 clear_untrusted_proxy_headers=True)
             self.wsgi = "waitress"
         except ImportError:

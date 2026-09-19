@@ -880,7 +880,7 @@ fun MangaReaderScreen(
     // 预取慢速通道（2 并发、小内存缓存）：与可见页的交互通道（4 并发）隔离，
     // 后台预取永远抢不到可见页的引擎线程，也不会形成请求风暴。
     val prefetchLoader = remember(ep) {
-        engineImageLoader(ctx, ep, maxPerHost = 2, smallMemoryCache = true)
+        engineImageLoader(ctx, ep, maxPerHost = 3, smallMemoryCache = true)
     }
 
     /**

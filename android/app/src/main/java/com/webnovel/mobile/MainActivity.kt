@@ -580,15 +580,15 @@ internal fun clearImageCache(context: android.content.Context) {
 
 internal fun engineImageLoader(context: android.content.Context,
                               ep: EngineEndpoint?,
-                              maxPerHost: Int = 4,
+                              maxPerHost: Int = 6,
                               smallMemoryCache: Boolean = false): ImageLoader =
     ImageLoader.Builder(context)
         .networkObserverEnabled(false)
         .diskCache { imageDiskCache(context) }
-        // 双通道调速（引擎只有 8 个服务线程）：交互通道 4 并发（可见页/封面，多为
-        // 缓存命中、毫秒级返回），预取通道 2 并发（后台慢速跟进）。图片合计最多
-        // 占 6 个线程，永远给 API（搜索/进度保存/切章）留线程——上一版 16 并发
-        // 把线程占满、触发源站风控的教训。
+        // 双通道调速（引擎 waitress 16 线程）：交互通道 6 并发（可见页/封面，多为
+        // 缓存命中、毫秒级返回），预取通道 3 并发（后台慢速跟进）。图片合计最多
+        // 占 9 个线程，永远给 API（搜索/进度保存/切章）留足线程——并发上限按
+        // 源站耐受度封顶，不盲目拉满（16 并发触发风控的教训）。
         .apply {
             if (smallMemoryCache) {
                 memoryCache {

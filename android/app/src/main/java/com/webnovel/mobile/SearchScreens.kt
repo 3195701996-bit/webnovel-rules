@@ -631,6 +631,12 @@ internal fun MangaSearchScreen(
             msg = "请输入关键词"
             return
         }
+        // 禁漫码识别：6/7 位纯数字 = JM 漫画 id，直接打开对应详情页（不走搜索）
+        if (nextPage <= 1 && q.matches(Regex("\\d{6,7}")) &&
+            (sourceKey.isBlank() || sourceKey == "jm")) {
+            onOpen(Dest.MangaDetail("jm", q))
+            return
+        }
         if (selected?.status == "unsupported") {
             // 本机能力缺口：不发请求、如实说明缺什么（不把失败归成"源失效"）
             msg = "该源在当前安装包内不可用：${selected.reason.ifBlank { "缺少运行依赖" }}"
