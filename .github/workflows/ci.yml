@@ -34,7 +34,8 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements-dev.txt
+          # 核心运行时 + 漫画特性（Pillow/cryptography，测试会 import）+ 开发工具
+          pip install -r requirements.txt -r requirements-manga.txt -r requirements-dev.txt
 
       - name: Syntax check
         run: python -m compileall -q app.py server engine tests
