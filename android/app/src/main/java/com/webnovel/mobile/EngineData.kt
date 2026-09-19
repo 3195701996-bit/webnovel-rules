@@ -1002,6 +1002,71 @@ object EngineData {
     fun pageFromPos(pos: String): Int =
         Regex("P(\\d+)").find(pos)?.groupValues?.get(1)?.toIntOrNull()?.coerceAtLeast(1) ?: 1
 
+    /**
+     * 漫画下载任务状态（GET /api/manga/download/status?source&cid）：
+     * 详情页「下载中/排队中」标注、实时进度与暂停/继续的数据源。
+     */
+    data class MangaDlStatus(
+        val status: String,          // idle/queued/running/paused/stopped/error/done
+        val current: String,
+        val done: Int,
+        val total: Int,
+        val imagesDone: Int,
+        val imagesTotal: Int,
+        val speed: Double,
+        val eta: Double,
+        val stopReason: String,
+        val chapterIds: Set<String>,
+        val failedIds: Set<String>,
+    ) {
+        /** 进行中（排队或下载中） */
+        val active: Boolean get() = status == "queued" || status == "running"
+        /** 可继续（暂停/中断/失败） */
+        val resumable: Boolean get() =
+            status == "paused" || status == "stopped" || status == "error"
+        /** 有任务记录（详情页据此显示下载管理区；idle/done 不显示） */
+        val present: Boolean get() = status.isNotBlank() && status != "idle" && status != "done"
+
+        /** 进度文案：章级 + 图级（数据来自服务端，不自己估算） */
+        val progressLabel: String
+            get() {
+                val ch = if (total > 0) "$done/$total 话" else "准备中"
+                val img = if (imagesTotal > 0) " · $imagesDone/$imagesTotal 图" else ""
+                val spd = if (status == "running" && speed > 0)
+                    " · ${String.format(java.util.Locale.US, "%.1f", speed)} 图/秒" +
+                        if (eta > 0) " · 约 ${eta.toInt()} 秒" else ""
+                else ""
+                return ch + img + spd
+            }
+    }
+
+    fun mangaDlStatus(body: String): MangaDlStatus {
+        val o = runCatching { JSONObject(body) }.getOrNull() ?: return MangaDlStatus(
+            "idle", "", 0, 0, 0, 0, 0.0, 0.0, "", emptySet(), emptySet())
+        val ids = (o.optJSONArray("chapters")?.let { arr ->
+            (0 until arr.length()).mapNotNull { i ->
+                arr.optJSONObject(i)?.optString("id")?.takeIf { it.isNotBlank() }
+                    ?: arr.optString(i).takeIf { it.isNotBlank() }
+            }
+        } ?: emptyList()).toSet()
+        val failed = (o.optJSONArray("failed_ids")?.let { arr ->
+            (0 until arr.length()).map { arr.optString(it) }.filter { it.isNotBlank() }
+        } ?: emptyList()).toSet()
+        return MangaDlStatus(
+            status = o.optString("status", "idle"),
+            current = o.optString("current"),
+            done = o.optInt("done"),
+            total = o.optInt("total"),
+            imagesDone = o.optInt("images_done"),
+            imagesTotal = o.optInt("images_total"),
+            speed = o.optDouble("speed", 0.0),
+            eta = o.optDouble("eta", 0.0),
+            stopReason = o.optString("stop_reason"),
+            chapterIds = ids,
+            failedIds = failed,
+        )
+    }
+
     /** 阅读位置：漫画用 <章名> P<页码> 的约定（与网页端一致，两端可互相续读） */
     fun mangaPos(chapterName: String, page: Int): String = "${chapterName.ifBlank { "本章" }} P${page.coerceAtLeast(1)}"
 
@@ -1035,6 +1100,9 @@ object EngineData {
         val checkpointDone: Int = 0,
         val checkpointTotal: Int = 0,
         val checkpointFailed: Int = 0,
+        /** 图片级进度（漫画任务）：服务端 images_done/images_total */
+        val imagesDone: Int = 0,
+        val imagesTotal: Int = 0,
     ) {
         val isManga: Boolean get() = type == "manga"
         val pausable: Boolean get() = running || status == "paused"
@@ -1110,6 +1178,8 @@ object EngineData {
                 checkpointDone = o.optJSONObject("checkpoint")?.optInt("done") ?: 0,
                 checkpointTotal = o.optJSONObject("checkpoint")?.optInt("total") ?: 0,
                 checkpointFailed = o.optJSONObject("checkpoint")?.optInt("failed") ?: 0,
+                imagesDone = p.optInt("images_done"),
+                imagesTotal = p.optInt("images_total"),
             )
         }
     }

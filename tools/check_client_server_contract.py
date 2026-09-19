@@ -76,6 +76,8 @@ SKIPPED_PARSERS = {
     "mangaDetail": "需要漫画适配器在线（详情来自源站）；真机/联网核对，离线工具不假装覆盖",
     "mangaChapterPages": "同上（章节图片清单来自源站）",
     "mangaChapterUrls": "同上（/urls 批量接口的每页加载方式来自源站与本地磁盘实扫）",
+    "mangaDlStatus": "下载任务状态来自下载管理器实时内存态（进度随下载推进变化），"
+                     "离线夹具无法构造；真机/联网核对",
     "mangaUpdateCheck": "同上（漫画检查更新要打源站）",
     "novelUpdateCheck": "读的是 /check-update 轮询响应，已有 7 项 JVM 单测钉住文案与缺失数口径",
 }
@@ -91,6 +93,9 @@ CONDITIONAL = {
         "tasks[].progress.speed": "只有**漫画**任务的 progress 带速度（下载管理器写的）；"
                                   "小说任务由爬虫写，没有 speed",
         "tasks[].progress.eta": "同上（漫画下载才估剩余时间）",
+        "tasks[].progress.images_done": "只有**漫画**任务的 progress 带图片级进度"
+                                        "（下载管理器写的）；小说任务没有",
+        "tasks[].progress.images_total": "同上（漫画下载才统计图片总数）",
     },
     "/api/backup/scope": {
         "include[].what": "include/exclude 数组元素键；由 inc/exclude 变量间接读出，工具按元素层核对",

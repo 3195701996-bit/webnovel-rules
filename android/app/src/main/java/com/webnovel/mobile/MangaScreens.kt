@@ -37,6 +37,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -85,6 +86,69 @@ private fun mangaPath(source: String, comicId: String, suffix: String = ""): Str
 
 private fun coverUrl(port: Int, source: String, comicId: String): String =
     "http://127.0.0.1:$port" + mangaPath(source, comicId, "/cover")
+
+/**
+ * 单页图片地址解析（/urls 条目 + 重试代次 → 最终加载地址）：
+ * 本地直出/懒下载通道走本机引擎；源站 CDN 首次直连、失败后降级服务器代理。
+ * 阅读器与详情页预载共用，保证缓存键一致（秒开命中）。
+ */
+internal fun resolveMangaPageUrl(port: Int, source: String, comicId: String,
+                                 chapterId: String, entry: MangaPageEntry?,
+                                 index: Int, tick: Int): String = when {
+    entry == null ->
+        "http://127.0.0.1:$port" +
+            mangaPath(source, comicId, "/chapter/${Uri.encode(chapterId)}/img/$index") +
+            if (tick > 0) "?r=$tick" else ""
+    entry.url.startsWith("/api/") ->
+        "http://127.0.0.1:$port" + entry.url +
+            if (tick > 0) (if (entry.url.contains("?")) "&" else "?") + "r=$tick" else ""
+    tick == 0 -> entry.url
+    else ->
+        "http://127.0.0.1:$port" + mangaPath(source, comicId,
+            "/chapter/${Uri.encode(chapterId)}/proxy?u=${Uri.encode(entry.url)}")
+}
+
+/**
+ * 阅读秒开缓存：详情页预载的「详情」与「章节 /urls」（TTL 60s、上限 24 条）。
+ * 用户从详情页点「开始/继续阅读」时，阅读器免去两次串行回环往返（详情 + urls），
+ * 配合首屏页图片预载，实现章节秒开。
+ */
+internal object MangaReadCache {
+    private const val TTL_MS = 60_000L
+    private const val MAX_ENTRIES = 24
+    private val lock = Any()
+    private val details = LinkedHashMap<String, Pair<Long, MangaDetail>>()
+    private val urls = LinkedHashMap<String, Pair<Long, MangaChapterPages>>()
+
+    private fun <T> get(map: LinkedHashMap<String, Pair<Long, T>>, key: String): T? =
+        synchronized(lock) {
+            val e = map[key] ?: return null
+            if (System.currentTimeMillis() - e.first > TTL_MS) {
+                map.remove(key); null
+            } else e.second
+        }
+
+    private fun <T> put(map: LinkedHashMap<String, Pair<Long, T>>, key: String, v: T) {
+        synchronized(lock) {
+            map[key] = System.currentTimeMillis() to v
+            while (map.size > MAX_ENTRIES) {
+                map.remove(map.entries.first().key)
+            }
+        }
+    }
+
+    private fun dk(source: String, comicId: String) = "$source|$comicId"
+    private fun uk(source: String, comicId: String, chapterId: String) =
+        "$source|$comicId|$chapterId"
+
+    fun getDetail(source: String, comicId: String): MangaDetail? = get(details, dk(source, comicId))
+    fun putDetail(source: String, comicId: String, d: MangaDetail) =
+        put(details, dk(source, comicId), d)
+    fun getUrls(source: String, comicId: String, chapterId: String): MangaChapterPages? =
+        get(urls, uk(source, comicId, chapterId))
+    fun putUrls(source: String, comicId: String, chapterId: String, p: MangaChapterPages) =
+        put(urls, uk(source, comicId, chapterId), p)
+}
 
 /**
  * 源站封面地址 → 本机封面代理地址。
@@ -147,6 +211,30 @@ fun MangaDetailScreen(
         }
     }
 
+    /** 秒开预载：续读话的 /urls 与首屏页提前拉进缓存（点开始阅读零等待） */
+    fun prestage(d: MangaDetail, idx: Int) {
+        MangaReadCache.putDetail(source, comicId, d)
+        val ch = d.chapters.getOrNull(if (idx >= 0) idx else 0) ?: return
+        if (MangaReadCache.getUrls(source, comicId, ch.id) != null) return
+        scope.launch {
+            val r = gateway.httpText(ep.port,
+                mangaPath(source, comicId, "/chapter/${Uri.encode(ch.id)}/urls"))
+            val p = if (r.ok) EngineData.mangaChapterUrls(r.body) else null
+            if (p != null && p.count > 0) {
+                MangaReadCache.putUrls(source, comicId, ch.id, p)
+                // 首屏 3 页预载（缓存键与阅读器 pageRequest 一致 → 打开即命中）
+                for (i in 0..minOf(2, p.count - 1)) {
+                    val u = resolveMangaPageUrl(ep.port, d.source, d.comicId, ch.id,
+                        p.entries.getOrNull(i), i, 0)
+                    if (u.isNotBlank()) {
+                        loader.enqueue(coil.request.ImageRequest.Builder(ctx).data(u)
+                            .memoryCacheKey(u).diskCacheKey(u).build())
+                    }
+                }
+            }
+        }
+    }
+
     fun reload() {
         scope.launch {
             loading = true; error = null
@@ -176,11 +264,40 @@ fun MangaDetailScreen(
                     it.source == (d.source.ifBlank { source }) &&
                         it.comicId == (d.comicId.ifBlank { comicId })
                 }?.idx ?: -1
+                // 秒开预载：续读话 /urls + 首屏页提前进缓存
+                prestage(d, readIdx)
             }
             loading = false
         }
     }
     LaunchedEffect(source, comicId) { reload() }
+
+    // ── 下载任务状态（轮询）：章节「下载中/排队中」标注 + 实时进度 + 暂停/继续 ──
+    var dl by remember { mutableStateOf<EngineData.MangaDlStatus?>(null) }
+    var dlBusy by remember { mutableStateOf(false) }
+    var pollTick by remember { mutableIntStateOf(0) }
+
+    suspend fun fetchDl(): EngineData.MangaDlStatus {
+        val r = gateway.httpText(ep.port,
+            "/api/manga/download/status?source=${Uri.encode(source)}" +
+                "&cid=${Uri.encode(comicId)}")
+        return EngineData.mangaDlStatus(if (r.ok) r.body else "")
+    }
+
+    LaunchedEffect(source, comicId, pollTick) {
+        // 进入页面先取一次；任务进行中每 2s 轮询；转为非进行中（完成/暂停/失败）
+        // 时刷新详情（已下载集合是磁盘实扫，需重新取）后停止
+        while (true) {
+            val wasActive = dl?.active == true
+            val st = fetchDl()
+            dl = st
+            if (!st.active) {
+                if (wasActive || st.status == "done") reload()
+                break
+            }
+            kotlinx.coroutines.delay(2000)
+        }
+    }
 
     Scaffold(topBar = {
         TopAppBar(
@@ -359,6 +476,7 @@ fun MangaDetailScreen(
                                                 .toString()
                                             val r = gateway.httpPost(ep.port,
                                                 mangaPath(d.source, d.comicId, "/download"), body)
+                                            if (r.ok) pollTick++
                                             actionMsg = if (r.ok) {
                                                 "已创建下载任务：${missing.size} 话（见下载页）"
                                             } else {
@@ -406,6 +524,7 @@ fun MangaDetailScreen(
                                                     .toString()
                                                 val rr = gateway.httpPost(ep.port,
                                                     mangaPath(d.source, d.comicId, "/download"), body)
+                                                if (rr.ok) pollTick++
                                                 actionMsg = if (rr.ok)
                                                     "已创建下载任务：新话 ${missing.size} 个（见下载页）"
                                                 else "创建失败：HTTP ${rr.code}"
@@ -442,6 +561,7 @@ fun MangaDetailScreen(
                                                 .toString()
                                             val r = gateway.httpPost(ep.port,
                                                 mangaPath(d.source, d.comicId, "/download"), body)
+                                            if (r.ok) pollTick++
                                             actionMsg = if (r.ok) {
                                                 "已创建下载任务：选中的 ${ids.size} 话（见下载页）"
                                             } else {
@@ -470,6 +590,83 @@ fun MangaDetailScreen(
                                  color = MaterialTheme.colorScheme.primary,
                                  modifier = Modifier.padding(horizontal = WnSpace.lg))
                         }
+                        // 下载任务实时状态：章级/图级进度 + 暂停/继续（数据全部来自
+                        // 服务端轮询，不自己估算；停止原因照实显示）
+                        dl?.takeIf { it.present }?.let { st ->
+                            Spacer(Modifier.height(6.dp))
+                            WnHairlineCard(Modifier.padding(horizontal = WnSpace.lg)) {
+                                Column(Modifier.padding(WnSpace.md)) {
+                                    Text(
+                                        when (st.status) {
+                                            "running" -> "下载中：" + st.progressLabel
+                                            "queued" -> "下载排队中…"
+                                            "paused" -> "已暂停：" + st.progressLabel
+                                            "stopped" -> "已停止：" + st.progressLabel
+                                            "error" -> "下载失败：" + st.progressLabel
+                                            else -> st.progressLabel
+                                        },
+                                        style = MaterialTheme.typography.labelMedium,
+                                    )
+                                    if (st.imagesTotal > 0) {
+                                        Spacer(Modifier.height(WnSpace.xs))
+                                        LinearProgressIndicator(
+                                            progress = {
+                                                (st.imagesDone.toFloat() /
+                                                    st.imagesTotal.coerceAtLeast(1))
+                                                    .coerceIn(0f, 1f)
+                                            },
+                                            modifier = Modifier.fillMaxWidth(),
+                                        )
+                                    }
+                                    if (st.stopReason.isNotBlank()) {
+                                        Spacer(Modifier.height(WnSpace.xs))
+                                        Text(st.stopReason,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                    if (st.active || st.resumable) {
+                                        Spacer(Modifier.height(WnSpace.sm))
+                                        Row(horizontalArrangement =
+                                                Arrangement.spacedBy(WnSpace.sm)) {
+                                            if (st.active) {
+                                                OutlinedButton(
+                                                    enabled = !dlBusy,
+                                                    onClick = {
+                                                        dlBusy = true
+                                                        scope.launch {
+                                                            gateway.httpPost(ep.port,
+                                                                "/api/manga/download/pause" +
+                                                                    "?source=${Uri.encode(source)}" +
+                                                                    "&cid=${Uri.encode(comicId)}")
+                                                            dl = fetchDl()
+                                                            dlBusy = false
+                                                        }
+                                                    },
+                                                    modifier = Modifier.testTag("dl_pause"),
+                                                ) { Text("暂停下载") }
+                                            }
+                                            if (st.resumable) {
+                                                OutlinedButton(
+                                                    enabled = !dlBusy,
+                                                    onClick = {
+                                                        dlBusy = true
+                                                        scope.launch {
+                                                            gateway.httpPost(ep.port,
+                                                                "/api/manga/download/resume" +
+                                                                    "?source=${Uri.encode(source)}" +
+                                                                    "&cid=${Uri.encode(comicId)}")
+                                                            pollTick++
+                                                            dlBusy = false
+                                                        }
+                                                    },
+                                                    modifier = Modifier.testTag("dl_resume"),
+                                                ) { Text("继续下载") }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         Spacer(Modifier.height(8.dp))
                         HorizontalDivider()
                     }
@@ -485,6 +682,10 @@ fun MangaDetailScreen(
                             )
                         }
                         val downloaded = d.downloaded.contains(c.id)
+                        // 在下载任务里的话：有部分图片（被计为已下载）=「下载中」，
+                        // 还没轮到 =「排队中」——不能再笼统显示「已下载」
+                        val inDlTask = dl?.chapterIds?.contains(c.id) == true
+                        val dlActive = dl?.active == true
                         Row(
                             Modifier.fillMaxWidth()
                                 .clickable {
@@ -495,8 +696,8 @@ fun MangaDetailScreen(
                                 .padding(horizontal = WnSpace.lg, vertical = WnSpace.md),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            // 未下载的话：可勾选（点方框只切换勾选，不打开阅读）
-                            if (!downloaded) {
+                            // 未下载且不在进行中的任务里：可勾选（点方框只切换勾选，不打开阅读）
+                            if (!downloaded && !(dlActive && inDlTask)) {
                                 Checkbox(
                                     checked = selected.contains(c.id),
                                     onCheckedChange = { on ->
@@ -516,12 +717,17 @@ fun MangaDetailScreen(
                             Text(
                                 when {
                                     i == readIdx -> "在读"
+                                    dlActive && inDlTask && downloaded -> "下载中"
+                                    dlActive && inDlTask -> "排队中"
                                     downloaded -> "已下载"
                                     else -> "未下载"
                                 },
                                 style = MaterialTheme.typography.labelSmall,
                                 color = when {
                                     i == readIdx -> MaterialTheme.colorScheme.primary
+                                    dlActive && inDlTask && downloaded -> WnColors.accent
+                                    dlActive && inDlTask ->
+                                        MaterialTheme.colorScheme.onSurfaceVariant
                                     downloaded -> MaterialTheme.colorScheme.onSurfaceVariant
                                     else -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                                 },
@@ -656,25 +862,8 @@ fun MangaReaderScreen(
     fun pageRequest(src: String, cid: String, chapterId: String,
                     p: MangaChapterPages?, i: Int): ImageRequest {
         val tick = retryTick["$chapterId:$i"] ?: 0
-        val entry = p?.entries?.getOrNull(i)
-        // 每页加载方式与网页端完全同构（/urls 批量接口给出）：
-        //   · 本地直出 / 服务器懒下载通道（jm 等混淆源）→ 本机引擎路径；
-        //   · 源站 CDN → **客户端直连，不经引擎中转**（网页端"秒开"的关键路径；
-        //     APK 此前把每页都压回引擎逐页中转，是在线阅读慢的主因）；
-        //   · CDN 直连失败（tick>0）→ 降级服务器代理（带防盗链头），与网页端同一补救。
-        val url = when {
-            entry == null ->
-                "http://127.0.0.1:${ep.port}" +
-                    mangaPath(src, cid, "/chapter/${Uri.encode(chapterId)}/img/$i") +
-                    if (tick > 0) "?r=$tick" else ""
-            entry.url.startsWith("/api/") ->
-                "http://127.0.0.1:${ep.port}" + entry.url +
-                    if (tick > 0) (if (entry.url.contains("?")) "&" else "?") + "r=$tick" else ""
-            tick == 0 -> entry.url
-            else ->
-                "http://127.0.0.1:${ep.port}" + mangaPath(src, cid,
-                    "/chapter/${Uri.encode(chapterId)}/proxy?u=${Uri.encode(entry.url)}")
-        }
+        val url = resolveMangaPageUrl(ep.port, src, cid, chapterId,
+            p?.entries?.getOrNull(i), i, tick)
         return ImageRequest.Builder(ctx)
             .data(url)
             .memoryCacheKey(url)
@@ -736,8 +925,9 @@ fun MangaReaderScreen(
         // 本屏"进入"这一话：此后即使图片取不到，也允许把"读到这一话"记下来
         loadedChapterId = ch.id
         loading = true; error = null
-        val hit = cache[ch.id]
+        val hit = cache[ch.id] ?: MangaReadCache.getUrls(d.source, d.comicId, ch.id)
         if (hit != null) {
+            cache[ch.id] = hit
             pages = hit; chapterIndex = idx; loading = false
             return
         }
@@ -760,6 +950,7 @@ fun MangaReaderScreen(
                 if (r.body.isNotBlank()) " · ${r.body.take(120)}" else ""
         } else {
             cache[ch.id] = p
+            MangaReadCache.putUrls(d.source, d.comicId, ch.id, p)
             pages = p
             staleReason = if (p.staleProcessing) {
                 p.staleReason.ifBlank { "本章图片是旧版处理缓存，需联网重新获取" }
@@ -771,19 +962,28 @@ fun MangaReaderScreen(
     }
 
     LaunchedEffect(source, comicId) {
-        // 目录获取失败自动重试 1 次（对齐网页端：间歇风控/网络抖动常是
-        // "首次失败、手动再点才成功"，重试一次大多能自己缓过来）
-        var r = gateway.httpText(ep.port, mangaPath(source, comicId))
-        var d = if (r.ok) EngineData.mangaDetail(r.body) else null
-        if (d == null) {
-            delay(1500)
-            r = gateway.httpText(ep.port, mangaPath(source, comicId))
-            d = if (r.ok) EngineData.mangaDetail(r.body) else null
+        // 详情缓存命中（详情页预载）→ 零往返直接开章节；否则联网取，失败自动重试 1 次
+        var lastCode = 0
+        val cached = MangaReadCache.getDetail(source, comicId)
+        if (cached != null) {
+            detail = cached
+        } else {
+            var r = gateway.httpText(ep.port, mangaPath(source, comicId))
+            lastCode = r.code
+            var d = if (r.ok) EngineData.mangaDetail(r.body) else null
+            if (d == null) {
+                delay(1500)
+                r = gateway.httpText(ep.port, mangaPath(source, comicId))
+                lastCode = r.code
+                d = if (r.ok) EngineData.mangaDetail(r.body) else null
+            }
+            detail = d
+            if (d != null) MangaReadCache.putDetail(source, comicId, d)
         }
-        detail = d
+        val d = detail
         if (d == null) {
             loading = false
-            error = "读取目录失败：HTTP ${r.code}"
+            error = "读取目录失败" + if (lastCode != 0) "：HTTP $lastCode" else ""
             return@LaunchedEffect
         }
         // 0.64.0：起始话**在本屏自己的列表里按身份重新定位**。详情页与阅读器
@@ -988,6 +1188,7 @@ fun MangaReaderScreen(
                         val np = if (r.ok) EngineData.mangaChapterUrls(r.body) else null
                         if (np != null && np.count > 0) {
                             cache[nextCh.id] = np
+                            MangaReadCache.putUrls(d.source, d.comicId, nextCh.id, np)
                             for (i in 0..minOf(3, np.count - 1)) {
                                 runCatching {
                                     prefetchLoader.execute(

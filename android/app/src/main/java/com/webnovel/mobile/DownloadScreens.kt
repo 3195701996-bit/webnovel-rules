@@ -360,6 +360,13 @@ private fun TaskCard(
                      color = MaterialTheme.colorScheme.outline, maxLines = 1,
                      overflow = TextOverflow.Ellipsis)
             }
+            // 漫画任务的图片级进度（章级 x/y 之外的真实颗粒度；数据来自服务端）
+            if (t.isManga && t.imagesTotal > 0) {
+                Spacer(Modifier.height(2.dp))
+                Text("图片 ${t.imagesDone}/${t.imagesTotal}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.outline)
+            }
             // P1-1：为什么停了 —— 服务端给的结构化原因（用户停的 / 系统停的服务 /
             // 进程被结束 / 任务出错），不显示"未知状态"让用户猜
             if (t.showStopReason) {
