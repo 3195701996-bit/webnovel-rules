@@ -31,7 +31,12 @@ STOP_KIND_DONE = "done"
 
 MAX_PARALLEL = 2          # 全局并发下载任务数（可配置）
 SAVE_EVERY_CHAPTERS = 3   # 每 N 章持久化一次
-IMG_PARALLEL = 2          # 单任务图片并发下载数（同章内）
+IMG_PARALLEL = 2          # 单任务图片并发下载数（同章内，默认保守档）
+
+def _img_parallel_for(source):
+    """按源分级的图片并发：拷贝系图片走 CDN（非 API 通道，210 风控面不同），
+    实测可放宽到 4；jm 等对并发敏感的源保持保守 2。"""
+    return 4 if source in ("copymanga", "copymanga_web") else IMG_PARALLEL
 IMG_RETRY = 2             # 单图失败重试次数
 # 图片下载节流：拷贝漫画约 15 次/分钟/IP 软限制，超限触发 IP 级 210
 # 标记（TTL≈1h）→ 阅读也被拖垮。每图间隔约 3s，2 并发 ≈ 40 次/分，
@@ -738,7 +743,42 @@ class DownloadManager:
                 t0 = time.time()
                 last_speed_t = t0
                 last_done = 0
-                for ch in chapters:
+                # ── 章节流水线：下一话的图片清单与当前话的图片下载重叠 ──
+                # 此前每话串行"取清单(0.5-3s 源站往返) → 下图"，整本下来清单
+                # 往返占掉可观比例；预取单线程、复用同一条解析路径（含重试与
+                # copymanga 网页降级），取消/暂停时最多一个预取在飞。
+                import concurrent.futures as _cf2
+                _img_ex = _cf2.ThreadPoolExecutor(max_workers=1)
+                def _resolve_images(chid):
+                    for _try in range(2):
+                        try:
+                            if images_resolver is not None:
+                                return images_resolver(ad, source, comic_id, chid)
+                            return ad.images(comic_id, chid)
+                        except Exception:
+                            if _try < 1:
+                                time.sleep(2.0)
+                    return None
+                def _resolve_images_fb(chid):
+                    r = _resolve_images(chid)
+                    if r is None and source == "copymanga":
+                        try:
+                            _wa = self._web_fallback_adapter()
+                            if _wa:
+                                r = _wa.images(comic_id, chid)
+                                print(f"[manga-dl] {chid} 降级网页版取图成功",
+                                      flush=True)
+                        except Exception:
+                            pass
+                    return r
+                _pre = {"id": None, "fut": None}
+                def _kick(chid):
+                    if chid and _pre["id"] != chid:
+                        _pre["id"] = chid
+                        _pre["fut"] = _img_ex.submit(_resolve_images_fb, chid)
+                if chapters:
+                    _kick(chapters[0]["id"])
+                for _ci, ch in enumerate(chapters):
                     # R67: 统一检查点——主循环开头（含 current 预置名称）
                     _cp = self._checkpoint(key)
                     if _cp == "gone":
@@ -751,39 +791,17 @@ class DownloadManager:
                         if self._apply_checkpoint(key, _cp):
                             return
                     try:
-                        # 章节图片列表获取失败 → 瞬时重试 1 次（网络抖动/风控间歇）
-                        imgs = None
-                        for _try in range(2):
+                        # 图片清单：优先吃流水线预取（与上一话下载重叠完成），
+                        # 未命中则当场解析；拿到本话清单后立刻预取下一话
+                        if _pre["id"] == ch["id"] and _pre["fut"] is not None:
                             try:
-                                # P1-1: 优先走统一三级缓存（内存→磁盘→回源），
-                                # 与阅读通道共享图片列表，避免重复回源
-                                if images_resolver is not None:
-                                    imgs = images_resolver(ad, source, comic_id,
-                                                           ch["id"])
-                                else:
-                                    imgs = ad.images(comic_id, ch["id"])
-                                break
+                                imgs = _pre["fut"].result()
                             except Exception:
-                                # R67: 重试间隙也是暂停/取消检查点
-                                if _try < 1:
-                                    _cp2 = self._checkpoint(key)
-                                    if _cp2 and self._apply_checkpoint(key, _cp2):
-                                        return
-                                    time.sleep(2.0)
-                        # R37: 图片列表此前只在同一个适配器上重试——copymanga APP
-                        # 接口整体 210 风控时，重试多少次都失败（实测 44/44 章全灭）。
-                        # 章节列表已有 copymanga_web 降级，图片列表必须同样降级，
-                        # 否则任务在"能拿到章节、拿不到图片"的状态下必然全失败。
-                        if imgs is None and source == "copymanga":
-                            try:
-                                _wa = self._web_fallback_adapter()
-                                if _wa:
-                                    imgs = _wa.images(comic_id, ch["id"])
-                                    print(f"[manga-dl] {ch.get('name')} 降级网页版取图成功",
-                                          flush=True)
-                            except Exception as _we:
-                                print(f"[manga-dl] {ch.get('name')} 网页版取图失败: {_we}",
-                                      flush=True)
+                                imgs = None
+                        else:
+                            imgs = _resolve_images_fb(ch["id"])
+                        if _ci + 1 < len(chapters):
+                            _kick(chapters[_ci + 1]["id"])
                         if not imgs:
                             # 空列表同样是失败：源站风控/异常响应用"没有 images
                             # 字段"表达错误（jm 的 images() 就是
@@ -796,7 +814,7 @@ class DownloadManager:
                             t = self._tasks.get(key)
                             if t:
                                 t["images_total"] = images_total
-                        # 同章图片并发下载（IMG_PARALLEL）
+                        # 同章图片并发下载（按源分级：拷贝系 4，其它 2）
                         from concurrent.futures import ThreadPoolExecutor as _TPE
                         # ch["id"] 用默认参数固化：闭包引用循环变量时，
                         # 只要线程池改为跨章节复用就会把图片写到错误章节目录
@@ -828,7 +846,7 @@ class DownloadManager:
                             # 进度定期落盘（节流）：强杀/断电后恢复出来的进度不能是 0
                             self._save_throttled()
                             return 1
-                        with _TPE(max_workers=IMG_PARALLEL) as _pex:
+                        with _TPE(max_workers=_img_parallel_for(source)) as _pex:
                             _rets = list(_pex.map(_dl_one, list(enumerate(imgs))))
                         _done_here = sum(1 for r in _rets if r == 1)
                         _bad_here = sum(1 for r in _rets if r == -1)
@@ -1107,6 +1125,10 @@ class DownloadManager:
             # （递减曾放在 _mark_done："gone" 等 5 处直接 return 的分支
             # 不经 _mark_done → 泄漏；漏 2 次后 _active 卡满 MAX_PARALLEL，
             # 进程余生不再启动任何下载）
+            try:
+                _img_ex.shutdown(wait=False)      # 流水线预取线程（若在）
+            except Exception:
+                pass
             with self._lock:
                 self._worker_alive.discard(key)
                 self._threads.pop(key, None)
