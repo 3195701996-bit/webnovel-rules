@@ -191,3 +191,11 @@ venv/bin/python tools/probe_local_counts.py             # API 数字 vs 磁盘
   书源指向的站点与内容由用户自行选择与负责，请仅用于个人学习用途
 - 用户运行数据（书库、缓存、阅读进度、代理配置）全部留在本机 `data/`（不入库、不上传）
 - APK 不连电脑、不连云端，除目标书源站点外不与任何第三方服务器通信
+
+---
+
+## ☕ 赞赏支持
+
+如果这个项目对你有帮助，可以请作者喝杯咖啡：
+
+<img src="docs/images/wechat_reward_qrcode.png" alt="微信赞赏码" width="260">
