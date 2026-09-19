@@ -14,7 +14,6 @@ import re
 import threading
 import time
 import urllib.parse
-import urllib.parse
 import urllib.request
 from urllib.parse import urlsplit
 
@@ -887,47 +886,5 @@ class Jm(MangaAdapter):
             except Exception as e2:                    # noqa: BLE001
                 if not isinstance(e2, MangaError):
                     print(f"[jm] Android 兜底转码失败: {type(e2).__name__}: {e2}", flush=True)
-            print(f"[jm] 图片还原失败: {e}", flush=True)
-            raise MangaError(f"图片块还原失败（{type(e).__name__}: {e}）") from e
-
-    def _unused_legacy_unscramble(self, img_bytes, num):
-        try:
-            from PIL import Image
-            import io
-            im = Image.open(io.BytesIO(img_bytes))
-            w, h = im.size
-            block = h // num
-            rem = h % num
-            # 按 jm.js 分块（最后一块含 remainder）
-            blocks = []
-            for i in range(num):
-                start = i * block
-                end = start + block + (0 if i != num - 1 else rem)
-                blocks.append((start, end))
-            out = Image.new(im.mode, (w, h))
-            y = 0
-            for i in range(len(blocks) - 1, -1, -1):
-                s, e = blocks[i]
-                cur = e - s
-                out.paste(im.crop((0, s, w, e)), (0, y))
-                y += cur
-            buf = io.BytesIO()
-            out.save(buf, format=im.format or "JPEG")
-            return buf.getvalue()
-        except Exception as e:
-            # 0.63.0（用户反馈"禁漫加载过慢"实测定位）：**APK 里的 Pillow 不带 WebP**
-            # （设备实测 PIL.features.check('webp') = False），而禁漫只提供 WebP
-            # （同图 .jpg/.png 变体返回 502）→ 每张图都在这里解码失败。
-            # 桌面 Pillow 带 libwebp，所以桌面一切正常、只有手机会坏。
-            # 兜底：用 **Android 自带的解码器**（BitmapFactory 支持 WebP）做同样的
-            # 分块倒序——引擎逻辑仍在 Python 侧，不把解混淆搬到 UI 层。
-            try:
-                _out = _unscramble_via_android(img_bytes, num)
-                if _out:
-                    print("[jm] 图片用 Android 解码器还原成功（Pillow 缺 WebP 兜底）",
-                          flush=True)
-                    return _out
-            except Exception as e2:                    # noqa: BLE001
-                print(f"[jm] Android 兜底还原也失败: {type(e2).__name__}: {e2}", flush=True)
             print(f"[jm] 图片还原失败: {e}", flush=True)
             raise MangaError(f"图片块还原失败（{type(e).__name__}: {e}）") from e
