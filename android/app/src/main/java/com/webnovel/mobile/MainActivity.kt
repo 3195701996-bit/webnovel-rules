@@ -851,7 +851,7 @@ private fun ShelfHistMangaRow(h: EngineData.MangaHistory, ep: EngineEndpoint,
             horizontalArrangement = Arrangement.spacedBy(WnSpace.md),
         ) {
             WnCoverImage(
-                url = ep.origin + "/api/manga/${android.net.Uri.encode(h.source)}" +
+                url = ep.imageOrigin + "/api/manga/${android.net.Uri.encode(h.source)}" +
                     "/${android.net.Uri.encode(h.comicId)}/cover",
                 contentDescription = h.title,
                 loader = loader,
@@ -975,7 +975,7 @@ private fun MangaCard(m: MangaItem, ep: EngineEndpoint, loader: ImageLoader,
     val shape = RoundedCornerShape(10.dp)
     Column(Modifier.clip(shape).border(1.dp, WnColors.line, shape)
                .clickable { onClick() }) {
-        val url = if (m.coverPath.startsWith("/")) ep.origin + m.coverPath else m.coverPath
+        val url = if (m.coverPath.startsWith("/")) ep.imageOrigin + m.coverPath else m.coverPath
         if (url.isNotEmpty()) {
             AsyncImage(
                 model = ImageRequest.Builder(LocalContext.current).data(url).build(),

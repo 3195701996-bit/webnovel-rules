@@ -22,8 +22,11 @@ import kotlin.coroutines.resume
  * 引擎端点：本次启动的端口、会话凭据与实例标识。
  * 界面层只持有它，不直接关心服务启停/端口/认证（设计 §5 的"引擎网关"）。
  */
-data class EngineEndpoint(val instanceId: String, val port: Int, val token: String) {
+data class EngineEndpoint(val instanceId: String, val port: Int, val token: String,
+                          val imagePort: Int = port) {
     val origin: String get() = "http://127.0.0.1:$port"
+    /** 图片流量专用端口（与 API 隔离，图片回源占线也堵不到 API）；无独立端口时回退主端口 */
+    val imageOrigin: String get() = "http://127.0.0.1:$imagePort"
 }
 
 /** 引擎对外状态：界面据此渲染 loading / ready / error+重试，而不是黑屏或打印对象 */
@@ -124,7 +127,9 @@ class EngineGateway(private val appContext: Context) {
                     "实例标识不一致（binder=${fromBinder.take(8)} status=${instanceId.take(8)}）")
             }
             if (gen.get() != mine) return EngineState.Idle
-            val ep = EngineEndpoint(instanceId, port, token)
+            // 图片流量独立端口（双实例隔离；旧包没有该字段时回退主端口）
+            val imagePort = (started["image_port"] as? Number)?.toInt() ?: port
+            val ep = EngineEndpoint(instanceId, port, token, imagePort)
             endpoint = ep
             Log.i(TAG, "引擎就绪 port=$port instance=${instanceId.take(8)}")
             EngineState.Ready(ep)

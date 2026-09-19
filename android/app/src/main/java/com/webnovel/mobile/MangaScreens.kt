@@ -158,7 +158,7 @@ internal object MangaReadCache {
  */
 internal fun remoteCoverUrl(ep: EngineEndpoint, source: String, url: String): String =
     if (url.isBlank()) "" else
-        ep.origin + "/api/manga/cover?source=" + android.net.Uri.encode(source) +
+        ep.imageOrigin + "/api/manga/cover?source=" + android.net.Uri.encode(source) +
             "&url=" + android.net.Uri.encode(url)
 
 // ── 漫画详情页（原生）────────────────────────────────────────
@@ -224,7 +224,7 @@ fun MangaDetailScreen(
                 MangaReadCache.putUrls(source, comicId, ch.id, p)
                 // 首屏 3 页预载（缓存键与阅读器 pageRequest 一致 → 打开即命中）
                 for (i in 0..minOf(2, p.count - 1)) {
-                    val u = resolveMangaPageUrl(ep.port, d.source, d.comicId, ch.id,
+                    val u = resolveMangaPageUrl(ep.imagePort, d.source, d.comicId, ch.id,
                         p.entries.getOrNull(i), i, 0)
                     if (u.isNotBlank()) {
                         loader.enqueue(coil.request.ImageRequest.Builder(ctx).data(u)
@@ -323,7 +323,7 @@ fun MangaDetailScreen(
                         Row(Modifier.fillMaxWidth().padding(WnSpace.lg)) {
                             SubcomposeAsyncImage(
                                 model = ImageRequest.Builder(androidx.compose.ui.platform.LocalContext.current)
-                                    .data(coverUrl(ep.port, d.source, d.comicId))
+                                    .data(coverUrl(ep.imagePort, d.source, d.comicId))
                                     .crossfade(true)
                                     .build(),
                                 imageLoader = loader,
@@ -862,7 +862,7 @@ fun MangaReaderScreen(
     fun pageRequest(src: String, cid: String, chapterId: String,
                     p: MangaChapterPages?, i: Int): ImageRequest {
         val tick = retryTick["$chapterId:$i"] ?: 0
-        val url = resolveMangaPageUrl(ep.port, src, cid, chapterId,
+        val url = resolveMangaPageUrl(ep.imagePort, src, cid, chapterId,
             p?.entries?.getOrNull(i), i, tick)
         return ImageRequest.Builder(ctx)
             .data(url)

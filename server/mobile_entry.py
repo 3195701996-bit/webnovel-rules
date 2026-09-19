@@ -53,6 +53,9 @@ class MobileRuntime:
         self.last_error = ""
         self._server = None
         self._thread = None
+        self._image_server = None     # 图片流量专用 waitress 实例（双实例隔离）
+        self._image_thread = None
+        self.image_port = 0           # 图片通道端口（status 暴露给客户端）
         self._app = None
         self._runtime = None          # server.runtime.RuntimeController（真实控制器）
         self.wsgi = ""                # 实际使用的 WSGI 服务器（waitress|werkzeug）
@@ -211,13 +214,27 @@ class MobileRuntime:
     def _serve(self, wsgi_app, port):
         """发行目标用 Waitress（设计 §4/§5.2：不依赖 Flask 开发启动器）。
 
-        开发/测试环境可能没装 waitress，此时回落到 werkzeug 的线程化服务器，
-        并在 status 里**如实标注**用的是哪一个（不假装是 Waitress）。"""
+        **双实例隔离（2026-09-19，用户反馈"加载/下载时整个应用卡住"）**：
+        API 与图片流量各走一个 waitress——图片回源慢请求（最长 ~20s）会把
+        服务线程全部占住，API（进度保存/章节列表/导航）排在后面，表现为
+        整个应用无响应。隔离后图片最多堵满自己的 16 线程，API 8 线程保底
+        永远即时应答。
+        """
         try:
             from waitress.server import create_server
-            srv = create_server(wsgi_app, host=self.host, port=port, threads=16,
+            srv = create_server(wsgi_app, host=self.host, port=port, threads=8,
                                 clear_untrusted_proxy_headers=True)
             self.wsgi = "waitress"
+            # 图片专用实例（同一 WSGI 应用、同一会话凭据，仅端口独立）
+            self.image_port = self.pick_port()
+            self._image_server = create_server(
+                wsgi_app, host=self.host, port=self.image_port, threads=16,
+                clear_untrusted_proxy_headers=True)
+            self._image_thread = threading.Thread(
+                target=self._image_server.run, name="mobile-wsgi-img", daemon=True)
+            self._image_thread.start()
+            print("[mobile] 图片通道独立: 127.0.0.1:%d（API: %d）"
+                  % (self.image_port, port), flush=True)
         except ImportError:
             from werkzeug.serving import make_server
             srv = make_server(self.host, port, wsgi_app, threaded=True)
@@ -295,6 +312,7 @@ class MobileRuntime:
             "instance_id": self.instance_id,
             "host": self.host,
             "port": self.port,
+            "image_port": self.image_port,
             "pid": os.getpid(),
             "python": sys.version.split()[0],
             "wsgi": self.wsgi,
@@ -320,6 +338,13 @@ class MobileRuntime:
                     self._server.close()
                 elif hasattr(self._server, "shutdown"):
                     self._server.shutdown()
+            if self._image_server is not None:
+                try:
+                    self._image_server.close()
+                except Exception:
+                    pass
+            if self._image_thread is not None:
+                self._image_thread.join(timeout=3)
             if self._thread is not None:
                 self._thread.join(timeout=5)
         except Exception as e:
@@ -327,6 +352,9 @@ class MobileRuntime:
         finally:
             self._server = None
             self._thread = None
+            self._image_server = None
+            self._image_thread = None
+            self.image_port = 0
             self.started_at = 0.0
             self.state = STATE_STOPPED
             try:
