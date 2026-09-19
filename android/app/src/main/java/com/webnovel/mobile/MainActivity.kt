@@ -390,8 +390,10 @@ private fun HomeScaffold(
                     is Dest.NovelSearch -> NovelSearchScreen(gateway, ready, push, onBack = pop)
                     is Dest.MangaSearch -> MangaSearchScreen(gateway, ready, loader, push,
                         onBack = pop,
-                        // 从单源页"在此源搜索"进来时带上源/排序；"全部源"进来时为空
-                        presetSource = top.sourceKey, presetOrder = top.order)
+                        // 从单源页"在此源搜索"进来时带上源/排序；"全部源"进来时为空；
+                        // 详情页点作者/标签进来时带上预设关键词（搜索栏自动填入）
+                        presetSource = top.sourceKey, presetOrder = top.order,
+                        presetKeyword = top.presetKeyword)
                     is Dest.Sources -> BookSourceScreen(gateway, ready, onBack = pop)
                     Dest.Storage -> StorageScreen(gateway, ready, onBack = pop)
                     is Dest.Backup -> BackupScreen(gateway, ready,
