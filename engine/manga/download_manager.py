@@ -31,12 +31,15 @@ STOP_KIND_DONE = "done"
 
 MAX_PARALLEL = 2          # 全局并发下载任务数（可配置）
 SAVE_EVERY_CHAPTERS = 3   # 每 N 章持久化一次
-IMG_PARALLEL = 2          # 单任务图片并发下载数（同章内）
-IMG_RETRY = 2             # 单图失败重试次数
-# 图片下载节流：拷贝漫画约 15 次/分钟/IP 软限制，超限触发 IP 级 210
-# 标记（TTL≈1h）→ 阅读也被拖垮。每图间隔约 3s，2 并发 ≈ 40 次/分，
-# 保持在安全区间，实现"边下载边看"。
-IMG_MIN_INTERVAL = 3.0    # 每张图最小间隔秒（同源内）
+# 图片并发按源分级（2026-09-16 实测：jm CDN 对并行是真的并行，阅读预热 8 路
+# 长期无恙；jm 下载取 6）。拷贝漫画有 IP 级 210 软限制前科 → 单独保守档 4。
+IMG_PARALLEL = 6          # 单任务图片并发下载数（同章内，默认档）
+def _img_parallel_for(source):
+    return 4 if source in ("copymanga", "copymanga_web") else IMG_PARALLEL
+# 图片下载节流（仅拷贝）：原 3s/图（持锁睡觉，20 图一话至少 60s，是"下载过慢"
+# 主因）。图片走 CDN 而非 API 通道；1s/图 = 60 次/分，较原 40 次/分仅小幅上调，
+# 仍远低于阅读通道的突发并发。
+IMG_MIN_INTERVAL = 1.0    # 拷贝下载每张图最小间隔秒（其它源不节流）
 # P1-1: 章节图片列表解析钩子（server/state.py 启动时注入 _get_chapter_images，
 # 下载 worker 走与阅读通道统一的三级缓存；None 时直连适配器，保持 engine 独立可用）
 images_resolver = None
@@ -841,7 +844,7 @@ class DownloadManager:
                             # 进度定期落盘（节流）：强杀/断电后恢复出来的进度不能是 0
                             self._save_throttled()
                             return 1
-                        with _TPE(max_workers=IMG_PARALLEL) as _pex:
+                        with _TPE(max_workers=_img_parallel_for(source)) as _pex:
                             _rets = list(_pex.map(_dl_one, list(enumerate(imgs))))
                         _done_here = sum(1 for r in _rets if r == 1)
                         _bad_here = sum(1 for r in _rets if r == -1)

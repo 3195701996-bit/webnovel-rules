@@ -741,6 +741,13 @@ def api_manga_search_stream():
             _manga_search_cached(_cache_key, lambda: _payload)
         except Exception:
             pass
+        # 后台预热前几条的**详情**（与非流式端点同一机制，限 3 条、单飞、
+        # 有缓存跳过）：此前只有非流式路由预热，流式路由（网页/App 首搜都走这里）
+        # 不预热 → 搜完点详情是冷回源，"详情加载慢"的直接来源。
+        try:
+            _warm_search_details(results, source if source else "", limit=3)
+        except Exception:
+            pass
         # 最终事件：groups 为空（增量已在进度事件中推完），只带汇总字段
         yield "data: " + json.dumps({
             "groups": [],
