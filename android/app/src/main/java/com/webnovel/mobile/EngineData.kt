@@ -514,12 +514,14 @@ data class MangaDetail(
     val intro: String,
     val tags: List<String>,
     val chapters: List<MangaChapter>,
+    /** 整卷条目（copymanga 系详情返回 volumes；可下载单元，详情页排在话列表前面） */
+    val volumes: List<MangaChapter> = emptyList(),
     val downloaded: Set<String>,
     val sourceName: String,
     /** 续读信息（服务端解析；没有阅读记录时为 null） */
     val resume: MangaResume? = null,
 ) {
-    val downloadedCount: Int get() = chapters.count { downloaded.contains(it.id) }
+    val downloadedCount: Int get() = (volumes + chapters).count { downloaded.contains(it.id) }
     /** 上次读到的章名（记录里的原话），用于向用户解释"要打开的是哪一话" */
     val resumeRecordLabel: String get() = resume?.recordLabel.orEmpty()
 
@@ -901,6 +903,17 @@ object EngineData {
         val downloaded = (0 until (dl?.length() ?: 0)).mapNotNull { dl?.optString(it) }.toSet()
         val tagsArr = o.optJSONArray("tags")
         val tags = (0 until (tagsArr?.length() ?: 0)).mapNotNull { tagsArr?.optString(it) }
+        // 整卷条目（copymanga 系）：与话同构的 id/name/group
+        val volArr = o.optJSONArray("volumes")
+        val volumes = (0 until (volArr?.length() ?: 0)).mapNotNull { i ->
+            volArr?.optJSONObject(i)?.let { c ->
+                MangaChapter(
+                    id = c.optString("id"),
+                    name = c.optString("name"),
+                    group = c.optString("group"),
+                )
+            }
+        }
         return MangaDetail(
             source = o.optString("source"),
             // 0.64.0：**身份一律取 `comic_id`**（服务端四条返回路径都已兜底给出），
@@ -914,6 +927,7 @@ object EngineData {
             intro = o.optString("intro").ifBlank { o.optString("desc") },
             tags = tags,
             chapters = chapters,
+            volumes = volumes,
             downloaded = downloaded,
             sourceName = o.optString("source_name"),
             resume = o.optJSONObject("resume")?.let { r ->
@@ -1027,16 +1041,17 @@ object EngineData {
         /** 有任务记录（详情页据此显示下载管理区；idle/done 不显示） */
         val present: Boolean get() = status.isNotBlank() && status != "idle" && status != "done"
 
-        /** 进度文案：章级 + 图级（数据来自服务端，不自己估算） */
+        /** 进度文案：章级 + 图级 + 失败数（数据来自服务端，不自己估算） */
         val progressLabel: String
             get() {
                 val ch = if (total > 0) "$done/$total 话" else "准备中"
                 val img = if (imagesTotal > 0) " · $imagesDone/$imagesTotal 图" else ""
+                val fail = if (failedIds.isNotEmpty()) " · 失败 ${failedIds.size} 话" else ""
                 val spd = if (status == "running" && speed > 0)
                     " · ${String.format(java.util.Locale.US, "%.1f", speed)} 图/秒" +
                         if (eta > 0) " · 约 ${eta.toInt()} 秒" else ""
                 else ""
-                return ch + img + spd
+                return ch + img + fail + spd
             }
     }
 

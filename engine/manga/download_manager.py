@@ -738,6 +738,7 @@ class DownloadManager:
                 done = 0
                 images_done = 0
                 images_total = 0
+                _zero_streak = 0   # 连续零字节章节计数（连续全灭自动暂停用）
                 t0 = time.time()
                 last_speed_t = t0
                 last_done = 0
@@ -891,6 +892,35 @@ class DownloadManager:
                                     t.setdefault("failed_chapters", 0)
                                     t["failed_chapters"] += 1
                                     t.setdefault("failed_ids", []).append(_ch_id)
+                        # 全灭章节（一张没下到且不是用户暂停）：一律如实记失败——
+                        # 风控拦截页会走 BadImageError（"坏页"不计失败）通道漏网，
+                        # 表现为"话数在涨、页数不变"的假进度（实测：done 23/87 而
+                        # 磁盘只有 7 话）。零字节 = 没下到，无论错误类型。
+                        # （与上方"有真实失败"分支互斥，不重复计数）
+                        if (_done_here == 0 and _skip_here == 0 and _bad_here
+                                and _done_here + _bad_here >= len(imgs)):
+                            with self._lock:
+                                t = self._tasks.get(key)
+                                if t:
+                                    t.setdefault("failed_chapters", 0)
+                                    t["failed_chapters"] += 1
+                                    t.setdefault("failed_ids", []).append(_ch_id)
+                        # 连续全灭自动暂停（节流阀）：连续 3 话零字节说明源站大概率
+                        # 已风控本 IP，继续跑只会把 87 话全烧成"假完成"。
+                        # 暂停并如实写明原因，已下载的保留，恢复后继续。
+                        _zero_streak = (_zero_streak + 1
+                                        if _done_here == 0 and _skip_here == 0 else 0)
+                        if _zero_streak >= 3:
+                            _msg = (f"连续 {_zero_streak} 话一张图都没取到"
+                                    "（源站可能在风控/限流本机 IP），已自动暂停；"
+                                    "已下载的图片保留，稍后点「继续」接着下")
+                            print(f"[manga-dl] {key} {_msg}", flush=True)
+                            self.pause(key)
+                            with self._lock:
+                                _t = self._tasks.get(key)
+                                if _t:
+                                    _t["stop_reason"] = _msg
+                            # 等下一话开头的统一检查点退出
                         # 速度/ETA（每次章节后更新，不依赖条件）
                         now = time.time()
                         dt = now - last_speed_t

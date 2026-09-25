@@ -2239,6 +2239,64 @@ def api_manga_library():
     return jsonify({"comics": out, "rev": manga_library_revision()})
 
 
+@bp.route("/api/manga/<source>/<comic_id>/chapters/delete", methods=["POST"])
+def api_manga_chapters_delete(source, comic_id):
+    """按章节删除已下载内容（用户明确点名才删；整部作品移除走 library DELETE）。
+
+    护栏：
+    - 该作品有进行中/排队中的下载任务 → 409 拒绝（避免删到正在写的文件，
+      与 storage.clear 的并发护栏同一口径）；
+    - 章节 id 逐一经 _safe_chapter_dir 校验，路径必须落在本作品下载目录内；
+    - 删除后请求后台重扫书库统计快照（B03 同一机制），并如实返回删除数与释放字节。
+    """
+    source = _safe_seg(source, "漫画源")
+    comic_id = _safe_comic_id(source, comic_id)
+    body = request.get_json(silent=True) or {}
+    ids = []
+    for x in (body.get("chapter_ids") or []):
+        x = str(x or "").strip()
+        if x:
+            ids.append(x)
+    if not ids:
+        return _err_json("缺少 chapter_ids")
+    _st = _manga_dl.status(_manga_dl_key(source, comic_id))
+    if _st.get("status") in ("running", "queued"):
+        return _err_json("该作品正在下载中，等任务结束（或先暂停）再删除章节", 409)
+    import shutil
+    from engine.manga.downloader import _safe_chapter_dir
+    base = os.path.realpath(os.path.join(MANGA_DOWNLOADS_DIR, source, comic_id))
+    deleted, missing, freed = 0, 0, 0
+    for cid_ch in ids:
+        try:
+            safe = _safe_chapter_dir(cid_ch)
+        except Exception:
+            missing += 1
+            continue
+        target = os.path.realpath(os.path.join(base, safe))
+        if not target.startswith(base + os.sep):
+            missing += 1
+            continue
+        if not os.path.isdir(target):
+            missing += 1
+            continue
+        try:
+            for _root, _dirs, _files in os.walk(target):
+                for _f in _files:
+                    try:
+                        freed += os.path.getsize(os.path.join(_root, _f))
+                    except OSError:
+                        pass
+            shutil.rmtree(target)
+            deleted += 1
+        except OSError:
+            missing += 1
+    if deleted:
+        # B03: 统计快照后台重扫（请求路径不做磁盘 IO 的不变式不破）
+        _manga_stats_request(source, comic_id)
+    return jsonify({"ok": True, "deleted": deleted, "missing": missing,
+                    "freed_bytes": freed})
+
+
 @bp.route("/api/manga/library/<source>/<comic_id>", methods=["DELETE"])
 def api_manga_library_delete(source, comic_id):
 

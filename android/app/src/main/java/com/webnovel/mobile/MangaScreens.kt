@@ -184,6 +184,11 @@ fun MangaDetailScreen(
     var actionMsg by remember { mutableStateOf<String?>(null) }
     // 选择下载：只允许勾选**未下载**的话（已下载的不需要再下）
     var selected by remember { mutableStateOf<Set<String>>(emptySet()) }
+    // 删除管理：开启后已下载的话/整卷可勾选删除（与下载勾选互斥）
+    var manageMode by remember { mutableStateOf(false) }
+    var deleteSel by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var confirmDelete by remember { mutableStateOf(false) }
+    var deleting by remember { mutableStateOf(false) }
     var checking by remember { mutableStateOf(false) }
     var update by remember { mutableStateOf<MangaUpdateCheck?>(null) }
     var exporting by remember { mutableStateOf(false) }
@@ -385,7 +390,11 @@ fun MangaDetailScreen(
                                 }
                                 Spacer(Modifier.height(WnSpace.xs))
                                 Text(
-                                    "共 ${d.chapters.size} 话 · 已下载 ${d.downloadedCount} 话",
+                                    buildString {
+                                        append("共 ${d.chapters.size} 话")
+                                        if (d.volumes.isNotEmpty()) append(" + ${d.volumes.size} 整卷")
+                                        append(" · 已下载 ${d.downloadedCount}")
+                                    },
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
@@ -479,7 +488,8 @@ fun MangaDetailScreen(
                             ) { Text(if (exporting) "导出中…" else "导出 ZIP（${d.downloadedCount} 话）") }
                             OutlinedButton(
                                 onClick = {
-                                    val missing = d.chapters.filterNot { d.downloaded.contains(it.id) }
+                                    val missing = (d.volumes + d.chapters)
+                                        .filterNot { d.downloaded.contains(it.id) }
                                     if (missing.isEmpty()) {
                                         actionMsg = "所有话都已下载"
                                     } else {
@@ -502,7 +512,7 @@ fun MangaDetailScreen(
                                         }
                                     }
                                 },
-                                enabled = d.downloadedCount < d.chapters.size,
+                                enabled = d.downloadedCount < (d.volumes + d.chapters).size,
                                 modifier = Modifier.weight(1f),
                             ) { Text("下载未下载话") }
                         }
@@ -601,6 +611,36 @@ fun MangaDetailScreen(
                                 modifier = Modifier.weight(1f),
                             ) { Text("从书库移除") }
                         }
+                        // 删除管理入口：已下载的话/整卷可勾选后删除（用户明确点名才删）
+                        if (d.downloadedCount > 0) {
+                            Spacer(Modifier.height(6.dp))
+                            Row(Modifier.fillMaxWidth().padding(horizontal = WnSpace.lg),
+                                horizontalArrangement = Arrangement.spacedBy(WnSpace.sm)) {
+                                OutlinedButton(
+                                    onClick = {
+                                        manageMode = !manageMode
+                                        if (!manageMode) deleteSel = emptySet()
+                                    },
+                                    modifier = Modifier.weight(1f)
+                                        .testTag("manage_downloaded"),
+                                ) {
+                                    Text(if (manageMode) "完成管理" else "管理已下载（选择删除）")
+                                }
+                                if (manageMode) {
+                                    OutlinedButton(
+                                        onClick = { if (deleteSel.isNotEmpty())
+                                            confirmDelete = true },
+                                        enabled = deleteSel.isNotEmpty() && !deleting,
+                                        modifier = Modifier.weight(1f)
+                                            .testTag("delete_selected"),
+                                    ) {
+                                        Text(if (deleting) "删除中…"
+                                            else "删除选中（${deleteSel.size}）",
+                                            color = WnColors.danger)
+                                    }
+                                }
+                            }
+                        }
                         actionMsg?.let {
                             Spacer(Modifier.height(6.dp))
                             Text(it, style = MaterialTheme.typography.labelMedium,
@@ -687,6 +727,81 @@ fun MangaDetailScreen(
                         Spacer(Modifier.height(8.dp))
                         HorizontalDivider()
                     }
+                    // 整卷排在最前面：是可下载单元（勾选后随下载任务走）；
+                    // 阅读器按话打开，整卷行点击 = 勾选，不进阅读器
+                    if (d.volumes.isNotEmpty()) {
+                        item {
+                            Text("整卷（${d.volumes.size}）",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(start = WnSpace.lg,
+                                    top = WnSpace.md))
+                        }
+                        itemsIndexed(d.volumes, key = { _, v -> "vol_" + v.id }) { vi, v ->
+                            val vDownloaded = d.downloaded.contains(v.id)
+                            val vInDl = dl?.chapterIds?.contains(v.id) == true
+                            val vActive = dl?.active == true
+                            val vCheckable = if (manageMode) vDownloaded
+                                else !vDownloaded && !(vActive && vInDl)
+                            Row(
+                                Modifier.fillMaxWidth()
+                                    .clickable {
+                                        if (manageMode) {
+                                            if (vDownloaded) deleteSel =
+                                                if (deleteSel.contains(v.id))
+                                                    deleteSel - v.id else deleteSel + v.id
+                                        } else if (vCheckable) {
+                                            selected = if (selected.contains(v.id))
+                                                selected - v.id else selected + v.id
+                                        }
+                                    }
+                                    .padding(horizontal = WnSpace.lg,
+                                        vertical = WnSpace.md),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                if (vCheckable) {
+                                    Checkbox(
+                                        checked = if (manageMode) deleteSel.contains(v.id)
+                                                  else selected.contains(v.id),
+                                        onCheckedChange = { on ->
+                                            if (manageMode) deleteSel =
+                                                if (on) deleteSel + v.id else deleteSel - v.id
+                                            else selected =
+                                                if (on) selected + v.id else selected - v.id
+                                        },
+                                        modifier = Modifier.testTag("pick_${v.id}"),
+                                    )
+                                } else {
+                                    Spacer(Modifier.width(48.dp))
+                                }
+                                Text("卷${vi + 1}",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.width(40.dp))
+                                Text(v.label, style = MaterialTheme.typography.bodyMedium,
+                                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f))
+                                Text(
+                                    when {
+                                        vActive && vInDl && vDownloaded -> "下载中"
+                                        vActive && vInDl -> "排队中"
+                                        vDownloaded -> "已下载"
+                                        else -> "整卷"
+                                    },
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = when {
+                                        vActive && vInDl && vDownloaded -> WnColors.accent
+                                        vActive && vInDl ->
+                                            MaterialTheme.colorScheme.onSurfaceVariant
+                                        vDownloaded ->
+                                            MaterialTheme.colorScheme.onSurfaceVariant
+                                        else -> WnColors.accent
+                                    },
+                                )
+                            }
+                            HorizontalDivider(color = WnColors.line)
+                        }
+                    }
                     itemsIndexed(d.chapters) { i, c ->
                         // 卷/话组标题：只在分组变化处显示一次（服务端返回 group 字段）
                         if (c.group.isNotBlank() &&
@@ -703,22 +818,36 @@ fun MangaDetailScreen(
                         // 还没轮到 =「排队中」——不能再笼统显示「已下载」
                         val inDlTask = dl?.chapterIds?.contains(c.id) == true
                         val dlActive = dl?.active == true
+                        // 管理模式：已下载的可勾选删除；普通模式：未下载的可勾选下载
+                        val rowCheckable = if (manageMode) downloaded
+                            else !downloaded && !(dlActive && inDlTask)
                         Row(
                             Modifier.fillMaxWidth()
                                 .clickable {
-                                    // 点行=打开阅读；未下载的话同时用于勾选下载。
-                                    // 这是"用户明确选了这一话"：不算近似落点，页码从 1 开始
-                                    onRead(i, 1, true, "", c.id, c.label)
+                                    if (manageMode) {
+                                        // 管理模式：点行=勾选删除（不误进阅读器）
+                                        if (downloaded) deleteSel =
+                                            if (deleteSel.contains(c.id))
+                                                deleteSel - c.id else deleteSel + c.id
+                                    } else {
+                                        // 点行=打开阅读；未下载的话同时用于勾选下载。
+                                        // 这是"用户明确选了这一话"：不算近似落点，页码从 1 开始
+                                        onRead(i, 1, true, "", c.id, c.label)
+                                    }
                                 }
                                 .padding(horizontal = WnSpace.lg, vertical = WnSpace.md),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             // 未下载且不在进行中的任务里：可勾选（点方框只切换勾选，不打开阅读）
-                            if (!downloaded && !(dlActive && inDlTask)) {
+                            if (rowCheckable) {
                                 Checkbox(
-                                    checked = selected.contains(c.id),
+                                    checked = if (manageMode) deleteSel.contains(c.id)
+                                              else selected.contains(c.id),
                                     onCheckedChange = { on ->
-                                        selected = if (on) selected + c.id else selected - c.id
+                                        if (manageMode) deleteSel =
+                                            if (on) deleteSel + c.id else deleteSel - c.id
+                                        else selected =
+                                            if (on) selected + c.id else selected - c.id
                                     },
                                     modifier = Modifier.testTag("pick_${c.id}"),
                                 )
@@ -756,6 +885,51 @@ fun MangaDetailScreen(
             }
         }
     }
+    // 删除选中话/整卷的确认弹窗：写清删什么、不删什么
+    if (confirmDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = { Text("删除选中的已下载内容？") },
+            text = {
+                Text("将删除选中的 ${deleteSel.size} 个话/整卷的已下载图片" +
+                    "（本机文件删除后不可恢复；阅读进度与书库记录保留）。" +
+                    "删除后这些章节需要联网才能重新下载。")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        confirmDelete = false
+                        deleting = true
+                        scope.launch {
+                            val body = org.json.JSONObject()
+                                .put("chapter_ids",
+                                    org.json.JSONArray(deleteSel.toList()))
+                                .toString()
+                            val r = gateway.httpPost(ep.port,
+                                mangaPath(source, comicId, "/chapters/delete"), body)
+                            val o = runCatching { org.json.JSONObject(r.body) }.getOrNull()
+                            actionMsg = if (r.ok && o?.optBoolean("ok") == true) {
+                                "已删除 ${o.optInt("deleted")} 项，释放 " +
+                                    Export.human(o.optLong("freed_bytes", 0))
+                            } else {
+                                "删除失败：HTTP ${r.code} · " +
+                                    (o?.optString("error")?.take(80) ?: r.body.take(80))
+                            }
+                            deleteSel = emptySet()
+                            manageMode = false
+                            deleting = false
+                            reload()
+                        }
+                    },
+                    modifier = Modifier.testTag("delete_confirm"),
+                ) { Text("删除", color = WnColors.danger) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDelete = false }) { Text("取消") }
+            },
+        )
+    }
+
     if (confirmRemove) {
         AlertDialog(
             onDismissRequest = { confirmRemove = false },
