@@ -242,23 +242,56 @@ def _fetch_image_checked_requests(url, headers, timeout=20):
     """
     sess = _requests_session()
     cur = url
+    # 移动端（WR_PROFILE=mobile）：VPN/代理 App 的 fake-ip（198.18/15 被标准库
+    # 判为私网）与 DNS 污染会让"解析校验 + IP 钉绑"误杀正常目标——而系统网络栈
+    # （Coil/OkHttp 按域名交给 VPN 远端解析）完全正常。这正是"下载全灭但在线
+    # 阅读秒开"的机制（2026-09-25 实测定位）。手机端威胁模型没有"局域网共享
+    # 服务"，钉绑/解析失败时退回主机名直连（证书校验与逐跳重定向限制保留），
+    # 并如实记日志；桌面严格语义一字不动。
+    _mobile = (os.environ.get("WR_PROFILE") or "").strip().lower() == "mobile"
     for hop in range(MAX_REDIRECTS + 1):
         ok, why = url_is_public_resolved(cur)
         if not ok:
-            where = "请求目标" if hop == 0 else f"第{hop}跳重定向"
-            raise SSRFBlocked(f"{where}被拒绝: {why} ({cur[:120]})")
+            if not _mobile:
+                where = "请求目标" if hop == 0 else f"第{hop}跳重定向"
+                raise SSRFBlocked(f"{where}被拒绝: {why} ({cur[:120]})")
+            print(f"[img-fetch] 解析校验不适用（{why}），移动端退回系统网络栈: "
+                  f"{cur[:100]}", flush=True)
         _proxy = _netproxy.current_proxy()
-        pinned = pin_requests_session(sess, cur, proxy=_proxy or None)
-        if not pinned and not _proxy:
-            # 直连时"未能绑定"必须判不可用（与 curl 路径语义对齐，不假装已绑定）。
-            # **但配了代理就是另一回事**：连接终点是代理，目标 IP 绑定本就不适用
-            # （见 engine/netproxy 的边界说明）——旧实现在这里直接抛 PinUnavailable，
-            # 结果是"一配代理，图片全部取不到"（用户要的就是代理解决可达性）。
-            raise PinUnavailable(
-                f"requests 降级路径无法对该地址建立受控 IP 绑定: {cur[:120]}")
-        resp = sess.get(cur, headers=headers, timeout=timeout,
-                        proxies=_netproxy.proxy_dict(),
-                        allow_redirects=False, verify=True)
+        if _mobile:
+            # 钉绑尽力而为：失败不阻断（系统网络栈会正确处理）
+            try:
+                pinned = pin_requests_session(sess, cur, proxy=_proxy or None)
+            except Exception as _pe:
+                print(f"[img-fetch] IP 绑定不可用，退回主机名直连: "
+                      f"{type(_pe).__name__} ({cur[:80]})", flush=True)
+                pinned = False
+        else:
+            pinned = pin_requests_session(sess, cur, proxy=_proxy or None)
+            if not pinned and not _proxy:
+                # 直连时"未能绑定"原则上判不可用（与 curl 路径语义对齐，不假装已绑定）。
+                # **但配了代理就是另一回事**：连接终点是代理，目标 IP 绑定本就不适用
+                # （见 engine/netproxy 的边界说明）——旧实现在这里直接抛 PinUnavailable，
+                # 结果是"一配代理，图片全部取不到"（用户要的就是代理解决可达性）。
+                raise PinUnavailable(
+                    f"requests 降级路径无法对该地址建立受控 IP 绑定: {cur[:120]}")
+        try:
+            resp = sess.get(cur, headers=headers, timeout=timeout,
+                            proxies=_netproxy.proxy_dict(),
+                            allow_redirects=False, verify=True)
+        except Exception:
+            if _mobile and pinned:
+                # 钉到的 IP 可能已失效/被污染：解除钉绑，按主机名让系统栈重试一次
+                print(f"[img-fetch] 钉绑连接失败，解除钉绑按主机名重试: {cur[:80]}",
+                      flush=True)
+                from ..urlsec import _unmount_pinned
+                _unmount_pinned(sess)
+                pinned = False
+                resp = sess.get(cur, headers=headers, timeout=timeout,
+                                proxies=_netproxy.proxy_dict(),
+                                allow_redirects=False, verify=True)
+            else:
+                raise
         if resp.status_code not in (301, 302, 303, 307, 308):
             return resp
         loc = (resp.headers or {}).get("Location") or (resp.headers or {}).get("location")

@@ -357,13 +357,13 @@ fun MangaDetailScreen(
                                             modifier = Modifier.fillMaxSize(),
                                             loading = { Box(Modifier.fillMaxSize()) },
                                             error = { Box(Modifier.fillMaxSize(), Alignment.Center) {
-                                                Text("无封面",
+                                                Text("暂无封面",
                                                      style = MaterialTheme.typography.labelSmall)
                                             } },
                                         )
                                     } else {
                                         Box(Modifier.fillMaxSize(), Alignment.Center) {
-                                            Text("无封面",
+                                            Text("暂无封面",
                                                  style = MaterialTheme.typography.labelSmall)
                                         }
                                     }

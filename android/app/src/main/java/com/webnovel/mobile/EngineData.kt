@@ -1147,9 +1147,11 @@ object EngineData {
         val label: String
             get() = when (status) {
                 "running" -> "进行中 $done/$total"
+                "queued" -> "排队中"
                 "paused" -> "已暂停 $done/$total"
                 "stopped" -> "已停止 $done/$total"
                 "done" -> "已完成 $total"
+                "cancel" -> "已取消 $done/$total"
                 "error" -> "失败：${error.ifBlank { "原因未知" }}"
                 else -> status.ifBlank { "未知状态" }
             }

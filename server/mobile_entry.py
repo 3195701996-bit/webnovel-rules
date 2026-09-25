@@ -68,6 +68,13 @@ class MobileRuntime:
         os.environ["WR_PROFILE"] = "mobile"    # 资源预算按设计 §9
         os.environ["WR_MOBILE_TOKEN"] = token
         os.environ["WR_MOBILE_PORT"] = str(port or 0)
+        # 手机挂 VPN/代理 App（fake-ip / DNS 污染）时，引擎的"DNS 解析校验 +
+        # IP 钉绑"会误杀全部出站请求（198.18/15 假地址被标准库判为私网），
+        # 表现为：Coil/系统栈（按域名交 VPN 远端解析）一切正常，而引擎下载/
+        # 检查更新全灭（2026-09-25 实测定位）。移动端没有"局域网共享服务"的
+        # SSRF 威胁模型，跳过 DNS 解析校验与钉绑（字面协议/host 校验保留）。
+        # 桌面端不设置此项，严格语义不变。
+        os.environ.setdefault("WR_SSRF_SKIP_DNS", "1")
 
     def initialize(self, data_dir=None, cache_dir=None, token=None, port=None):
         data_dir = data_dir or os.environ.get("WR_DATA_DIR") or ""

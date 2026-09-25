@@ -77,16 +77,20 @@ internal fun DownloadsScreen(
 
     LaunchedEffect(ep) {
         refresh()
-        // 有任务在跑时轮询；停下来的任务不再轮询，界面显示的是服务端状态
+        // 有任务在跑或排队时轮询（1.5s，与服务端单图即更新内存进度同频）；
+        // 停下来的任务不再轮询，界面显示的是服务端状态
         while (true) {
-            delay(3000)
-            if (tasks.any { it.running }) refresh()
+            delay(1500)
+            if (tasks.any { it.running || it.status == "queued" }) refresh()
         }
     }
 
-    val running = tasks.filter { it.running }
+    val running = tasks.filter { it.running || it.status == "queued" }
     val paused = tasks.filter { it.status == "paused" || it.status == "stopped" }
-    val finished = tasks.filter { !it.running && it.status != "paused" && it.status != "stopped" }
+    val finished = tasks.filter {
+        !it.running && it.status != "queued" &&
+            it.status != "paused" && it.status != "stopped"
+    }
 
     LazyColumn(
         Modifier.fillMaxSize().testTag("downloads_list"),
