@@ -24,6 +24,35 @@ def test_sort_chapters_volume():
     assert s[0]["name"] == "第2话"
     assert s[1]["name"] == "Vol.1 第3话"
 
+
+def test_sort_chapters_embedded_serial():
+    """JM 式"标题+序号"命名（无"第X话"标记）：序号当正片话号，不沉底。
+    2026-09-27 实测回归：'缺德鄰居難相處50 …' 被排到第100話之后"""
+    from engine.manga.download_manager import _sort_chapters
+    chs = [
+        {"id": "1", "name": "缺德鄰居麥相害 第100話"},
+        {"id": "2", "name": "缺德鄰居難相處50 缺德鄰居難相處(50)"},
+        {"id": "3", "name": "缺德鄰居麥相害 第87話"},
+    ]
+    s = _sort_chapters(chs)
+    assert s[0]["name"].startswith("缺德鄰居難相處50")
+    assert s[1]["name"].endswith("第87話")
+    assert s[2]["name"].endswith("第100話")
+
+
+def test_sort_chapters_extra_keywords_still_last():
+    """附加类命名里的数字不能当话号（防回归：特別篇2 误插正片中间）"""
+    from engine.manga.download_manager import _sort_chapters
+    chs = [
+        {"id": "1", "name": "第3话"},
+        {"id": "2", "name": "特別篇2"},
+        {"id": "3", "name": "第1话"},
+        {"id": "4", "name": "休載公告1"},
+    ]
+    s = _sort_chapters(chs)
+    assert [c["name"] for c in s[:2]] == ["第1话", "第3话"]
+    assert {c["name"] for c in s[2:]} == {"特別篇2", "休載公告1"}
+
 def test_manga_base_models():
     from engine.manga.base import Comic, Chapter, ComicDetails
     c = Comic(id="x", title="测试")

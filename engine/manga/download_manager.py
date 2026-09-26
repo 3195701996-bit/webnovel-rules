@@ -49,6 +49,13 @@ images_resolver = None
 library_change_hook = None
 import re as _re
 
+# 附加类命名关键词（无话号时判定为附加内容，不参与正片序号提取）——
+# "特別篇2/休載公告1" 等名称里的数字是附加内容自己的编号，不是正片话号
+_EXTRA_NAME_RE = _re.compile(
+    r"特别篇|特別篇|番外|休載|休载|贺图|賀圖|公告|通知|後記|后记|"
+    r"外传|外傳|小剧场|小劇場|总集篇|總集篇|设定集|設定集|插图|插圖|"
+    r"动画化|動畫化|纪念|紀念|预告|預告|OVA|SP\b", _re.I)
+
 
 def _sort_chapters(chapters):
     """按章节绝对顺序排序（第X话升序；卷X话按话号主、卷号次；
@@ -71,6 +78,14 @@ def _sort_chapters(chapters):
             m3 = _re.match(r"^\s*(\d+(?:\.\d+)?)\s*$", name)
             if m3:
                 return [0, float(m3.group(1)), 0.0, name]
+            # JM 等源的"标题+序号"命名（如"缺德鄰居難相處50 …"，无"第X话"
+            # 标记但名称内嵌独立序号）→ 按正片该序号排序。
+            # 但附加类命名（特別篇2/休載公告1…）不能用这个兜底数字——那是
+            # 此前修复过的"附加被误当话号插入正片中间"回归源。
+            if not _EXTRA_NAME_RE.search(name):
+                m4 = _re.search(r"(?<![\d.])(\d{1,4}(?:\.\d+)?)(?=[\s(（)）]|$)", name)
+                if m4:
+                    return [0, float(m4.group(1)), 0.0, name]
             # 带文字且无话号（休載公告/特別篇/番外/贺图…）→ 附加，排正片之后
             return [1, 1e12, 1e12, name]
         return [0, ep, vol, name]
