@@ -488,7 +488,9 @@ fun MangaDetailScreen(
                             ) { Text(if (exporting) "导出中…" else "导出 ZIP（${d.downloadedCount} 话）") }
                             OutlinedButton(
                                 onClick = {
-                                    val missing = (d.volumes + d.chapters)
+                                    // 只统计「话」——整卷需用户在下方整卷区块自行勾选，
+                                    // 不参与"下载未下载话"的默认清单
+                                    val missing = d.chapters
                                         .filterNot { d.downloaded.contains(it.id) }
                                     if (missing.isEmpty()) {
                                         actionMsg = "所有话都已下载"
@@ -512,7 +514,7 @@ fun MangaDetailScreen(
                                         }
                                     }
                                 },
-                                enabled = d.downloadedCount < (d.volumes + d.chapters).size,
+                                enabled = d.chapters.any { !d.downloaded.contains(it.id) },
                                 modifier = Modifier.weight(1f),
                             ) { Text("下载未下载话") }
                         }

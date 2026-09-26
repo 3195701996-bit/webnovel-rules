@@ -2491,9 +2491,14 @@ def _manga_check_one(source, comic_id, force_refresh=False):
     # R57: copymanga/copymanga_web 检查统一走 copymanga_web(网页渲染)——
     # 与 APP 同库(cid 一致)但网页通道不受 APP 210 风控影响;
     # 检查不再请求 APP API, 从根源消除"检查触发 210 风控"
-    ad = (_manga_adapter("copymanga_web")
-          if source in ("copymanga", "copymanga_web")
-          else _manga_adapter(source))
+    # **移动端例外(2026-09-27)**：手机上没有 Playwright，渲染通道不可用，
+    # 检查必抛错（"检查更新失败（详细错误见服务端日志）"）——改走 copymanga
+    # 主通道（copy_web 纯 HTTP 网页通道，无浏览器、同样不发 APP 接口、不触 210）。
+    _mobile = (os.environ.get("WR_PROFILE") or "").strip().lower() == "mobile"
+    if source in ("copymanga", "copymanga_web"):
+        ad = _manga_adapter("copymanga" if _mobile else "copymanga_web")
+    else:
+        ad = _manga_adapter(source)
     if not ad:
         # R47 修复：此处此前返回 (jsonify, 404) 元组——调用方一律
         # jsonify(dict) 再包一层会 TypeError → 500。本函数契约是返回 dict。
