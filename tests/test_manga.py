@@ -40,6 +40,34 @@ def test_sort_chapters_embedded_serial():
     assert s[2]["name"].endswith("第100話")
 
 
+def test_sort_chapters_hyphen_segment():
+    """连字符分段序号："37-1"=37.1，排在 36.5 与 37.2 之间，不得沉底或置顶。
+    2026-09-27 实测回归：旧逻辑抠出尾段"1"当话号 → 排到第1話前面"""
+    from engine.manga.download_manager import _sort_chapters
+    chs = [
+        {"id": "1", "name": "37-1"},
+        {"id": "2", "name": "37.2"},
+        {"id": "3", "name": "36.5"},
+        {"id": "4", "name": "第1話"},
+    ]
+    s = _sort_chapters(chs)
+    assert [c["name"] for c in s] == ["第1話", "36.5", "37-1", "37.2"]
+
+
+def test_sort_chapters_tankobon_appendix_is_extra():
+    """單本附錄是附加内容：'單本4 附錄-1' 不得插进第3話/第4話中间"""
+    from engine.manga.download_manager import _sort_chapters
+    chs = [
+        {"id": "1", "name": "單本4 附錄-1"},
+        {"id": "2", "name": "第4話"},
+        {"id": "3", "name": "第3話"},
+        {"id": "4", "name": "單本4 附錄-2"},
+    ]
+    s = _sort_chapters(chs)
+    assert [c["name"] for c in s[:2]] == ["第3話", "第4話"]
+    assert {c["name"] for c in s[2:]} == {"單本4 附錄-1", "單本4 附錄-2"}
+
+
 def test_sort_chapters_extra_keywords_still_last():
     """附加类命名里的数字不能当话号（防回归：特別篇2 误插正片中间）"""
     from engine.manga.download_manager import _sort_chapters
