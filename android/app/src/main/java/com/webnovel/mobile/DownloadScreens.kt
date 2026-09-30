@@ -98,6 +98,17 @@ internal fun DownloadsScreen(
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         item {
+            Text("下载中心", style = MaterialTheme.typography.headlineMedium,
+                color = WnColors.ink)
+            Text("管理进行中的任务、暂停项和已完成记录。后台任务不会因离开页面而停止。",
+                style = MaterialTheme.typography.bodySmall, color = WnColors.inkDim,
+                modifier = Modifier.padding(top = WnSpace.xs, bottom = WnSpace.md))
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("队列操作", style = MaterialTheme.typography.titleMedium,
+                    color = WnColors.ink)
+                if (running.isNotEmpty()) WnStatusPill("${running.size} 个进行中", WnColors.ok)
+            }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(WnSpace.sm)) {
                 Button(
                     onClick = {

@@ -639,9 +639,14 @@ internal fun MangaSearchScreen(
             onOpen(Dest.MangaDetail("jm", q))
             return
         }
-        if (selected?.status == "unsupported") {
-            // 本机能力缺口：不发请求、如实说明缺什么（不把失败归成"源失效"）
-            msg = "该源在当前安装包内不可用：${selected.reason.ifBlank { "缺少运行依赖" }}"
+        if (selected?.status == "unsupported" ||
+            selected?.categoryLabel?.contains("不支持") == true) {
+            // 依赖判定只是运行环境检查；移动可用性分类才是 APK 是否能实际运行的口径。
+            // 不把“缺依赖”或“通道不支持”发给后端再伪装成空结果。
+            msg = "该源在当前安装包内不可用：" +
+                (selected?.categoryReason.orEmpty().ifBlank {
+                    selected?.reason.orEmpty().ifBlank { "缺少运行依赖或运行通道" }
+                })
             return
         }
         scope.launch {
@@ -818,57 +823,64 @@ internal fun MangaSearchScreen(
 
     Scaffold(topBar = {
         TopAppBar(
-            title = { Text("漫画搜索", maxLines = 1) },
+            title = { Text("发现漫画", maxLines = 1) },
             navigationIcon = { TextButton(onClick = onBack) { Text("← 返回") } },
         )
     }) { pad ->
-        Column(Modifier.padding(pad).fillMaxSize().padding(WnSpace.md)) {
-            Row(verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(WnSpace.sm)) {
-                OutlinedTextField(
-                    value = keyword,
-                    onValueChange = { keyword = it },
-                    label = { Text("漫画名") },
-                    singleLine = true,
-                    shape = WnPillShape,
-                    colors = wnSearchFieldColors(),
-                    modifier = Modifier.weight(1f).testTag("manga_search_field"),
-                )
-                Button(onClick = { doSearch() }, enabled = !searching,
-                    shape = WnPillShape,
-                    modifier = Modifier.testTag("manga_search_btn")) {
-                    Text(if (searching) "搜索中…" else "搜索")
+        Column(Modifier.padding(pad).fillMaxSize().padding(horizontal = WnSpace.md)) {
+            Text("找到下一本想看的漫画", style = MaterialTheme.typography.headlineMedium,
+                color = WnColors.ink, modifier = Modifier.padding(top = WnSpace.sm))
+            Text("跨源搜索，结果会随着源站响应逐步出现。",
+                style = MaterialTheme.typography.bodySmall, color = WnColors.inkDim,
+                modifier = Modifier.padding(top = WnSpace.xs, bottom = WnSpace.md))
+            WnHairlineCard {
+                Column(Modifier.padding(WnSpace.md)) {
+                    Row(verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(WnSpace.sm)) {
+                        OutlinedTextField(
+                            value = keyword,
+                            onValueChange = { keyword = it },
+                            label = { Text("输入漫画名") },
+                            placeholder = { Text("例如：海贼王、情书") },
+                            singleLine = true,
+                            shape = WnPillShape,
+                            colors = wnSearchFieldColors(),
+                            modifier = Modifier.weight(1f).testTag("manga_search_field"),
+                        )
+                        Button(onClick = { doSearch() }, enabled = !searching,
+                            shape = WnPillShape,
+                            modifier = Modifier.testTag("manga_search_btn")) {
+                            Text(if (searching) "搜索中…" else "搜索")
+                        }
+                    }
+                    Text("支持源站实时搜索 · 已下载内容可离线阅读",
+                        style = MaterialTheme.typography.labelSmall, color = WnColors.inkDim,
+                        modifier = Modifier.padding(top = WnSpace.sm, start = WnSpace.xs))
                 }
             }
-            // ── P0-2 分源搜索：源选择（"全部源" + 各内置源，带依赖判定/实测结论）──
-            Spacer(Modifier.height(6.dp))
+            Spacer(Modifier.height(WnSpace.md))
+            WnSectionHeader("搜索范围", trailing = {
+                WnStatusPill(if (sourceKey.isBlank()) "全部源" else "单源搜索", WnColors.info)
+            })
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically) {
-                WnFilterChip(
-                    selected = sourceKey.isBlank(),
-                    onClick = { sourceKey = ""; orderKey = "" },
-                    label = "全部源",
-                    modifier = Modifier.testTag("manga_src_all"),
-                )
+                WnFilterChip(selected = sourceKey.isBlank(),
+                    onClick = { sourceKey = ""; orderKey = "" }, label = "全部源",
+                    modifier = Modifier.testTag("manga_src_all"))
                 for (card in sourceCards) {
-                    val suffix = when (card.status) {
-                        "unsupported" -> "缺依赖"
-                        "degraded" -> "降级"
-                        "supported" -> ""
-                        "pending" -> "待验证"
+                    val suffix = when {
+                        card.categoryLabel.contains("不支持") -> "不支持"
+                        card.categoryLabel.contains("降级") -> "降级"
+                        card.categoryLabel.contains("待验证") -> "待验证"
+                        card.categoryLabel.contains("已验证") -> "已验证"
+                        card.status == "unsupported" -> "缺依赖"
                         else -> card.status
                     }
-                    WnFilterChip(
-                        selected = sourceKey == card.key,
-                        onClick = {
-                            sourceKey = card.key
-                            // 换源即清排序：不同源支持的排序不同，沿用会让人以为"排序没生效"
-                            if (!card.supportsOrder) orderKey = ""
-                        },
+                    WnFilterChip(selected = sourceKey == card.key,
+                        onClick = { sourceKey = card.key; if (!card.supportsOrder) orderKey = "" },
                         label = if (suffix.isBlank()) card.name else "${card.name} · $suffix",
-                        modifier = Modifier.testTag("manga_src_${card.key}"),
-                    )
+                        modifier = Modifier.testTag("manga_src_${card.key}"))
                 }
             }
             if (selected != null) {
@@ -876,7 +888,8 @@ internal fun MangaSearchScreen(
                 Text(
                     buildString {
                         append("当前源：").append(selected.name)
-                        append("（依赖判定：").append(selected.status)
+                        append("（移动可用性：")
+                        append(selected.categoryLabel.ifBlank { selected.status })
                         if (selected.reason.isNotBlank()) append(" · ").append(selected.reason)
                         append("；实测：").append(selected.verifyLabel).append("）")
                     },

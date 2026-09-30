@@ -89,7 +89,9 @@ internal fun MangaSourceListScreen(
     val sources: List<MangaSourceCard> = remember(body) {
         if (body.isBlank()) emptyList()
         else EngineData.sources(body).map {
-            MangaSourceCard(it.key, it.name, it.status, it.reason, it.verifyLabel)
+            MangaSourceCard(it.key, it.name, it.status, it.reason, it.verifyLabel,
+                categoryLabel = it.categoryLabel, categoryReason = it.categoryReason,
+                failedStage = it.failedStage)
         }
     }
     LaunchedEffect(ep) {
@@ -101,7 +103,12 @@ internal fun MangaSourceListScreen(
     }
 
     Scaffold(topBar = {
-        TopAppBar(title = { Text("内置漫画源", maxLines = 1) },
+        TopAppBar(title = { Text("漫画源", maxLines = 1) },
+            colors = androidx.compose.material3.TopAppBarDefaults.topAppBarColors(
+                containerColor = WnColors.bg,
+                titleContentColor = WnColors.ink,
+                navigationIconContentColor = WnColors.ink,
+            ),
             navigationIcon = {
                 IconButton(onClick = onBack) {
                     Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
@@ -131,10 +138,15 @@ internal fun MangaSourceListScreen(
                                 Text(s.name, style = MaterialTheme.typography.bodyMedium,
                                     fontWeight = FontWeight.Medium)
                                 Text(
-                                    "依赖：${s.reason.ifBlank { "满足" }}；实测：${s.verifyLabel}",
+                                    "移动可用性：${s.categoryLabel.ifBlank { s.status }}；实测：${s.verifyLabel}",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
+                                if (s.categoryReason.isNotBlank()) {
+                                    Text(s.categoryReason.take(140),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
                             }
                         }
                     }
@@ -287,6 +299,11 @@ internal fun MangaSourceScreen(
 
     Scaffold(topBar = {
         TopAppBar(title = { Text(sourceName, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+            colors = androidx.compose.material3.TopAppBarDefaults.topAppBarColors(
+                containerColor = WnColors.bg,
+                titleContentColor = WnColors.ink,
+                navigationIconContentColor = WnColors.ink,
+            ),
             navigationIcon = {
                 IconButton(onClick = onBack) {
                     Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")

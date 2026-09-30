@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """拷贝漫画网页版适配器（Playwright 渲染通道，绕过 APP API 的 IP 标记）
-- 搜索：2026copy.com searchci API（页面上下文 fetch，同源带 cookie）
+- 搜索：copy4000.com searchcl API（页面上下文 fetch，同源带 cookie）
 - 详情/章节：渲染详情页提取章节 DOM（395 章实测）
 - 章节图片：渲染章节页提取图片 URL
 - 图片下载：curl_cffi + Referer（sh.mangafunb.fun 防盗链）
@@ -519,7 +519,7 @@ class CopyMangaWeb(MangaAdapter):
     version = "1.0.0"
     concurrent = 1  # 网页版慢，单并发
 
-    # ── 搜索：页面上下文 fetch searchci API ──
+    # ── 搜索：页面上下文 fetch searchcl API ──
     def search(self, keyword, page=1):
         def _work():
             pg = _get_page()
@@ -541,7 +541,7 @@ class CopyMangaWeb(MangaAdapter):
                 r = pg.evaluate("""async ([kw, limit, off]) => {
                     // R64: 站内搜索 API 需 platform=2&q_type= 参数(网页搜索页同款),
                     // 缺失时对部分关键词(如"姐姐的朋友")返回空结果
-                    const res = await fetch('/api/kb/web/searchci/comics?q=' +
+                    const res = await fetch('/api/kb/web/searchcl/comics?q=' +
                         encodeURIComponent(kw) + '&limit=' + limit + '&offset=' + off +
                         '&platform=2&q_type=');
                     if (!res.ok) return {status: res.status};

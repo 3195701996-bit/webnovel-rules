@@ -247,7 +247,7 @@ SEARCH_JSON = json.dumps({
 
 
 def test_search_parses_canned_json(base_ready):
-    base_ready([("/api/kb/web/searchci/comics", _R(200, SEARCH_JSON))])
+    base_ready([("/api/kb/web/searchcl/comics", _R(200, SEARCH_JSON))])
     comics, total = cw.web_search("劍", limit=2, offset=0)
     assert total == 2495
     assert [c.id for c in comics] == ["jianji", "hyj"]      # 脏数据被跳过
@@ -258,10 +258,10 @@ def test_search_parses_canned_json(base_ready):
 
 
 def test_search_request_url_shape(base_ready):
-    calls = base_ready([("/api/kb/web/searchci/comics", _R(200, SEARCH_JSON))])
+    calls = base_ready([("/api/kb/web/searchcl/comics", _R(200, SEARCH_JSON))])
     cw.web_search("姐 姐", limit=30, offset=60)
     url = calls[0][0]
-    assert "/api/kb/web/searchci/comics?" in url
+    assert "/api/kb/web/searchcl/comics?" in url
     assert "limit=30" in url and "offset=60" in url
     assert "q=%E5%A7%90%20%E5%A7%90" in url                # 关键词已 URL 编码
     assert "platform=2" in url                              # 站点搜索页同款参数
@@ -269,7 +269,7 @@ def test_search_request_url_shape(base_ready):
 
 def test_search_results_missing_raises(base_ready):
     """`results` 缺失 = 结构变了，不能当成"没搜到" """
-    base_ready([("/api/kb/web/searchci/comics", _R(200, '{"code":200,"results":{}}'))])
+    base_ready([("/api/kb/web/searchcl/comics", _R(200, '{"code":200,"results":{}}'))])
     with pytest.raises(cw.WebError) as ei:
         cw.web_search("x")
     assert "结构" in str(ei.value) or "变更" in str(ei.value)
@@ -278,12 +278,12 @@ def test_search_results_missing_raises(base_ready):
 def test_search_legit_empty_list_is_not_an_error(base_ready):
     """合法的"搜不到"（有 list、空数组）照实返回空，不抛异常"""
     body = '{"code":200,"results":{"list":[],"total":0,"limit":30,"offset":0}}'
-    base_ready([("/api/kb/web/searchci/comics", _R(200, body))])
+    base_ready([("/api/kb/web/searchcl/comics", _R(200, body))])
     assert cw.web_search("不存在的关键词") == ([], 0)
 
 
 def test_search_code_not_200_raises(base_ready):
-    base_ready([("/api/kb/web/searchci/comics",
+    base_ready([("/api/kb/web/searchcl/comics",
                  _R(200, '{"code":500,"message":"请求失败","results":null}'))])
     with pytest.raises(cw.WebError) as ei:
         cw.web_search("x")
@@ -291,7 +291,7 @@ def test_search_code_not_200_raises(base_ready):
 
 
 def test_search_non_json_raises(base_ready):
-    base_ready([("/api/kb/web/searchci/comics", _R(200, "<html>登录</html>"))])
+    base_ready([("/api/kb/web/searchcl/comics", _R(200, "<html>登录</html>"))])
     with pytest.raises(cw.WebError):
         cw.web_search("x")
 

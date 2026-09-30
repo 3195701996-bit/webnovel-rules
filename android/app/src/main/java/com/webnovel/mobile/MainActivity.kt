@@ -82,7 +82,11 @@ class MainActivity : ComponentActivity() {
         val gateway = EngineGateway(applicationContext)
         // 前台服务先行：引擎不依赖界面是否成功渲染
         startEngineService()
-        setContent { MaterialTheme(colorScheme = wnColorScheme()) { ReaderApp(gateway) } }
+        setContent {
+            MaterialTheme(colorScheme = wnColorScheme(), typography = wnTypography()) {
+                ReaderApp(gateway)
+            }
+        }
     }
 
     private fun startEngineService() {
@@ -414,12 +418,21 @@ private fun HomeScaffold(
                         0 -> "书架"; 1 -> "浏览"; 2 -> "下载"; else -> "设置"
                     })
                 },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = WnColors.bg,
+                    titleContentColor = WnColors.ink,
+                    navigationIconContentColor = WnColors.ink,
+                    actionIconContentColor = WnColors.accent,
+                ),
                 // 「最近阅读」已并入书架作为独立页签（书架内双页：最近阅读/已缓存），
                 // 顶栏不再单设历史入口。Dest.History 保留供兼容性跳转。
             )
         },
         bottomBar = {
-            NavigationBar {
+            NavigationBar(
+                containerColor = WnColors.surface,
+                tonalElevation = 0.dp,
+            ) {
                 val tabs = listOf(
                     Triple(Icons.AutoMirrored.Filled.MenuBook, "书架", 0),
                     Triple(Icons.Filled.Search, "浏览", 1),
@@ -427,15 +440,17 @@ private fun HomeScaffold(
                     Triple(Icons.Filled.Settings, "设置", 3),
                 )
                 tabs.forEach { (icon, label, i) ->
-                    NavigationBarItem(
+                        NavigationBarItem(
                         selected = tab == i,
                         onClick = { tab = i },
                         icon = { Icon(icon, contentDescription = label) },
                         label = { Text(label) },
-                        colors = NavigationBarItemDefaults.colors(
-                            indicatorColor = MaterialTheme.colorScheme.primary,
-                            selectedIconColor = MaterialTheme.colorScheme.onPrimary,
-                            selectedTextColor = MaterialTheme.colorScheme.primary,
+                            colors = NavigationBarItemDefaults.colors(
+                            indicatorColor = WnColors.accent.copy(alpha = 0.18f),
+                            selectedIconColor = WnColors.accent,
+                            selectedTextColor = WnColors.accent,
+                            unselectedIconColor = WnColors.inkDim,
+                            unselectedTextColor = WnColors.inkDim,
                         ),
                     )
                 }

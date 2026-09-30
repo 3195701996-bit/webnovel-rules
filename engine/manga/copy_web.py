@@ -9,7 +9,7 @@
 实测 `https://www.copy4000.com` 上**普通 requests、无 Cookie、最简头**即可拿到
 搜索/详情/章节/正文图片全部真实数据：
 
-- 搜索 `GET /api/kb/web/searchci/comics?q=&limit=&offset=` → JSON
+- 搜索 `GET /api/kb/web/searchcl/comics?q=&limit=&offset=` → JSON
 - 详情 `GET /comic/<path_word>` → 服务端渲染 HTML（正则/lxml 可解析）
 - 章节 `GET /comicdetail/<path_word>/chapters` → JSON，`results` 是密文串
 - 正文 `GET /comic/<path_word>/chapter/<uuid>` → HTML 内联 `var cct` / `var contentKey`
@@ -670,7 +670,9 @@ def web_search(kw, limit=30, offset=0, source_key="copymanga"):
         _offset = max(0, int(offset))
     except (TypeError, ValueError):
         _offset = 0
-    path = (f"/api/kb/web/searchci/comics?q={q}&limit={_limit}&offset={_offset}"
+    # 站点已将网页搜索从 searchci 迁移到 searchcl。旧接口仍返回 200 + 空壳
+    # JSON，不能继续使用，否则任何关键词都会被误判成“没有结果”。
+    path = (f"/api/kb/web/searchcl/comics?q={q}&limit={_limit}&offset={_offset}"
             "&platform=2&q_type=")
     r = _get_path(path, json_api=True, budget=_Budget())
     try:

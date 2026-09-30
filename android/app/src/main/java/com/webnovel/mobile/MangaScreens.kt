@@ -64,6 +64,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
@@ -312,6 +313,11 @@ fun MangaDetailScreen(
     Scaffold(topBar = {
         TopAppBar(
             title = { Text(detail?.title ?: "漫画详情", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+            colors = androidx.compose.material3.TopAppBarDefaults.topAppBarColors(
+                containerColor = WnColors.bg,
+                titleContentColor = WnColors.ink,
+                navigationIconContentColor = WnColors.ink,
+            ),
             navigationIcon = {
                 IconButton(onClick = onBack) {
                     Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
@@ -330,7 +336,9 @@ fun MangaDetailScreen(
                 }
                 else -> LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp)) {
                     item {
-                        Row(Modifier.fillMaxWidth().padding(WnSpace.lg)) {
+                        Row(Modifier.fillMaxWidth().padding(horizontal = WnSpace.md,
+                            vertical = WnSpace.lg).clip(WnCardShape)
+                            .background(WnColors.surface).padding(WnSpace.md)) {
                             SubcomposeAsyncImage(
                                 model = ImageRequest.Builder(androidx.compose.ui.platform.LocalContext.current)
                                     .data(coverUrl(ep.imagePort, d.source, d.comicId))

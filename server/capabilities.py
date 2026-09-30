@@ -101,7 +101,7 @@ SOURCE_REQUIREMENTS = {
     "copymanga": {
         # 0.74.0 更正：主通道改为**网页通道（纯 HTTP）**，APP 接口降为回落通道。
         # 依据（2026-09-17 晚实测，普通 requests、无 Cookie、无登录）：
-        #   搜索 /api/kb/web/searchci/comics → 真实 JSON（含 total 可翻页）
+        #   搜索 /api/kb/web/searchcl/comics → 真实 JSON（含 total 可翻页）
         #   详情 /comic/<pw> → 服务端渲染 HTML（标题/作者/标签/简介/封面）
         #   章节 /comicdetail/<pw>/chapters → AES-128-CBC 解密（密钥取自页面内联脚本）
         #   正文 /comic/<pw>/chapter/<uuid> → contentKey 同法解密出图片直链

@@ -52,7 +52,7 @@ def test_the_actual_fixed_site_still_works():
     from engine.manga.copy_web import WebUnreachable, TOTAL_BUDGET     # noqa: F401
     import engine.manga.copy_web as cw
     # 直接构造同款文案（与源码同一写法），确认含预算数字且不抛 TypeError
-    url = "https://www.copy4000.com/api/kb/web/searchci/comics?q=%E6%B5%B7%E8%B4%BC%E7%8E%8B"
+    url = "https://www.copy4000.com/api/kb/web/searchcl/comics?q=%E6%B5%B7%E8%B4%BC%E7%8E%8B"
     msg = f"网页通道超时（预算 {TOTAL_BUDGET:.0f}s 用尽）: {url[:100]}"
     assert "预算" in msg and "9s" in msg and "%E6" in msg
     try:
@@ -85,7 +85,7 @@ def test_budget_exhausted_message_is_truthful(monkeypatch):
         def slice_timeout(self, base=None):        # pragma: no cover
             return base
 
-    with_ = "https://www.copy4000.com/api/kb/web/searchci/comics" \
+    with_ = "https://www.copy4000.com/api/kb/web/searchcl/comics" \
             "?q=%E6%B5%B7%E8%B4%BC%E7%8E%8B&limit=21"
     try:
         cw._web_get(with_, budget=_Exhausted())

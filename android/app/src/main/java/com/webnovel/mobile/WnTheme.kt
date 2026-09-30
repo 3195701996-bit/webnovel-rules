@@ -30,6 +30,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -47,9 +48,11 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import coil.ImageLoader
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
@@ -61,16 +64,18 @@ import kotlinx.coroutines.launch
  * 不用投影、不用玻璃拟态、不用渐变装饰。
  */
 object WnColors {
-    val bg = Color(0xFF23221F)
-    val surface = Color(0xFF2C2B27)
-    val surfaceVar = Color(0xFF35332F)
-    val ink = Color(0xFFF5F5F0)
-    val inkDim = Color(0xFF8A8A80)
-    val line = Color(0xFF403E38)
-    val accent = Color(0xFFE0A458)
-    val onAccent = Color(0xFF241A0E)
-    val danger = Color(0xFFE06C6C)
-    val ok = Color(0xFF7FBF8E)
+    // 深海墨色基底 + 琥珀主行动色 + 青绿成功色：减少大面积纯灰，提升层级和可读性。
+    val bg = Color(0xFF10151B)
+    val surface = Color(0xFF171E26)
+    val surfaceVar = Color(0xFF202A34)
+    val ink = Color(0xFFF2F5F4)
+    val inkDim = Color(0xFF9AA8AE)
+    val line = Color(0xFF2F3C47)
+    val accent = Color(0xFFF2AA4C)
+    val onAccent = Color(0xFF24170A)
+    val danger = Color(0xFFFF7F78)
+    val ok = Color(0xFF70D0B0)
+    val info = Color(0xFF79BFE8)
 }
 
 /** 全局换肤：现存 MaterialTheme.colorScheme.* 引用经此映射自动落到新色板 */
@@ -109,6 +114,38 @@ fun wnColorScheme(): ColorScheme = darkColorScheme(
     surfaceContainer = WnColors.surface,
     surfaceContainerHigh = WnColors.surfaceVar,
     surfaceContainerHighest = WnColors.surfaceVar,
+)
+
+fun wnTypography(): Typography = Typography(
+    displayLarge = androidx.compose.ui.text.TextStyle(
+        fontFamily = FontFamily.Default, fontWeight = FontWeight.Bold,
+        fontSize = 34.sp, lineHeight = 40.sp, letterSpacing = (-0.5).sp,
+    ),
+    headlineMedium = androidx.compose.ui.text.TextStyle(
+        fontFamily = FontFamily.Default, fontWeight = FontWeight.Bold,
+        fontSize = 24.sp, lineHeight = 30.sp,
+    ),
+    titleLarge = androidx.compose.ui.text.TextStyle(
+        fontFamily = FontFamily.Default, fontWeight = FontWeight.SemiBold,
+        fontSize = 20.sp, lineHeight = 26.sp,
+    ),
+    titleMedium = androidx.compose.ui.text.TextStyle(
+        fontFamily = FontFamily.Default, fontWeight = FontWeight.SemiBold,
+        fontSize = 16.sp, lineHeight = 22.sp,
+    ),
+    bodyLarge = androidx.compose.ui.text.TextStyle(
+        fontFamily = FontFamily.Default, fontSize = 16.sp, lineHeight = 24.sp,
+    ),
+    bodyMedium = androidx.compose.ui.text.TextStyle(
+        fontFamily = FontFamily.Default, fontSize = 14.sp, lineHeight = 21.sp,
+    ),
+    bodySmall = androidx.compose.ui.text.TextStyle(
+        fontFamily = FontFamily.Default, fontSize = 12.sp, lineHeight = 18.sp,
+    ),
+    labelLarge = androidx.compose.ui.text.TextStyle(
+        fontFamily = FontFamily.Default, fontWeight = FontWeight.SemiBold,
+        fontSize = 14.sp, lineHeight = 20.sp,
+    ),
 )
 
 /** 圆角：卡片 14dp、小元素（chip/进度条）10dp、按钮 pill */
@@ -386,5 +423,21 @@ fun WnTagChip(text: String, accent: Boolean = false, onClick: () -> Unit) {
             .border(1.dp, if (accent) WnColors.accent else WnColors.line, WnPillShape)
             .clickable(onClick = onClick)
             .padding(horizontal = WnSpace.sm, vertical = WnSpace.xs),
+    )
+}
+
+/** 统一的状态胶囊：把“已验证/待验证/失败”等机器状态转成人能快速扫读的视觉信号。 */
+@Composable
+fun WnStatusPill(text: String, tone: Color = WnColors.inkDim, modifier: Modifier = Modifier) {
+    Text(
+        text,
+        modifier = modifier.clip(WnPillShape)
+            .background(tone.copy(alpha = 0.14f))
+            .border(1.dp, tone.copy(alpha = 0.42f), WnPillShape)
+            .padding(horizontal = WnSpace.sm, vertical = 3.dp),
+        style = MaterialTheme.typography.labelSmall,
+        color = tone,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
     )
 }

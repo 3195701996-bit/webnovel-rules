@@ -188,6 +188,12 @@ internal fun ExploreScreen(
                     }, enabled = !loadingBooks) { Text("下一页") }
                 }
             },
+            colors = androidx.compose.material3.TopAppBarDefaults.topAppBarColors(
+                containerColor = WnColors.bg,
+                titleContentColor = WnColors.ink,
+                navigationIconContentColor = WnColors.ink,
+                actionIconContentColor = WnColors.accent,
+            ),
         )
     }) { pad ->
         Box(Modifier.padding(pad).fillMaxSize()) {
