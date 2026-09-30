@@ -10,7 +10,7 @@
 | **Web 桌面端** | Flask 服务端 + 浏览器界面，在本机/局域网使用 | 电脑上看书、管理书库与任务 |
 | **独立 APK** | 引擎以 Chaquopy 打包进安卓 App，**不连电脑、不连云端**，装上即用 | 手机在线/离线阅读 |
 
-> 当前版本：**APK 1.2.4-demo（versionCode 126）** ｜ 桌面全量测试 **1561 passed / 2 skipped** ｜
+> 当前版本：**APK 1.5.5-demo（versionCode 140）** ｜ 桌面全量测试 **1567 passed / 2 skipped** ｜
 > JVM 单测 **38/38** ｜ 客户端↔服务端双向契约守卫 **0 问题**
 
 ---
@@ -144,7 +144,7 @@ cd android && ./gradlew :app:testDebugUnitTest          # 38 项
 # ② 桌面全量（引擎/服务端/契约/净化，约 2 分钟）
 PYTHONDONTWRITEBYTECODE=1 WR_TEST=1 WR_DISABLE_BACKGROUND=1 \
   venv/bin/python -m pytest tests/ -o addopts='' -q -p no:cacheprovider
-# 1561 passed / 2 skipped
+# 1567 passed / 2 skipped
 
 # ③ 客户端↔服务端双向契约守卫（字段漂移防线）
 venv/bin/python tools/check_client_server_contract.py   # 22 接口 / 0 问题

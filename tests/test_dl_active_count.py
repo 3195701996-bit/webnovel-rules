@@ -128,6 +128,23 @@ def _wait_status(m, key, statuses, timeout=10):
     raise AssertionError(f"等待状态 {statuses} 超时，当前: {m.status(key)}")
 
 
+def test_copy_download_uses_effective_parallelism_and_bounded_interval(monkeypatch):
+    """性能回归：网页版适配器的 concurrent=1 不得把下载任务压成 2 路。"""
+    monkeypatch.delenv("WR_MANGA_DL_CONCURRENCY", raising=False)
+    monkeypatch.delenv("WR_MANGA_DL_INTERVAL", raising=False)
+    assert dm._img_parallel_for("copymanga") == 4
+    assert dm._img_parallel_for("copymanga_web") == 4
+    assert dm._img_interval_for("copymanga") == 0.25
+    assert dm._img_interval_for("jm") == 0.0
+
+
+def test_copy_download_tuning_can_be_safely_overridden(monkeypatch):
+    monkeypatch.setenv("WR_MANGA_DL_CONCURRENCY", "99")
+    monkeypatch.setenv("WR_MANGA_DL_INTERVAL", "-3")
+    assert dm._img_parallel_for("copymanga") == 8
+    assert dm._img_interval_for("copymanga") == 0.0
+
+
 def _wait_slot_released(m, key, timeout=10):
     """终态落库先于 finally 槽位释放，需单独等待归零"""
     t0 = time.time()

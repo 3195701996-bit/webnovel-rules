@@ -1000,9 +1000,9 @@ def runtime_status():
 def main():
     import argparse
     parser = argparse.ArgumentParser(description="webnovel_rules 服务")
-    # R35: 条件默认 —— 未启用鉴权时默认仅本机(127.0.0.1)，启用鉴权后默认开放
-    # 局域网(0.0.0.0)。此前无条件默认 0.0.0.0 + 一行启动警告，实际等同于
-    # 默认让同网段任何设备可读写书库/删除数据。显式 --host 始终优先。
+    # 安全默认：只监听本机。局域网访问必须显式传入 --host 0.0.0.0，
+    # 并应同时配置 WR_AUTH_PASSWORD 或 data/auth.json。此前默认开放监听且
+    # 鉴权可关闭，警告不能替代访问控制。
     parser.add_argument("--host", default=None)
     parser.add_argument("--port", type=int, default=8766)
     parser.add_argument("--debug", action="store_true")
@@ -1010,11 +1010,7 @@ def main():
 
     host_explicit = args.host is not None
     if not host_explicit:
-        # R36b: 家庭局域网 + 手机 App/浏览器是主要使用场景——默认开放监听
-        # （此前"未鉴权→仅本机"导致手机端无法访问，三次回退教训）；
-        # 安全兜底：开放监听且未鉴权时下方打印醒目警告。
-        # 仅本机使用：显式 --host 127.0.0.1
-        args.host = "0.0.0.0"
+        args.host = "127.0.0.1"
 
     # 预热线程按实际端口自调 API（原硬编码 8766，换端口后预热静默失效）
     os.environ['PORT'] = str(args.port)
@@ -1030,7 +1026,7 @@ def main():
         print("⚠️  --debug 已开启：Flask 调试模式会暴露 Werkzeug 调试器，"
               "仅限本地开发，禁止在局域网/公网使用", flush=True)
     if args.host in ("0.0.0.0", "::") and not _auth_enabled:
-        # 用户显式要求开放监听但未设密码：尊重选择，但警告要足够醒目
+        # 显式开放监听仍允许启动以兼容家庭局域网场景，但给出醒目警告。
         print("=" * 64, flush=True)
         print("⚠️  已开放局域网监听但未启用访问鉴权！", flush=True)
         print("    局域网内其他设备可读取书库/阅读历史/漫画收藏，"
@@ -1046,5 +1042,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-
 

@@ -35,11 +35,35 @@ SAVE_EVERY_CHAPTERS = 3   # 每 N 章持久化一次
 # 长期无恙；jm 下载取 6）。拷贝漫画有 IP 级 210 软限制前科 → 单独保守档 4。
 IMG_PARALLEL = 6          # 单任务图片并发下载数（同章内，默认档）
 def _img_parallel_for(source):
+    # 下载任务必须显式覆盖 adapter.concurrent：copymanga_web 的适配器为 1，
+    # 若交给 ImageDownloader 默认推导，只会得到 2 路，外层 4 路线程形同虚设。
+    # APK 端默认给 CDN 4 路并发；可用 WR_MANGA_DL_CONCURRENCY 临时降档。
+    raw = os.environ.get("WR_MANGA_DL_CONCURRENCY", "").strip()
+    try:
+        if raw:
+            return max(1, min(8, int(raw)))
+    except ValueError:
+        pass
     return 4 if source in ("copymanga", "copymanga_web") else IMG_PARALLEL
-# 图片下载节流（仅拷贝）：原 3s/图（持锁睡觉，20 图一话至少 60s，是"下载过慢"
-# 主因）。图片走 CDN 而非 API 通道；1s/图 = 60 次/分，较原 40 次/分仅小幅上调，
-# 仍远低于阅读通道的突发并发。
-IMG_MIN_INTERVAL = 1.0    # 拷贝下载每张图最小间隔秒（其它源不节流）
+
+
+def _img_interval_for(source):
+    """下载任务图片间隔；并发已受控时不再按 1 秒串行节流。
+
+    拷贝漫画历史上使用 1s/图，实际会把 4 路线程退化成单路吞吐。
+    0.25s 仍保留温和节流，同时允许 4 路连接形成有效带宽利用。
+    可用 WR_MANGA_DL_INTERVAL 覆盖，风控时设置为 1 或更高。
+    """
+    raw = os.environ.get("WR_MANGA_DL_INTERVAL", "").strip()
+    try:
+        if raw:
+            return max(0.0, min(10.0, float(raw)))
+    except ValueError:
+        pass
+    return 0.25 if source in ("copymanga", "copymanga_web") else 0.0
+# 兼容旧配置名；实际下载任务通过 _img_interval_for() 选择间隔。
+# 历史值曾为 1s/图，会把多线程下载退化成串行，保留常量仅避免外部引用断裂。
+IMG_MIN_INTERVAL = 1.0
 # P1-1: 章节图片列表解析钩子（server/state.py 启动时注入 _get_chapter_images，
 # 下载 worker 走与阅读通道统一的三级缓存；None 时直连适配器，保持 engine 独立可用）
 images_resolver = None
@@ -614,8 +638,11 @@ class DownloadManager:
             # 下载图片存独立 downloads 目录（永久保留，与临时缓存 _cache 隔离；
             # 任何缓存清理都不触碰 downloads）
             cache_root = os.path.join(self._get_downloads_root(), source, comic_id)
-            dl = ImageDownloader(ad, cache_root,
-                                 min_interval=IMG_MIN_INTERVAL if source == "copymanga" else 0.0)
+            dl = ImageDownloader(
+                ad, cache_root,
+                # 显式并发，避免 copymanga_web.concurrent=1 把下载任务压成 2 路。
+                concurrency=_img_parallel_for(source),
+                min_interval=_img_interval_for(source))
             print(f"[manga-dl] worker {key} downloader 就绪", flush=True)
             try:
                 # 1) 获取章节列表

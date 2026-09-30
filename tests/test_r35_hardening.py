@@ -359,12 +359,12 @@ def _run_main_capture_host(app_mod, monkeypatch, argv, auth_enabled):
     return captured
 
 
-def test_default_host_is_lan(app_mod, monkeypatch):
-    """R36b: 默认即开放局域网(家庭+手机App主场景)，与鉴权无关"""
+def test_default_host_is_loopback(app_mod, monkeypatch):
+    """安全默认：未显式配置时只监听本机，与鉴权状态无关"""
     got = _run_main_capture_host(app_mod, monkeypatch, [], auth_enabled=False)
-    assert got["host"] == "0.0.0.0"
+    assert got["host"] == "127.0.0.1"
     got2 = _run_main_capture_host(app_mod, monkeypatch, [], auth_enabled=True)
-    assert got2["host"] == "0.0.0.0"
+    assert got2["host"] == "127.0.0.1"
 
 
 def test_explicit_host_overrides_without_auth(app_mod, monkeypatch):
@@ -386,13 +386,12 @@ def test_port_still_honored(app_mod, monkeypatch):
     assert got["port"] == 9999
 
 
-def test_no_auth_default_open_lan_with_warning(app_mod, monkeypatch, capsys):
-    """R36b: 默认开放局域网(家庭+手机App主场景)，无鉴权时打印醒目警告"""
+def test_no_auth_default_loopback_without_lan_warning(app_mod, monkeypatch, capsys):
+    """默认只监听本机，不应把鉴权警告当作网络隔离措施"""
     got = _run_main_capture_host(app_mod, monkeypatch, [], auth_enabled=False)
-    assert got["host"] == "0.0.0.0"
+    assert got["host"] == "127.0.0.1"
     out = capsys.readouterr().out
-    assert "未启用访问鉴权" in out
-    assert "WR_AUTH_PASSWORD" in out
+    assert "未启用访问鉴权" not in out
 
 
 def test_explicit_open_without_auth_warns_loudly(app_mod, monkeypatch, capsys):
