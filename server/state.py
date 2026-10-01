@@ -2057,6 +2057,35 @@ def _scan_downloaded_chapters(source, comic_id):
     return out
 
 
+def _downloaded_ids_for_chapters(source, comic_id, chapters):
+    """将落盘目录映射到当前详情目录，兼容 APP/Web 返回不同章节 ID。
+
+    拷贝漫画两个通道的 UUID 可能不同；下载目录中的 _info.json 保存了下载时
+    的章节名称，因此在 ID 不一致时用规范化名称进行第二次匹配。
+    """
+    _ids = set(_scan_downloaded_chapters(source, comic_id))
+    _sources = [source]
+    if source == "copymanga":
+        _sources.append("copymanga_web")
+    elif source == "copymanga_web":
+        _sources.append("copymanga")
+    _names = set()
+    for _src in _sources:
+        for _root in (MANGA_DOWNLOADS_DIR, MANGA_CACHE_DIR):
+            _p = os.path.join(_root, _src, comic_id, "_info.json")
+            try:
+                _info = json.load(open(_p, encoding="utf-8"))
+                for _c in (_info.get("chapters") or []):
+                    if str(_c.get("id")) in _ids:
+                        _names.add(str(_c.get("name") or "").strip())
+            except Exception:
+                pass
+    for _c in chapters or []:
+        if str(_c.get("id")) in _ids or str(_c.get("name") or "").strip() in _names:
+            _ids.add(str(_c.get("id")))
+    return _ids
+
+
 def _manga_media_root(source, comic_id, chapter_id=None):
     """定位漫画图片目录：已下载( downloads/，永久)优先，其次临时缓存( _cache/ )。
     返回目录绝对路径；都不存在返回 downloads 路径（新下载写入处）。"""
@@ -2607,7 +2636,7 @@ def _manga_check_one(source, comic_id, force_refresh=False):
                         if _ep_re.search(c.get("name") or "")), "")
         latest = _latest or (cur_chapters[-1]["name"] if cur_chapters else "")
         # 本地已下载章节（含图片文件的目录）
-        downloaded = set(_scan_downloaded_chapters(source, comic_id))
+        downloaded = set(_downloaded_ids_for_chapters(source, comic_id, cur_chapters))
         if source in ("copymanga", "copymanga_web"):
             for _alt in ("copymanga_web", "copymanga"):
                 if _alt != source:

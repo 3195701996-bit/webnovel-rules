@@ -24,6 +24,7 @@ from server.state import (
     _load_manga_adapters, _manga_dl, _manga_dl_key,
     _manga_adapter_name, _scan_downloaded_chapters, _manga_media_root,
     _local_chapter_images, _get_chapter_images, _manga_search_cached,
+    _downloaded_ids_for_chapters,
     _manga_search_singleflight,
     _prefetch_next_chapter_images,
     _integrity_summary, _manga_check_state, _manga_check_lock,
@@ -1208,7 +1209,7 @@ def api_manga_detail(source, comic_id):
             _chs = _li.get("chapters") or []
             if _chs:
                 # 阅读目录以实际落盘的章节目录为准，未完成的下载条目不可阅读。
-                _downloaded = _scan_downloaded_chapters(source, comic_id)
+                _downloaded = list(_downloaded_ids_for_chapters(source, comic_id, _chs))
                 if _downloaded:
                     _local_ids = {str(c.get("id")) for c in _downloaded}
                     _chs = [c for c in _chs if str(c.get("id")) in _local_ids]
@@ -1375,7 +1376,8 @@ def _refresh_detail_cache(source, comic_id, _info_p, _fast_web=None):
         "source": source, "source_name": ad.name,
         "chapters": _episodes,
         "volumes": _volumes,
-        "downloaded": _scan_downloaded_chapters(source, comic_id),
+        "downloaded": list(_downloaded_ids_for_chapters(
+            source, comic_id, _episodes + _volumes)),
         "recommend": [{"id": r.id, "title": r.title, "cover": r.cover}
                       for r in (d.recommend or [])][:8]}
     # R25: 少章节告警——源仅收录极少章节时提示读者找更完整版本
@@ -1416,7 +1418,8 @@ def _api_detail_fallback(source, comic_id, exc):
             "source": "copymanga", "source_name": "拷贝漫画(网页降级)",
             "chapters": _episodes,
             "volumes": _volumes,
-            "downloaded": _scan_downloaded_chapters("copymanga", comic_id),
+            "downloaded": list(_downloaded_ids_for_chapters(
+                "copymanga", comic_id, _episodes + _volumes)),
             "recommend": [],
             "fallback": True}
     except Exception as e2:
