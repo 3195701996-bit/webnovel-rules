@@ -2019,26 +2019,34 @@ def _manga_total_chapters(source, comic_id):
 
 def _scan_downloaded_chapters(source, comic_id):
     """扫描已下载章节 id 集合（目录内含图片文件 = 已下载）"""
-    base = _manga_media_root(source, comic_id)
-    if not os.path.isdir(base):
-        return []
     out = []
-    for _n in os.listdir(base):
+    # copymanga 与 copymanga_web 共用站点/漫画 ID，但历史下载可能落在任一
+    # source 目录；详情页必须和书库统计一样合并两边，否则显示“未下载”。
+    _sources = [source]
+    if source == "copymanga":
+        _sources.append("copymanga_web")
+    elif source == "copymanga_web":
+        _sources.append("copymanga")
+    for _src in _sources:
+      base = _manga_media_root(_src, comic_id)
+      if not os.path.isdir(base):
+        continue
+      for _n in os.listdir(base):
         # A01 双保险②：覆盖修复的崩溃残留备份目录不算章节
         # （含图片会被误统计为幽灵章节、章节数 +1）
-        if _n.endswith(".repair_old"):
-            continue
-        _p = os.path.join(base, _n)
-        if not os.path.isdir(_p):
-            continue
+          if _n.endswith(".repair_old"):
+              continue
+          _p = os.path.join(base, _n)
+          if not os.path.isdir(_p):
+              continue
         # 目录内有图片文件才算已下载（空目录/仅 URL 缓存不算）
-        try:
-            _has_img = any(f.lower().endswith((".webp", ".jpg", ".jpeg", ".png", ".gif", ".avif"))
-                           for f in os.listdir(_p))
-        except Exception:
-            _has_img = False
-        if _has_img:
-            out.append(_n)
+          try:
+              _has_img = any(f.lower().endswith((".webp", ".jpg", ".jpeg", ".png", ".gif", ".avif"))
+                             for f in os.listdir(_p))
+          except Exception:
+              _has_img = False
+          if _has_img and _n not in out:
+              out.append(_n)
     return out
 
 
@@ -2064,6 +2072,10 @@ def _local_chapter_images(source, comic_id, chapter_id):
     - 返回 None 表示该章节无本地数据（需走源站）
     """
     base = _manga_media_root(source, comic_id, chapter_id)
+    if not os.path.isdir(base) and source in ("copymanga", "copymanga_web"):
+        base = _manga_media_root(
+            "copymanga_web" if source == "copymanga" else "copymanga",
+            comic_id, chapter_id)
     if not os.path.isdir(base):
         return None
     # 本地已下载文件（按序号排序）
