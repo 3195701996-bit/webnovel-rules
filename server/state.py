@@ -2028,25 +2028,32 @@ def _scan_downloaded_chapters(source, comic_id):
     elif source == "copymanga_web":
         _sources.append("copymanga")
     for _src in _sources:
-      base = _manga_media_root(_src, comic_id)
-      if not os.path.isdir(base):
-        continue
-      for _n in os.listdir(base):
-        # A01 双保险②：覆盖修复的崩溃残留备份目录不算章节
-        # （含图片会被误统计为幽灵章节、章节数 +1）
-          if _n.endswith(".repair_old"):
-              continue
-          _p = os.path.join(base, _n)
-          if not os.path.isdir(_p):
-              continue
-        # 目录内有图片文件才算已下载（空目录/仅 URL 缓存不算）
-          try:
-              _has_img = any(f.lower().endswith((".webp", ".jpg", ".jpeg", ".png", ".gif", ".avif"))
-                             for f in os.listdir(_p))
-          except Exception:
-              _has_img = False
-          if _has_img and _n not in out:
-              out.append(_n)
+        # 不使用 _manga_media_root：它会在 downloads 根目录存在时屏蔽
+        # _cache，历史任务可能把不同章节分别落在两个根目录。
+        _bases = [
+            os.path.join(MANGA_DOWNLOADS_DIR, _src, comic_id),
+            os.path.join(MANGA_CACHE_DIR, _src, comic_id),
+        ]
+        for base in _bases:
+            if not os.path.isdir(base):
+                continue
+            for _n in os.listdir(base):
+                # A01 双保险②：覆盖修复的崩溃残留备份目录不算章节
+                if _n.endswith(".repair_old"):
+                    continue
+                _p = os.path.join(base, _n)
+                if not os.path.isdir(_p):
+                    continue
+                # 目录内有图片文件才算已下载（空目录/仅 URL 缓存不算）
+                try:
+                    _has_img = any(
+                        f.lower().endswith((".webp", ".jpg", ".jpeg", ".png",
+                                            ".gif", ".avif"))
+                        for f in os.listdir(_p))
+                except Exception:
+                    _has_img = False
+                if _has_img and _n not in out:
+                    out.append(_n)
     return out
 
 
