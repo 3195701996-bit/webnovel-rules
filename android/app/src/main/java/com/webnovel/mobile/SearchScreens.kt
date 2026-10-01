@@ -943,11 +943,10 @@ internal fun MangaSearchScreen(
                          color = MaterialTheme.colorScheme.error)
                 }
                 if (errorsText.isNotBlank()) {
-                    // 流式路径的逐源说明（"仍在查询/超时/失败"）——不静默当没有结果
-                    Text(capErrorLines(errorsText),
-                         style = MaterialTheme.typography.labelSmall,
-                         color = MaterialTheme.colorScheme.error,
-                         modifier = Modifier.testTag("manga_search_errors"))
+                    // 详细错误只在空结果/诊断区域展开；结果页只保留一行状态，
+                    // 不让源站错误文本占掉漫画结果的垂直浏览空间。
+                    WnStatusPill("部分源未返回 · 点重试或运行自检查看原因",
+                        WnColors.danger, Modifier.testTag("manga_search_errors"))
                 }
                 if (hits.isNotEmpty()) {
                     // **网页端同款分页**（0.67.0）：◀ 上一页 + 页码 + 下一页 ▶。
@@ -1024,10 +1023,8 @@ internal fun MangaSearchScreen(
             // 服务端提前结束或源站期限）
             if (!searched && errorsText.isNotBlank()) {
                 Spacer(Modifier.height(4.dp))
-                Text(capErrorLines(errorsText),
-                     style = MaterialTheme.typography.labelSmall,
-                     color = MaterialTheme.colorScheme.error,
-                     modifier = Modifier.testTag("manga_search_errors_live"))
+                WnStatusPill("部分源仍在查询或失败",
+                    WnColors.danger, Modifier.testTag("manga_search_errors_live"))
             }
             if (msg.isNotBlank()) {
                 Spacer(Modifier.height(6.dp))
@@ -1099,7 +1096,8 @@ internal fun MangaSearchScreen(
                     // （预取已移除：结果一到就并发预取封面/详情，会把封面代理 3 路闸
                     //  打满出 503、并让 jm/拷贝这类有风控的源惩罚性降速——封面随
                     //  滚动加载 + WnCoverImage 的 503 退避重试即可，源站惩罚并发。）
-                    LazyColumn(Modifier.fillMaxSize().testTag("manga_search_results"),
+                    LazyColumn(Modifier.weight(1f).fillMaxWidth()
+                        .testTag("manga_search_results"),
                     verticalArrangement = Arrangement.spacedBy(WnSpace.sm),
                     contentPadding = PaddingValues(bottom = 16.dp)) {
                     items(hits, key = { it.source + ":" + it.comicId }) { h ->

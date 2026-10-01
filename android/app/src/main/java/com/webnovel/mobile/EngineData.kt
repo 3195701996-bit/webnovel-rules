@@ -75,6 +75,11 @@ data class MangaItem(
         }
 }
 
+data class MangaFavorite(
+    val source: String, val comicId: String, val title: String, val cover: String,
+    val ts: Double, val unreadCount: Int, val latestLabel: String,
+)
+
 /**
  * 小说书源（GET /api/sources）：Legado 格式的源配置。
  * valid 为 null 表示**从未校验**（不是"通过"），界面据此显示"未校验"。
@@ -521,6 +526,8 @@ data class MangaDetail(
     /** 续读信息（服务端解析；没有阅读记录时为 null） */
     val resume: MangaResume? = null,
 ) {
+    /** 阅读目录：卷漫画没有普通 chapters，卷本身就是可下载/可阅读单元。 */
+    val readingChapters: List<MangaChapter> get() = volumes + chapters
     val downloadedCount: Int get() = (volumes + chapters).count { downloaded.contains(it.id) }
     /** 上次读到的章名（记录里的原话），用于向用户解释"要打开的是哪一话" */
     val resumeRecordLabel: String get() = resume?.recordLabel.orEmpty()
@@ -535,18 +542,19 @@ data class MangaDetail(
      * 最近话号 逐级定位，客户端只做兜底。
      */
     fun resumeIndex(readIdx: Int): Int {
-        if (chapters.isEmpty()) return -1
+        val reading = readingChapters
+        if (reading.isEmpty()) return -1
         val r = resume
         if (r != null) {
             // 身份优先（章节 id / 章名 / 话号），服务端下标只作兜底：详情页与阅读器
             // 可能拿到**两份不同的列表**，下标不能跨屏传递。
             val byIdentity = MangaResumeResolver.resolve(
-                chapters, r.matchedId.ifBlank { r.recordId }, r.recordLabel, -1)
+                reading, r.matchedId.ifBlank { r.recordId }, r.recordLabel, -1)
             if (byIdentity >= 0) return byIdentity
-            if (r.index in chapters.indices) return r.index
+            if (r.index in reading.indices) return r.index
         }
-        if (readIdx in chapters.indices) return readIdx
-        return chapters.indexOfFirst { downloaded.contains(it.id) }.takeIf { it >= 0 } ?: 0
+        if (readIdx in reading.indices) return readIdx
+        return reading.indexOfFirst { downloaded.contains(it.id) }.takeIf { it >= 0 } ?: 0
     }
 }
 
@@ -769,6 +777,16 @@ object EngineData {
                 downloadedAt = o.optString("downloaded_at"),
             )
         }
+    }
+
+    fun mangaFavorites(body: String): List<MangaFavorite> {
+        val o = runCatching { JSONObject(body) }.getOrNull() ?: return emptyList()
+        val a = o.optJSONArray("favorites") ?: return emptyList()
+        return (0 until a.length()).mapNotNull { i -> a.optJSONObject(i)?.let { x ->
+            MangaFavorite(x.optString("source"), x.optString("comic_id"),
+                x.optString("title"), x.optString("cover"), x.optDouble("ts"),
+                x.optInt("unread_count"), x.optString("latest_chapter_label"))
+        } }
     }
 
     /** 小说书源列表（GET /api/sources） */

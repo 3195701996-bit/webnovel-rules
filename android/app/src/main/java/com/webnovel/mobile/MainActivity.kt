@@ -652,6 +652,7 @@ private fun ShelfScreen(gateway: EngineGateway, ep: EngineEndpoint, loader: Imag
     // 有新话标记：取自最近一次「检查书库更新」的结果（服务端会保留批次结果）。
     // 没检查过就没有标记——不编造"有更新"。
     var mangaUpdates by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    var favorites by remember { mutableStateOf<List<MangaFavorite>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var refreshing by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -668,6 +669,8 @@ private fun ShelfScreen(gateway: EngineGateway, ep: EngineEndpoint, loader: Imag
             if (!loading) refreshing = true
             error = null
             try {
+                // 每次进入应用只触发一次收藏检查；服务端后台执行，不阻塞书架打开。
+                gateway.httpPost(ep.port, "/api/manga/favorites/check-updates", "{}")
                 // 四个读接口互相独立：并行发出（回环本机引擎，省 3 次串行往返）
                 val nbD = async { gateway.httpText(ep.port, "/api/books") }
                 val mbD = async { gateway.httpText(ep.port, "/api/manga/library") }
@@ -675,10 +678,12 @@ private fun ShelfScreen(gateway: EngineGateway, ep: EngineEndpoint, loader: Imag
                 val upD = async {
                     gateway.httpText(ep.port, "/api/manga/library/check-updates/status")
                 }
+                val favD = async { gateway.httpText(ep.port, "/api/manga/favorites") }
                 val nb = nbD.await()
                 val mb = mbD.await()
                 val hr = hrD.await()
                 val up = upD.await()
+                val fav = favD.await()
                 // 漫画全量阅读历史（含在线读过但未下载的）——最近阅读页的数据源
                 if (hr.ok) mangaHist = EngineData.mangaHistory(hr.body)
                 if (up.ok) {
@@ -687,6 +692,7 @@ private fun ShelfScreen(gateway: EngineGateway, ep: EngineEndpoint, loader: Imag
                 }
                 novels = EngineData.novels(nb.body)
                 manga = EngineData.manga(mb.body)
+                if (fav.ok) favorites = EngineData.mangaFavorites(fav.body)
                 if (!nb.ok && !mb.ok) error = "读取书架失败：HTTP ${nb.code}/${mb.code}"
             } catch (t: Throwable) {
                 error = "${t.javaClass.simpleName}: ${t.message}"
@@ -736,11 +742,11 @@ private fun ShelfScreen(gateway: EngineGateway, ep: EngineEndpoint, loader: Imag
                 // 书架双页：「最近阅读」在前、「已缓存」在后，两个平行且独立的页面；
                 // 分段页签 + 左右滑动切换，页位随状态保存恢复。
                 var page by rememberSaveable { mutableIntStateOf(0) }
-                val pagerState = rememberPagerState(initialPage = page, pageCount = { 2 })
+                val pagerState = rememberPagerState(initialPage = page, pageCount = { 3 })
                 LaunchedEffect(pagerState.currentPage) { page = pagerState.currentPage }
                 Column(Modifier.fillMaxSize()) {
-                    WnSegmentedTabs(
-                        options = listOf("最近阅读", "已缓存"),
+                                WnSegmentedTabs(
+                        options = listOf("最近阅读", "已缓存", "收藏"),
                         selected = pagerState.currentPage,
                         onSelect = { scope.launch { pagerState.animateScrollToPage(it) } },
                         modifier = Modifier.padding(horizontal = WnSpace.md,
@@ -781,7 +787,7 @@ private fun ShelfScreen(gateway: EngineGateway, ep: EngineEndpoint, loader: Imag
                                     }
                                 }
                             }
-                        } else {
+                        } else if (p == 1) {
                             // ── 页二：已缓存（小说/漫画两个子区块，各自带排序）──
                             LazyColumn(Modifier.fillMaxSize(),
                                        contentPadding = PaddingValues(WnSpace.md),
@@ -829,6 +835,18 @@ private fun ShelfScreen(gateway: EngineGateway, ep: EngineEndpoint, loader: Imag
                                                 }
                                             }
                                         }
+                                    }
+                                }
+                            }
+                        } else {
+                            LazyVerticalGrid(columns = GridCells.Fixed(3),
+                                modifier = Modifier.fillMaxSize().padding(WnSpace.md),
+                                horizontalArrangement = Arrangement.spacedBy(WnSpace.sm),
+                                verticalArrangement = Arrangement.spacedBy(WnSpace.sm)) {
+                                items(favorites.size) { i ->
+                                    val f = favorites[i]
+                                    FavoriteCard(f, ep, loader) {
+                                        onOpen(Dest.MangaDetail(f.source, f.comicId))
                                     }
                                 }
                             }
@@ -1007,6 +1025,27 @@ private fun MangaCard(m: MangaItem, ep: EngineEndpoint, loader: ImageLoader,
             }
             Spacer(Modifier.height(WnSpace.sm))
         }
+    }
+}
+
+@Composable
+private fun FavoriteCard(f: MangaFavorite, ep: EngineEndpoint,
+                         loader: ImageLoader, onClick: () -> Unit) {
+    Column(Modifier.clip(RoundedCornerShape(10.dp)).border(1.dp, WnColors.line)
+        .clickable { onClick() }) {
+        Box {
+            AsyncImage(model = f.cover, contentDescription = f.title,
+                imageLoader = loader, modifier = Modifier.fillMaxWidth().height(120.dp),
+                contentScale = androidx.compose.ui.layout.ContentScale.Crop)
+            if (f.unreadCount > 0) {
+                Text("未读 ${f.unreadCount}", color = Color.White,
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.align(Alignment.TopStart)
+                        .background(Color(0xCCB3261E)).padding(3.dp, 1.dp))
+            }
+        }
+        Text(f.title, style = MaterialTheme.typography.bodySmall, maxLines = 2,
+            overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(WnSpace.sm))
     }
 }
 

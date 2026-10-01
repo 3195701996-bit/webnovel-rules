@@ -19,7 +19,7 @@ from engine.app_utils import (now_iso, _norm, _group_key, _parse_time,
                               load_json, cache_key_of)
 from engine.config import (SEARCH_CACHE_TTL, TOC_CACHE_TTL, BOOK_PROGRESS_FILE,
                            TOC_PAGE_CAP,
-                           MANGA_DIR, MANGA_LIBRARY_FILE, MANGA_TASKS_FILE, MANGA_CACHE_DIR,
+                           MANGA_DIR, MANGA_LIBRARY_FILE, MANGA_FAV_FILE, MANGA_TASKS_FILE, MANGA_CACHE_DIR,
                            MANGA_DOWNLOADS_DIR, MANGA_STATE_DIR,
                            ST_RUNNING, ST_PAUSED, ST_STOPPED, ST_ERROR,
                            ST_DONE)
@@ -2232,6 +2232,23 @@ def _manga_stats_note_change(source, comic_id, removed=False):
                 _manga_stats_save_locked()
         return
     ent = _manga_stats_compute_entry(source, comic_id)   # 锁外扫描
+    # 下载进入书库即默认收藏：收藏是“跟踪作品”的集合，不能因为作品已下载
+    # 就丢失后续更新检查。这里只补齐收藏元数据，不覆盖用户已有的收藏时间。
+    try:
+        _lib = json.load(open(MANGA_LIBRARY_FILE, encoding="utf-8"))
+        _item = next((x for x in _lib if x.get("source") == source and
+                      str(x.get("comic_id")) == str(comic_id)), None)
+        if _item:
+            _fav = json.load(open(MANGA_FAV_FILE, encoding="utf-8"))
+            _fav = _fav if isinstance(_fav, dict) else {}
+            _fk = f"{source}:{comic_id}"
+            _old = _fav.get(_fk) or {}
+            _fav[_fk] = {"title": _item.get("title") or comic_id,
+                         "cover": _item.get("cover") or "",
+                         "ts": _old.get("ts") or time.time()}
+            atomic_write(MANGA_FAV_FILE, _fav)
+    except Exception:
+        pass
     with _manga_stats_lock:
         old = _manga_lib_stats.get(k)
         ent["rev"] = int((old or {}).get("rev") or 0) + 1
@@ -2556,6 +2573,7 @@ def _manga_check_one(source, comic_id, force_refresh=False):
                 _web_chlist_set("copymanga_web", comic_id, cur_chapters)
         # 只排除**纯整卷合集**（"第X卷"整名，不可下载）；"01卷番外/02卷宣傳圖"
         # 等卷附加内容是实际可下载章节，必须保留——与下载 worker 过滤一致
+        _all_chapters_for_favorites = list(cur_chapters)
         from engine.manga.download_manager import _is_volume_only as _vol_only
         cur_chapters = [c for c in cur_chapters
                         if not _vol_only(c.get("name") or "")]
@@ -2599,6 +2617,8 @@ def _manga_check_one(source, comic_id, force_refresh=False):
             "new_total": len(cur_chapters),
             "missing_count": len(missing),
             "missing": missing[:200],
+            # 收藏更新需要按“实际已读章节集合”计算未读，不能只返回本地缺失数。
+            "all_chapters": _all_chapters_for_favorites[:5000],
             "latest": latest,
             "integrity": _integrity,
         }
@@ -2805,5 +2825,3 @@ def _norm_comic_id(source, comic_id):
 def _safe_comic_id(source, comic_id):
     """校验并归一化漫画 ID（漫画路由统一入口）"""
     return _norm_comic_id(source, _safe_seg(comic_id, "漫画"))
-
-
