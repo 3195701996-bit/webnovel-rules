@@ -43,7 +43,7 @@ data class HttpText(val code: Int, val body: String) {
 }
 
 /** 漫画搜索屏所需的最小网关面，允许用离线响应验收真实 Compose 页面。 */
-internal interface MangaSearchGateway {
+interface MangaSearchGateway {
     suspend fun httpText(port: Int, path: String, auth: Boolean = true): HttpText
     suspend fun httpPost(port: Int, path: String, json: String? = null,
                          auth: Boolean = true): HttpText
