@@ -130,7 +130,7 @@ android.sourceSets.main.assets.srcDir(buildIdentityDir)
 android.sourceSets.androidTest.assets.srcDir(buildIdentityDir)
 tasks.matching {
     it.name == 'mergeDebugAssets' || it.name == 'mergeReleaseAssets' ||
-        it.name == 'mergeDebugAndroidTestAssets'
+        it.name == 'mergeDebugAndroidTestAssets' || it.name.toLowerCase().contains('lint')
 }
     .configureEach { dependsOn 'writeBuildIdentity' }
 
