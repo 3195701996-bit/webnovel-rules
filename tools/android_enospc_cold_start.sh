@@ -41,7 +41,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "[1/6] 构建 1.6.4 debug 验证包（不发布）"
+echo "[1/6] 构建当前版本 debug 验证包（不发布）"
 cd "$android_dir"
 "$gradlew" :app:testDebugUnitTest :app:compileDebugAndroidTestKotlin \
   :app:assembleDebug :app:assembleDebugAndroidTest
