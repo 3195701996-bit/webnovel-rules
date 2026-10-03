@@ -4,6 +4,8 @@ import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.text.Normalizer
+import java.util.Locale
 
 /**
  * 离线本地索引（方向基线 §5.4 / §6.6）。
@@ -24,6 +26,15 @@ import java.io.File
  *         已下载图片 `runtime/manga/downloads/<source>/<comic_id>/<chapter_id>/0000.jpg`
  */
 object OfflineStore {
+
+    /** CopyManga APP/Web adapters share comic identities but older builds used separate roots. */
+    internal fun mangaSourceAliases(source: String): List<String> =
+        if (source == "copymanga" || source == "copymanga_web") {
+            listOf("copymanga", "copymanga_web")
+        } else listOf(source)
+
+    internal fun canonicalMangaSource(source: String): String =
+        if (source == "copymanga_web") "copymanga" else source
 
     fun runtimeDir(ctx: Context): File = File(ctx.filesDir, "runtime")
 
@@ -213,7 +224,8 @@ object OfflineStore {
     internal fun mangaFrom(rootDir: File): List<OfflineManga> {
         val mangaDir = File(rootDir, "manga")
         val root = File(mangaDir, "downloads")
-        if (!root.isDirectory) return emptyList()
+        val legacyCacheRoot = File(mangaDir, "_cache")
+        if (!root.isDirectory && !legacyCacheRoot.isDirectory) return emptyList()
         val titles = HashMap<String, String>()          // "source|comicId" → title
         readJsonArray(File(mangaDir, "_library.json"))?.let { arr ->
             for (i in 0 until arr.length()) {
@@ -224,41 +236,299 @@ object OfflineStore {
                 }
             }
         }
-        val out = ArrayList<OfflineManga>()
-        for (src in root.listFiles().orEmpty().sortedBy { it.name }) {
-            if (!src.isDirectory) continue
-            for (comic in src.listFiles().orEmpty().sortedBy { it.name }) {
-                if (!comic.isDirectory) continue
-                var chapters = 0
-                var images = 0
-                for (ch in comic.listFiles().orEmpty()) {
-                    if (!ch.isDirectory) continue
-                    val n = ch.listFiles().orEmpty().count { isImage(it.name) }
-                    if (n > 0) { chapters++; images += n }
+        val identities = LinkedHashSet<Pair<String, String>>()
+        for (mediaRoot in listOf(root, legacyCacheRoot)) {
+            for (src in mediaRoot.listFiles().orEmpty().sortedBy { it.name }) {
+                if (!src.isDirectory) continue
+                for (comic in src.listFiles().orEmpty().sortedBy { it.name }) {
+                    if (!comic.isDirectory) continue
+                    identities.add(canonicalMangaSource(src.name) to comic.name)
                 }
-                if (chapters == 0) continue
-                out.add(OfflineManga(
-                    source = src.name, comicId = comic.name,
-                    title = titles["${src.name}|${comic.name}"] ?: comic.name,
-                    chapterCount = chapters, imageCount = images,
-                ))
             }
+        }
+        val out = identities.mapNotNull { (source, comicId) ->
+            val chapters = mangaChaptersFrom(rootDir, source, comicId)
+            if (chapters.isEmpty()) return@mapNotNull null
+            val title = mangaSourceAliases(source).asSequence()
+                .mapNotNull { titles["$it|$comicId"]?.takeIf(String::isNotBlank) }
+                .firstOrNull() ?: comicId
+            OfflineManga(
+                source = source,
+                comicId = comicId,
+                title = title,
+                chapterCount = chapters.size,
+                imageCount = chapters.sumOf { it.second.size },
+            )
         }
         return out.sortedByDescending { it.imageCount }
     }
 
     /** 已下载的（章节id → 图片文件列表，按页码排序） */
     fun mangaChapters(ctx: Context, source: String, comicId: String): List<Pair<String, List<File>>> {
-        val dir = File(runtimeDir(ctx), "manga/downloads/$source/$comicId")
-        if (!dir.isDirectory) return emptyList()
-        val out = ArrayList<Pair<String, List<File>>>()
-        for (ch in dir.listFiles().orEmpty().sortedBy { it.name }) {
-            if (!ch.isDirectory) continue
-            val imgs = ch.listFiles().orEmpty().filter { isImage(it.name) }
-                .sortedBy { it.name }
-            if (imgs.isNotEmpty()) out.add(ch.name to imgs)
+        return mangaChaptersFrom(runtimeDir(ctx), source, comicId)
+    }
+
+    internal fun mangaChaptersFrom(
+        rootDir: File, source: String, comicId: String,
+    ): List<Pair<String, List<File>>> {
+        data class MangaRoot(
+            val alias: String,
+            val dir: File,
+            val metadata: Map<String, MangaChapterMetadata>,
+            val legacyCache: Boolean,
+        )
+        data class Candidate(val root: MangaRoot, val pages: List<File>)
+
+        val mangaDir = File(rootDir, "manga")
+        val roots = mangaSourceAliases(source).flatMap { alias ->
+            listOf(
+                File(mangaDir, "downloads/$alias/$comicId") to false,
+                File(mangaDir, "_cache/$alias/$comicId") to true,
+            ).mapNotNull { (dir, legacyCache) ->
+                if (!dir.isDirectory) return@mapNotNull null
+                MangaRoot(alias, dir, chapterMetadata(dir), legacyCache)
+            }
         }
-        return out
+        if (roots.isEmpty()) return emptyList()
+
+        // Use one persisted catalog where available, but gather media from both legacy roots.
+        val metadata = LinkedHashMap<String, MangaChapterMetadata>()
+        roots.forEach { root -> root.metadata.forEach { (id, row) -> metadata.putIfAbsent(id, row) } }
+        // Old CopyManga APP/Web adapters may persist different chapter IDs for the
+        // same source chapter. Match their persisted Unicode-normalized labels, but
+        // only when each alias has at most one row for that label; duplicate labels
+        // within one catalog are ambiguous and must remain distinct.
+        val idsByNameAndAlias = mutableMapOf<String, MutableMap<String, MutableSet<String>>>()
+        roots.forEach { root ->
+            root.metadata.forEach { (id, row) ->
+                val name = mangaChapterIdentityName(row.sortName)
+                if (name.isNotEmpty()) {
+                    idsByNameAndAlias.getOrPut(name) { mutableMapOf() }
+                        .getOrPut(root.alias) { mutableSetOf() }.add(id)
+                }
+            }
+        }
+        val ambiguousNames = idsByNameAndAlias.filterValues { byAlias ->
+            byAlias.values.any { it.size > 1 }
+        }.keys
+        val ids = LinkedHashSet<String>()
+        roots.forEach { root ->
+            root.dir.listFiles().orEmpty().filter { it.isDirectory }
+                .sortedBy { it.name }.forEach { ids.add(it.name) }
+        }
+
+        val out = ids.mapNotNull { chapterId ->
+            val candidates = roots.mapNotNull { root ->
+                // `_cache` also contains ordinary online reader cache. Only promote
+                // chapters explicitly present in its legacy download manifest.
+                if (root.legacyCache && chapterId !in root.metadata) return@mapNotNull null
+                val dir = File(root.dir, chapterId).takeIf(File::isDirectory)
+                    ?: return@mapNotNull null
+                val pages = completeChapterPages(dir, root.metadata[chapterId]?.expectedPageCount)
+                pages.takeIf(List<File>::isNotEmpty)?.let { Candidate(root, it) }
+            }
+            candidates.maxWithOrNull(
+                compareBy<Candidate> { it.pages.size }
+                    .thenBy { if (!it.root.legacyCache) 1 else 0 }
+                    .thenBy { if (it.root.alias == canonicalMangaSource(source)) 1 else 0 },
+            )?.let { chapterId to it.pages }
+        }
+
+        val canonicalIds = roots.filter {
+            it.alias == canonicalMangaSource(source) && !it.legacyCache
+        }.flatMap { it.metadata.keys }.toSet()
+        val deduplicated = out.groupBy { (chapterId, _) ->
+            val name = metadata[chapterId]?.let { mangaChapterIdentityName(it.sortName) }.orEmpty()
+            if (name.isNotEmpty() && name !in ambiguousNames) "name:$name" else "id:$chapterId"
+        }.values.mapNotNull { aliases ->
+            val bestPages = aliases.maxByOrNull { it.second.size } ?: return@mapNotNull null
+            val stableId = aliases.firstOrNull { it.first in canonicalIds }?.first
+                ?: bestPages.first
+            stableId to bestPages.second
+        }
+
+        return deduplicated.sortedWith(compareBy<Pair<String, List<File>>>(
+            { metadata[it.first]?.let { row -> if (row.isVolume) 0 else 1 } ?: 1 },
+            { metadata[it.first]?.sortCategory ?: Int.MAX_VALUE },
+            { metadata[it.first]?.sortNumber ?: Double.POSITIVE_INFINITY },
+            { metadata[it.first]?.sortVolume ?: Double.POSITIVE_INFINITY },
+            { metadata[it.first]?.sortName ?: "" },
+            { metadata[it.first]?.ordinal ?: Int.MAX_VALUE },
+            { it.first },
+        ))
+    }
+
+    private data class MangaChapterMetadata(
+        val ordinal: Int,
+        val isVolume: Boolean,
+        val expectedPageCount: Int?,
+        val sortCategory: Int,
+        val sortNumber: Double,
+        val sortVolume: Double,
+        val sortName: String,
+    )
+
+    /** Keep alias matching aligned with the server's NFKC/whitespace/case-fold key. */
+    private fun mangaChapterIdentityName(value: String): String =
+        Normalizer.normalize(value, Normalizer.Form.NFKC)
+            .trim().split(Regex("\\s+")).filter(String::isNotEmpty)
+            .joinToString(" ").lowercase(Locale.ROOT)
+
+    /** Use the persisted source catalog for both completeness checks and volume-first reading. */
+    private fun chapterMetadata(comicDir: File): Map<String, MangaChapterMetadata> {
+        val manifest = File(comicDir, "_info.json")
+        if (!manifest.isFile) return emptyMap()
+        return try {
+            val rows = JSONObject(manifest.readText(Charsets.UTF_8)).optJSONArray("chapters")
+                ?: return emptyMap()
+            buildMap {
+                for (i in 0 until rows.length()) {
+                    val row = rows.optJSONObject(i) ?: continue
+                    val id = row.optString("id")
+                    if (id.isBlank()) continue
+                    val name = row.optString("name")
+                    val sort = mangaChapterSortKey(name)
+                    val count = row.optInt("download_page_count", 0).takeIf { it > 0 }
+                    put(id, MangaChapterMetadata(
+                        ordinal = i,
+                        isVolume = isVolumeOnlyTitle(name),
+                        expectedPageCount = count,
+                        sortCategory = sort.first,
+                        sortNumber = sort.second,
+                        sortVolume = sort.third,
+                        sortName = name,
+                    ))
+                }
+            }
+        } catch (_: Exception) {
+            emptyMap()
+        }
+    }
+
+    /** Mirrors engine.manga.download_manager._VOL_ONLY_RE (whole-title match only). */
+    private fun isVolumeOnlyTitle(title: String): Boolean {
+        val number = "(?:\\d+|[一二三四五六七八九十百零〇廿卅]+)"
+        val pattern = Regex(
+            "(?:單行本|单行本)?\\s*(?:" +
+                "第\\s*" + number + "\\s*[卷巻]|" +
+                "[卷巻]\\s*" + number + "|" +
+                number + "\\s*[卷巻]|" +
+                "Vol(?:ume)?\\.?\\s*\\d+)\\s*",
+            RegexOption.IGNORE_CASE,
+        )
+        return pattern.matches(title.trim())
+    }
+
+    /**
+     * Keep legacy offline manifests in the same display order as the service's
+     * `_sort_chapters`: numeric episodes first, then volume-only entries, then
+     * appendices/unnumbered entries. New manifests may already be canonical, but
+     * old users must not get a different chapter order merely because they are offline.
+     */
+    private fun mangaChapterSortKey(title: String): Triple<Int, Double, Double> {
+        val name = title.trim()
+        val numeral = "(?:\\d+(?:\\.\\d+)?|[零〇一二两兩三四五六七八九十百廿卅]+)"
+        val episode = Regex("第\\s*($numeral)\\s*(?:话|話|回|章|集|话数|話数)")
+            .find(name)?.groupValues?.getOrNull(1)?.let(::parseMangaNumber)
+        val volume = Regex("(?:第\\s*($numeral)\\s*[卷巻]|Vol\\.?\\s*(\\d+(?:\\.\\d+)?)|[卷巻]\\s*($numeral))", RegexOption.IGNORE_CASE)
+            .find(name)?.groupValues?.drop(1)?.firstOrNull { it.isNotEmpty() }
+            ?.let(::parseMangaNumber) ?: 0.0
+        if (episode != null) return Triple(0, episode, volume)
+
+        Regex("^\\s*(\\d+(?:\\.\\d+)?)\\s*$").find(name)?.let {
+            return Triple(0, it.groupValues[1].toDoubleOrNull() ?: Double.POSITIVE_INFINITY, 0.0)
+        }
+        val extra = Regex(
+            "特别篇|特別篇|番外|休載|休载|贺图|賀圖|公告|通知|後記|后记|" +
+                "外传|外傳|小剧场|小劇場|总集篇|總集篇|设定集|設定集|插图|插圖|" +
+                "动画化|動畫化|纪念|紀念|预告|預告|附錄|附录|單本|单本|OVA|SP\\b",
+            RegexOption.IGNORE_CASE,
+        ).containsMatchIn(name)
+        if (!extra) {
+            Regex("(?<![\\d.])(\\d{1,4})\\s*[-–—－]\\s*(\\d+)(?=[\\s(（)）]|$)")
+                .find(name)?.let {
+                    val number = "${it.groupValues[1]}.${it.groupValues[2]}".toDoubleOrNull()
+                    if (number != null) return Triple(0, number, 0.0)
+                }
+            Regex("(?<![\\d.\\-–—－~])(\\d{1,4}(?:\\.\\d+)?)(?=[\\s(（)）]|$)")
+                .find(name)?.let {
+                    val number = it.groupValues[1].toDoubleOrNull()
+                    if (number != null) return Triple(0, number, 0.0)
+                }
+        }
+        return Triple(1, Double.POSITIVE_INFINITY, if (isVolumeOnlyTitle(name)) volume else Double.POSITIVE_INFINITY)
+    }
+
+    private fun parseMangaNumber(token: String): Double {
+        token.toDoubleOrNull()?.let { return it }
+        val digits = mapOf('零' to 0, '〇' to 0, '一' to 1, '二' to 2, '两' to 2,
+            '兩' to 2, '三' to 3, '四' to 4, '五' to 5, '六' to 6, '七' to 7,
+            '八' to 8, '九' to 9)
+        if (token == "廿") return 20.0
+        if (token == "卅") return 30.0
+        if (token.startsWith("廿")) return 20.0 + parseMangaNumber(token.drop(1))
+        if (token.startsWith("卅")) return 30.0 + parseMangaNumber(token.drop(1))
+        if ('十' !in token && '百' !in token) {
+            return token.mapIndexed { index, char ->
+                (digits[char] ?: return Double.POSITIVE_INFINITY) *
+                    Math.pow(10.0, (token.length - index - 1).toDouble())
+            }.sum()
+        }
+        var section = 0
+        var pending: Int? = null
+        for (char in token) {
+            when {
+                char in digits -> pending = digits.getValue(char)
+                char == '十' -> { section += (pending ?: 1) * 10; pending = null }
+                char == '百' -> { section += (pending ?: 1) * 100; pending = null }
+                else -> return Double.POSITIVE_INFINITY
+            }
+        }
+        return (section + (pending ?: 0)).toDouble()
+    }
+
+    /** New manifests require the same complete, zero-based sequence as server.state. */
+    private fun completeChapterPages(chapterDir: File, expectedCount: Int?): List<File> {
+        val pages = sortedMapOf<Int, File>()
+        for (file in chapterDir.listFiles().orEmpty().sortedBy { it.name }) {
+            val index = pageIndex(file.name) ?: continue
+            if (isReadableImage(file) && index !in pages) pages[index] = file
+        }
+        if (pages.isEmpty()) return emptyList()
+        // Even legacy manifests without an authoritative page count must reject
+        // provable interior gaps. Otherwise a partial download such as 0000, 0002
+        // is incorrectly exposed as a complete offline chapter.
+        if (pages.keys.withIndex().any { (position, page) -> page != position }) {
+            return emptyList()
+        }
+        if (expectedCount != null && pages.size != expectedCount) return emptyList()
+        return pages.values.toList()
+    }
+
+    internal fun pageIndex(name: String): Int? {
+        val match = Regex("^(\\d+)(?:\\.[^.]+)?$").matchEntire(name) ?: return null
+        return match.groupValues[1].toIntOrNull()
+    }
+
+    /** Align offline discovery with the engine's image-header integrity check. */
+    internal fun isReadableImage(file: File): Boolean {
+        if (!isImage(file.name) || pageIndex(file.name) == null || !file.isFile) return false
+        return try {
+            val header = ByteArray(12)
+            java.io.DataInputStream(file.inputStream()).use { it.readFully(header) }
+            (header[0] == 0xff.toByte() && header[1] == 0xd8.toByte()) ||
+                header.copyOfRange(0, 8).contentEquals(
+                    byteArrayOf(0x89.toByte(), 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a)) ||
+                header.copyOfRange(0, 6).contentEquals("GIF87a".toByteArray()) ||
+                header.copyOfRange(0, 6).contentEquals("GIF89a".toByteArray()) ||
+                (header.copyOfRange(0, 4).contentEquals("RIFF".toByteArray()) &&
+                    header.copyOfRange(8, 12).contentEquals("WEBP".toByteArray())) ||
+                (header.copyOfRange(4, 8).contentEquals("ftyp".toByteArray()) &&
+                    (header.copyOfRange(8, 12).contentEquals("avif".toByteArray()) ||
+                        header.copyOfRange(8, 12).contentEquals("avis".toByteArray())))
+        } catch (_: Exception) {
+            false
+        }
     }
 
     /**

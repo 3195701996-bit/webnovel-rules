@@ -10,8 +10,8 @@
 | **Web 桌面端** | Flask 服务端 + 浏览器界面，在本机/局域网使用 | 电脑上看书、管理书库与任务 |
 | **独立 APK** | 引擎以 Chaquopy 打包进安卓 App，**不连电脑、不连云端**，装上即用 | 手机在线/离线阅读 |
 
-> 当前版本：**APK 1.6.0（versionCode 150）** ｜ 漫画搜索修复 + APK UI 全面升级 ｜
-> JVM 单测 **38/38** ｜ 客户端↔服务端双向契约守卫 **0 问题**
+> 当前版本：**APK 1.6.4（versionCode 154）**。版本号以 `android/app/build.gradle` 为准；
+> 搜索与下载状态近期持续修复中。验证结果请以当前提交的 CI 和构建记录为准。
 
 ---
 
@@ -103,7 +103,7 @@ android/               独立 APK（Kotlin + Compose，引擎经 Chaquopy 内置
   app/src/main/java/com/webnovel/mobile/
     WnTheme.kt         设计体系（暖墨暗色 + 组件库）
     EngineData.kt      客户端解析层（契约守卫盯着，键名不可乱改）
-tests/                 桌面全量测试（1561 项）
+tests/                 桌面全量测试
 tools/                 契约守卫 / 探针（分页审计、目录完整性、章尾污染、本地计数核对）
 docs/                  设计文档与调研笔记
 ```
@@ -131,7 +131,8 @@ JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home \
 # 也可以直接用 Android Studio 打开本目录，Sync 后 Run
 ```
 
-要求：Android SDK 35、JDK 17、Python 3.12（引擎经 Chaquopy 打包进 APK）。
+要求：Android SDK 35、JDK 17，以及与 Chaquopy 目标版本一致的 Python 3.13（用于 APK 构建）；
+Web 服务端可使用 Python 3.11 或 3.12。
 
 ---
 
@@ -139,23 +140,29 @@ JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home \
 
 ```bash
 # ① 客户端逻辑单测（无需设备）
-cd android && ./gradlew :app:testDebugUnitTest          # 38 项
+cd android && ./gradlew :app:testDebugUnitTest
 
 # ② 桌面全量（引擎/服务端/契约/净化，约 2 分钟）
 PYTHONDONTWRITEBYTECODE=1 WR_TEST=1 WR_DISABLE_BACKGROUND=1 \
   venv/bin/python -m pytest tests/ -o addopts='' -q -p no:cacheprovider
-# 1567 passed / 2 skipped
+# 结果数量以当前提交的 CI 输出为准
 
 # ③ 客户端↔服务端双向契约守卫（字段漂移防线）
-venv/bin/python tools/check_client_server_contract.py   # 22 接口 / 0 问题
-venv/bin/python tools/check_request_contract.py         # 14 接口 / 0 问题
+venv/bin/python tools/check_client_server_contract.py
+venv/bin/python tools/check_request_contract.py
 
 # ④ 可复跑探针（数据质量自查）
 venv/bin/python tools/probe_pagination_audit.py         # 多页正文
 venv/bin/python tools/probe_toc_integrity.py            # 全目录
 venv/bin/python tools/probe_chapter_tail.py             # 章尾污染
 venv/bin/python tools/probe_local_counts.py             # API 数字 vs 磁盘
+
+# ⑤ 正式发布前 APK 验收（只读；候选必须来自指定的干净提交）
+EXPECTED_GIT_REVISION=<本次发布完整40位Git SHA> \
+  tools/verify_android_release.sh <上一版-release.apk> <候选-release.apk> 2.0.0 <递增后的versionCode>
 ```
+
+发布验收器还会核对包名、版本、v2/v3 签名证书连续性和 APK 完整性，并输出候选 APK 的 SHA-256；未提供准确的 `EXPECTED_GIT_REVISION` 会直接拒绝验收。构建、验收、覆盖升级和发布均需在本地与目标设备验证门全部关闭后进行。
 
 ---
 

@@ -39,18 +39,24 @@ object MangaFixture {
     /** 解析一部可下载的漫画（优先缓存；失败才搜索并重试） */
     suspend fun pick(gw: EngineGateway, port: Int,
                      source: String = "mangadex",
+                     requireReachable: Boolean = false,
                      log: (String) -> Unit = {}): Pick {
-        loadCached()?.let { c ->
-            val ok = fromDetail(gw, port, c.source, c.comicId)?.let { p ->
-                p.copy(chapterId = if (c.chapterId.isNotBlank()) c.chapterId else p.chapterId)
-            }
+        val cached = loadCached()
+        if (cached != null && requireReachable && cached.source != source) {
+            log("升级验收忽略其他来源的缓存夹具：${cached.source}（要求 $source）")
+        }
+        cached?.takeIf { !requireReachable || it.source == source }?.let { c ->
+            val ok = fromDetail(gw, port, c.source, c.comicId, c.chapterId)
             if (ok != null && ok.chapterId.isNotBlank()) {
                 log("夹具命中缓存：${ok.source}/${ok.comicId}（未重新搜索）")
                 return ok.copy(fromCache = true)
             }
             log("缓存已失效（详情解析不出来），改为搜索")
         }
-        val sources = listOf(source, "jm", "copymanga", "nhentai").distinct()
+        // 发布升级必须验证计划指定的真实源；跨源回退会让调用方收到与预期
+        // 不同的 transport（UpgradeConsistencyTest 明确要求 MangaDex）。
+        val sources = if (requireReachable) listOf(source)
+            else listOf(source, "jm", "copymanga", "nhentai").distinct()
         for (round in 0 until 3) {
             for (src in sources) {
                 for (kw in KEYWORDS) {
@@ -67,7 +73,12 @@ object MangaFixture {
         }
         // 源站不可达/限流时**跳过**而不是判失败：这类失败会把发布门槛变成噪声
         // （"红"看起来像代码回归，实际是外站天气）。用 Assume 跳过，报告里会显示
-        // skipped 与原因，代码回归仍会是红。
+        // skipped 与原因，代码回归仍会是红。真正执行跨版本覆盖升级时则必须
+        // 要求真实下载闭环；否则外部脚本可能把两个被跳过的阶段误报为 PASS。
+        if (requireReachable) {
+            log("指定源 $source 的三个关键词、三轮退避都没拿到可用作品：升级验收必须真实下载，判定失败")
+            throw AssertionError("升级验收要求 $source 真实源可用，但三个关键词×三轮退避均未拿到可用作品")
+        }
         log("三个源、三个关键词、三轮退避都没拿到可用作品：判定为源站不可达/限流，跳过本用例")
         org.junit.Assume.assumeTrue(
             "源站不可达或限流（三源×三关键词×三轮退避全失败）——环境问题，跳过",
@@ -99,11 +110,13 @@ object MangaFixture {
 
     /** 只查详情（比搜索稳得多）：拿标题/封面/章节 */
     private suspend fun fromDetail(gw: EngineGateway, port: Int,
-                                   source: String, comicId: String): Pick? {
+                                   source: String, comicId: String,
+                                   preferredChapterId: String = ""): Pick? {
         val dr = gw.httpText(port, "/api/manga/$source/$comicId")
         if (!dr.ok) return null
         val d = EngineData.mangaDetail(dr.body) ?: return null
-        val ch = d.chapters.lastOrNull() ?: return null
+        val ch = d.chapters.firstOrNull { it.id == preferredChapterId }
+            ?: d.chapters.lastOrNull() ?: return null
         return Pick(source, comicId, ch.id, d.title, d.cover, false)
     }
 

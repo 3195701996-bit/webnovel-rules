@@ -72,12 +72,13 @@ class MangaPathTest {
         val d = EngineData.mangaDetail(det.body)
         assertNotNull("详情解析失败：${det.body.take(200)}", d)
         assertEquals("标题", SelfTestComic.TITLE, d!!.title)
-        assertEquals("章节数", 3, d.chapters.size)
+        assertEquals("本地目录只含已下载章节", 2, d.chapters.size)
         assertEquals("第 1 话 id", SelfTestComic.CH1_ID, d.chapters[0].id)
         assertEquals("第 1 话名", SelfTestComic.CH1_NAME, d.chapters[0].name)
         assertTrue("第 1 话应为已下载", d.downloaded.contains(SelfTestComic.CH1_ID))
         assertTrue("第 2 话应为已下载", d.downloaded.contains(SelfTestComic.CH2_ID))
-        assertFalse("第 3 话不应标记已下载", d.downloaded.contains(SelfTestComic.CH3_ID))
+        assertFalse("本地目录不得出现未下载第 3 话",
+            d.chapters.any { it.id == SelfTestComic.CH3_ID })
         assertEquals("已下载话数", 2, d.downloadedCount)
         ev("详情：chapters=3 已下载=${d.downloadedCount} 第3话未下载=${!d.downloaded.contains(SelfTestComic.CH3_ID)}")
 

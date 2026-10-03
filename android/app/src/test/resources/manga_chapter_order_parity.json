@@ -1,0 +1,36 @@
+{
+  "cases": [
+    {
+      "name": "volume_chinese_numerals_and_appendix",
+      "chapters": [
+        {"id": "ep-10", "name": "第10话", "kind": "chapter"},
+        {"id": "vol-2", "name": "第二卷", "kind": "volume"},
+        {"id": "vol-3", "name": "第三巻", "kind": "volume"},
+        {"id": "ep-2", "name": "第2話", "kind": "chapter"},
+        {"id": "vol-1", "name": "第一卷", "kind": "volume"},
+        {"id": "ep-1", "name": "第1话", "kind": "chapter"},
+        {"id": "appendix", "name": "番外2", "kind": "chapter"}
+      ],
+      "expected": ["vol-1", "vol-2", "vol-3", "ep-1", "ep-2", "ep-10", "appendix"]
+    },
+    {
+      "name": "legacy_numeric_fallbacks_and_appendix",
+      "chapters": [
+        {"id": "ep-100", "name": "第100话", "kind": "chapter"},
+        {"id": "embedded-50", "name": "连载标题50 正篇", "kind": "chapter"},
+        {"id": "ep-87", "name": "第87話", "kind": "chapter"},
+        {"id": "special-2", "name": "特別篇2", "kind": "chapter"},
+        {"id": "part-37-1", "name": "37-1", "kind": "chapter"},
+        {"id": "part-37-2", "name": "37.2", "kind": "chapter"},
+        {"id": "part-36-5", "name": "36.5", "kind": "chapter"},
+        {"id": "ep-1", "name": "第1話", "kind": "chapter"},
+        {"id": "vol-2", "name": "Vol.2", "kind": "volume"},
+        {"id": "vol-1", "name": "第1巻", "kind": "volume"}
+      ],
+      "expected": [
+        "vol-1", "vol-2", "ep-1", "part-36-5", "part-37-1", "part-37-2",
+        "embedded-50", "ep-87", "ep-100", "special-2"
+      ]
+    }
+  ]
+}

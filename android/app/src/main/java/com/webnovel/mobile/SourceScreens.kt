@@ -982,13 +982,26 @@ fun BackupScreen(
         }
         scope.launch {
             busy = true; msg = "正在恢复（会先校验整份备份）…"
-            msg = try {
+            val stopped = runCatching { gateway.stopEngine() }.getOrDefault(false)
+            msg = if (!stopped) {
+                "无法确认本机引擎已停止，未修改任何数据；请重试，或关闭应用后再恢复。"
+            } else try {
                 val r = Backup.restore(ctx, uri)
-                "恢复完成：写入 ${r.restored} 个文件" +
-                    (if (r.skipped > 0) "，跳过 ${r.skipped} 个（备份里缺失）" else "") +
-                    "（备份时间 ${r.createdAt}）；重启引擎后生效。"
+                val restarted = runCatching { gateway.connect() }.getOrNull()
+                val ready = restarted is EngineState.Ready
+                if (ready) {
+                    "恢复完成：写入 ${r.restored} 个文件" +
+                        (if (r.skipped > 0) "，跳过 ${r.skipped} 个（备份里缺失）" else "") +
+                        "（备份时间 ${r.createdAt}），本机引擎已重启。"
+                } else {
+                    "数据已恢复并通过校验（${r.restored} 个文件，备份时间 ${r.createdAt}），" +
+                        "但本机引擎未能重启；返回首页点击‘重试连接’后生效。"
+                }
             } catch (t: Throwable) {
-                "恢复失败：${t.message ?: t.javaClass.simpleName}"
+                val restarted = runCatching { gateway.connect() }.getOrNull()
+                val restartHint = if (restarted is EngineState.Ready) "引擎已重新启动。"
+                    else "引擎也未能重启，请返回首页点击‘重试连接’。"
+                "恢复失败：${t.message ?: t.javaClass.simpleName}。$restartHint"
             }
             busy = false
         }
@@ -1003,7 +1016,7 @@ fun BackupScreen(
         Column(Modifier.padding(pad).fillMaxSize().padding(WnSpace.lg)) {
             WnSectionHeader("备份内容")
             Text(
-                "书源配置与启用状态、小说阅读进度、漫画书库与阅读进度。\n" +
+                "书源配置与启用状态、小说阅读进度、漫画书库、阅读历史与收藏。\n" +
                     "不含书籍正文与漫画图片：这些体积大且可以从书源重新下载，" +
                     "因此备份文件很小，也不等于『离线可读的全库副本』。",
                 style = MaterialTheme.typography.bodySmall,
@@ -1062,7 +1075,7 @@ fun BackupScreen(
             }
             Text(
                 "恢复前会校验整份备份（格式版本、路径白名单、逐文件 SHA-256），" +
-                    "校验不通过就整体不写入；写入中途出错会自动回滚。",
+                    "随后停止本机引擎再写入；中途出错会尝试回滚，回滚异常时保留原数据快照。",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

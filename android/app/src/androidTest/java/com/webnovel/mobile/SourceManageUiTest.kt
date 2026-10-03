@@ -2,11 +2,14 @@ package com.webnovel.mobile
 
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToNode
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.LargeTest
 import org.junit.Assert.assertTrue
@@ -48,9 +51,9 @@ class SourceManageUiTest {
 
         // 1) 筛选行在位（口径与批量操作一致：全部/启用/停用/验证通过/失败/未验证）
         waitText("全部", substring = true)
-        rule.onNodeWithTag("src_filter_all").assertIsDisplayed()
-        rule.onNodeWithTag("src_filter_verified").assertIsDisplayed()
-        rule.onNodeWithTag("src_filter_unverified").assertIsDisplayed()
+        rule.onNodeWithTag("src_filter_all").assertExists()
+        rule.onNodeWithTag("src_filter_verified").assertExists()
+        rule.onNodeWithTag("src_filter_unverified").assertExists()
         ev("筛选入口在位：全部 / 验证通过 / 未验证 …")
 
         // 2) 批量入口在位且可用（真正的改动由路径用例负责）

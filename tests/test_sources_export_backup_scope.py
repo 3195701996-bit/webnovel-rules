@@ -133,7 +133,7 @@ def test_backup_scope_lists_include_and_exclude(client):
     d = client.get("/api/backup/scope").get_json()
     inc = " ".join(i["what"] for i in d["include"])
     exc = " ".join(e["what"] for e in d["exclude"])
-    assert "书源" in inc and "阅读进度" in inc and "漫画书库" in inc
+    assert "书源" in inc and "阅读进度" in inc and "漫画书库" in inc and "收藏" in inc
     assert "正文" in exc and "漫画已下载" in exc
     # 每条"不含"都要给理由（否则用户不知道删了会不会丢东西）
     for e in d["exclude"]:
@@ -163,6 +163,25 @@ def test_backup_scope_numbers_match_disk(client):
     for e in d["exclude"]:
         assert d["exclude_detail"][e["category"]] == by.get(e["category"], 0)
     assert d["excluded_total_bytes"] >= d["exclude_detail"].get("manga_downloads", 0)
+
+
+def test_backup_scope_counts_favorites_from_configured_data_dir(client, tmp_path, monkeypatch):
+    import server.storage as storage
+
+    monkeypatch.setattr(storage, "DATA_DIR", str(tmp_path))
+    favorite_file = tmp_path / "manga" / "_favorites.json"
+    favorite_file.parent.mkdir(parents=True)
+    favorite_file.write_text('{"mangadex:test":{"title":"收藏测试"}}', encoding="utf-8")
+
+    response = client.get("/api/backup/scope")
+    assert response.status_code == 200
+    details = response.get_json()["include_detail"]
+    favorites = next(
+        x for x in details["progress_files"]
+        if x["name"] == os.path.join("manga", "_favorites.json")
+    )
+    assert favorites["bytes"] == favorite_file.stat().st_size
+    assert details["bytes"] >= favorites["bytes"]
 
 
 def test_backup_scope_is_small_vs_excluded(client):

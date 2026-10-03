@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>我的书库 · webnovel_rules</title>
+<title>我的书架 · webnovel_rules</title>
 <link rel="icon" href="data:,">
 <link rel="stylesheet" href="/static/css/style.css">
 <style>
@@ -12,61 +12,139 @@
              align-items:center; gap:6px; overflow:hidden; white-space:nowrap; }
 .read-line b { color:var(--text); font-weight:600; overflow:hidden;
                text-overflow:ellipsis; max-width:62%; }
-.read-line .read-sub { margin-left:auto; color:#8ab4ff; font-variant-numeric:tabular-nums; }
+.read-line .read-sub { margin-left:auto; color:var(--accent-2); font-variant-numeric:tabular-nums; }
 .read-line.read-none { opacity:.5; }
-.mcard .bar { height:4px; margin-top:4px; background:rgba(255,255,255,.06);
-               border-radius:3px; overflow:hidden; }
+.manga-library-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(164px,1fr)); gap:14px; }
+.manga-library-card { min-width:0; overflow:hidden; position:relative; border:1px solid var(--border);
+  border-radius:var(--radius); background:var(--bg-elevated); box-shadow:var(--shadow);
+  transition:transform var(--dur-fast),box-shadow var(--dur-fast),border-color var(--dur-fast); }
+@media (hover:hover) and (pointer:fine) {
+  .manga-library-card:hover { transform:translateY(-2px); box-shadow:var(--shadow-hover);
+    border-color:color-mix(in srgb,var(--accent-2) 35%,var(--border)); }
+}
+.manga-library-open { display:block; width:100%; border:0; padding:0; text-align:left; color:inherit;
+  background:transparent; font:inherit; cursor:pointer; }
+.manga-library-open:focus-visible { outline:3px solid var(--accent-2); outline-offset:-3px; }
+.manga-library-open .status-badge { top:10px; right:10px; box-shadow:0 1px 4px rgba(66,48,31,.12); }
+.manga-library-cover { display:block; width:100%; aspect-ratio:3/4; object-fit:cover;
+  background:var(--bg-base); }
+.manga-library-card.cover-missing::before { content:'📖'; display:grid; place-items:center;
+  width:100%; aspect-ratio:3/4; font-size:2rem; background:var(--bg-base); color:var(--text-secondary); }
+.manga-library-content { padding:10px 12px 12px; }
+.manga-library-title { min-height:2.7em; display:-webkit-box; -webkit-line-clamp:2;
+  -webkit-box-orient:vertical; overflow:hidden; color:var(--text-primary); font-size:.9rem;
+  font-weight:650; line-height:1.45; }
+.manga-library-source { margin-top:4px; color:var(--text-secondary); font-size:.74rem; }
+.read-line .read-sub { color:var(--accent-2); }
+.mcard .bar { height:4px; margin-top:5px; background:var(--bg-hover); border-radius:3px; overflow:hidden; }
 .mcard .bar i { display:block; height:100%; }
-.card .bar.read, .mcard .bar.read { height:4px; margin-top:4px; background:rgba(255,255,255,.06); }
-.card .bar.read i, .mcard .bar.read i { background:#4c8bf5; }
+.card .bar.read, .mcard .bar.read { height:4px; margin-top:5px; background:var(--bg-hover); }
+.card .bar.read i, .mcard .bar.read i { background:var(--accent-2); }
+.manga-library-download-meta { display:flex; align-items:center; gap:6px; margin-top:6px;
+  color:var(--accent-2); font-size:.74rem; line-height:1.4; }
+.manga-library-download-meta--pending { color:var(--accent); }
+.manga-library-download-meta--missing { color:var(--red); }
+.manga-library-pulse { width:8px; height:8px; flex:none; border-radius:50%; background:currentColor;
+  animation:library-pulse 1.2s ease-in-out infinite alternate; }
+@keyframes library-pulse { to { opacity:.35; } }
+.manga-library-actions { display:grid; grid-template-columns:repeat(2,minmax(0,1fr));
+  border-top:1px solid var(--border); }
+.manga-library-action { min-width:0; min-height:44px; padding:7px 8px; border:0;
+  background:transparent; color:var(--accent-2); font:inherit; font-size:.76rem; line-height:1.3;
+  cursor:pointer; overflow-wrap:anywhere; }
+.manga-library-action:nth-child(even) { border-left:1px solid var(--border); }
+.manga-library-action:nth-child(n+3) { border-top:1px solid var(--border); }
+.manga-library-action:hover:not(:disabled), .manga-library-action:focus-visible {
+  background:var(--bg-overlay); color:var(--accent); outline-offset:-3px; }
+.manga-library-action--remove { color:var(--red); }
+.manga-library-action--download { color:var(--accent); font-weight:650; }
+.manga-library-action:disabled { opacity:.65; cursor:wait; }
 /* 封面缺失（断网且本地无封面）时不留空白：占位图标保持卡片高度与观感 */
 .cover-missing { position: relative; }
 .cover-missing::before {
   content: '📖'; display: flex; align-items: center; justify-content: center;
-  width: 100%; aspect-ratio: 3/4; font-size: 2rem; background: #0d1117; opacity: .5;
+  width: 100%; aspect-ratio: 3/4; font-size: 2rem; background: var(--bg-hover); color:var(--text-secondary);
 }
+.favorite-manga-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(148px,1fr)); gap:14px; }
+.favorite-manga-card { min-width:0; overflow:hidden; border:1px solid var(--border); border-radius:14px;
+  background:var(--bg-elevated); transition:transform .16s,border-color .16s,background .16s; }
+.favorite-manga-card:hover { transform:translateY(-2px); border-color:var(--accent-2); background:var(--bg-overlay); }
+.favorite-manga-card a, .favorite-manga-card .favorite-manga-pending {
+  display:block; color:inherit; text-decoration:none; }
+.favorite-cover-wrap { position:relative; aspect-ratio:3/4; background:var(--bg-base); overflow:hidden; }
+.favorite-cover-wrap img { width:100%; height:100%; object-fit:cover; display:block; }
+.favorite-cover-wrap img[hidden], .favorite-cover-wrap .cover-placeholder[hidden] { display:none; }
+.favorite-cover-wrap .cover-placeholder { width:100%; height:100%; display:grid; place-items:center;
+  color:var(--text-secondary); font-size:2rem; }
+.favorite-unread-badge { position:absolute; top:8px; left:8px; max-width:calc(100% - 16px); padding:3px 7px;
+  border:1px solid color-mix(in srgb,var(--accent) 45%,transparent); border-radius:999px; background:var(--bg-overlay);
+  color:var(--accent); font-size:11px; line-height:1.35; font-variant-numeric:tabular-nums; box-shadow:0 2px 8px rgba(41,37,31,.12); }
+.favorite-manga-info { padding:9px 10px 10px; }
+.favorite-manga-title { min-height:2.7em; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical;
+  overflow:hidden; color:var(--text-primary); font-size:.86rem; font-weight:650; line-height:1.4; }
+.favorite-manga-meta { margin-top:5px; color:var(--text-secondary); font-size:.7rem; line-height:1.45; }
+.favorite-manga-state { margin-top:6px; color:var(--accent-2); font-size:.7rem; }
+.favorite-manga-remove { width:100%; min-height:38px; border:0; border-top:1px solid var(--border);
+  background:transparent; color:var(--text-secondary); font:inherit; font-size:.75rem; cursor:pointer; }
+.favorite-manga-remove:hover { color:var(--red); background:rgba(255,127,120,.07); }
+#favorite-manga-check-status { flex:1 1 100%; color:var(--text-secondary); font-size:.78rem; line-height:1.4; }
+#favorite-manga-check-status[data-kind="success"] { color:var(--green); }
+#favorite-manga-check-status[data-kind="error"] { color:var(--red); }
+#favorite-manga-check-status[hidden] { display:none; }
+@media (max-width:520px) { .favorite-manga-grid { grid-template-columns:repeat(auto-fill,minmax(112px,1fr)); gap:10px; } }
 </style>
 </head>
 <body>
 <header class="topbar">
-  <span class="logo">📚 webnovel_rules<small>书源驱动 · 小说爬虫</small></span>
+  <span class="logo">📚 webnovel_rules<small>发现 · 收藏 · 阅读</small></span>
   <nav>
-    <a href="/">🔍 搜索/书库</a>
-    <a href="/sources">书源管理</a>
-    <a href="/library" class="active">📖 我的书库</a>
-    <a href="/tasks_page">📋 任务管理</a>
+    <a href="/">🔍 发现</a>
+    <a href="/sources">来源管理</a>
+    <a href="/library" class="active">📖 书架</a>
+    <a href="/tasks_page">↓ 下载</a>
     <a href="/manga">🎨 漫画</a>
   </nav>
   <div class="spacer"></div>
 </header>
 
 <div class="container">
-  <div id="netip-bar" style="display:none;margin-bottom:12px;padding:8px 12px;border-radius:8px;background:var(--bg-2,#1c2230);border:1px solid var(--border);font-size:.8rem;color:var(--text-dim);"></div>
-  <div class="section-title" style="display:flex;align-items:center;gap:10px;">📖 我的书库
+  <div id="netip-bar" style="display:none;margin-bottom:12px;padding:8px 12px;border-radius:8px;background:var(--bg-2,#fbf8f2);border:1px solid var(--border);font-size:.8rem;color:var(--text-dim);"></div>
+  <div class="section-title" style="display:flex;align-items:center;gap:10px;">📖 我的书架
     <button class="btn small" id="btn-books-refresh" title="手动刷新" style="font-size:.78rem;">🔄</button>
     <select id="book-sort" class="sort-select" onchange="setBookSort(this.value)" title="排序方式"
-      style="margin-left:auto;padding:4px 8px;border-radius:8px;border:1px solid var(--border);background:var(--bg-2,#1c2230);color:var(--text);font-size:.78rem;">
-      <option value="downloaded">⬇ 最近下载</option>
+      style="margin-left:auto;padding:4px 8px;border-radius:8px;border:1px solid var(--border);background:var(--bg-2,#fbf8f2);color:var(--text);font-size:.78rem;">
+      <option value="downloaded">↓ 最近下载</option>
       <option value="read">📖 最近阅读</option>
     </select>
   </div>
   <p class="page-sub">已爬取的小说，点击卡片进入阅读；可下载合并全文。</p>
   <div id="books"><div class="empty"><div class="big">📭</div>加载中…</div></div>
 
+  <div class="section-title" style="margin-top:32px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+    <span>收藏的漫画</span>
+    <button class="btn small" id="btn-favorite-manga-refresh" type="button" title="刷新收藏">刷新</button>
+    <button class="btn small" id="btn-favorite-manga-check" type="button" title="检查收藏漫画更新">检查更新</button>
+    <span id="favorite-manga-check-status" role="status" aria-live="polite" hidden></span>
+  </div>
+  <p class="page-sub">按更新时间排列；封面标注未读话数。已下载作品进入本地目录，未下载收藏保留完整在线目录。</p>
+  <div id="favorite-manga-books" class="favorite-manga-grid" aria-live="polite">
+    <div class="empty" style="grid-column:1/-1;">正在读取收藏…</div>
+  </div>
+
   <div class="section-title" style="margin-top:32px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">🎨 漫画书库
     <div class="section-ops">
       <button class="btn small" id="btn-manga-refresh" title="手动刷新" style="font-size:.78rem;">🔄</button>
       <button class="btn small primary" id="btn-manga-check-all" style="font-size:.78rem;">🔄 一键检查更新</button>
       <select id="manga-sort" class="sort-select" onchange="setMangaSort(this.value)" title="排序方式"
-        style="padding:4px 8px;border-radius:8px;border:1px solid var(--border);background:var(--bg-2,#1c2230);color:var(--text);font-size:.78rem;">
-        <option value="downloaded">⬇ 最近下载</option>
+        style="padding:4px 8px;border-radius:8px;border:1px solid var(--border);background:var(--bg-2,#fbf8f2);color:var(--text);font-size:.78rem;">
+        <option value="downloaded">↓ 最近下载</option>
         <option value="read">📖 最近阅读</option>
       </select>
     </div>
   </div>
   <p class="page-sub">已下载的漫画（本地图片），点击进入阅读；可打包 ZIP。</p>
-  <div id="manga-check-status" style="display:none;margin:0 0 10px;padding:9px 12px;border-radius:8px;background:var(--bg-2,#1c2230);border:1px solid var(--border);font-size:.85rem;line-height:1.5;"></div>
-  <div id="manga-books" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:14px;">
+  <div id="manga-check-status" style="display:none;margin:0 0 10px;padding:9px 12px;border-radius:8px;background:var(--bg-2,#fbf8f2);border:1px solid var(--border);font-size:.85rem;line-height:1.5;"></div>
+  <div id="manga-books" class="manga-library-grid">
     <div class="empty" style="grid-column:1/-1;"><div class="big">📭</div>加载中…</div>
   </div>
 </div>
@@ -77,6 +155,247 @@
 const checkingKeys = new Set();   // 检查中的书籍 key，重渲染后保持按钮状态
 let _booksSig = '';   // R50: 书库数据指纹——内容无变化时跳过全量重绘
 let _mangaSig = '';   // （避免轮询每 6s/5s 重建 DOM：滚动被打断/按钮闪烁）
+let _favoriteMangaSig = '';
+let _favoriteMangaLoadSeq = 0;
+let _favoriteMangaPendingTimer = 0;
+let _favoriteMangaPendingRetries = 0;
+let _favoriteUpdateCheckActive = false;
+
+function favoriteMangaDetailUrl(comic, localAvailable) {
+  const params = new URLSearchParams({
+    source: String(comic.source || ''),
+    id: String(comic.comic_id || ''),
+    title: String(comic.title || ''),
+  });
+  if (localAvailable) params.set('catalog', 'local');
+  return '/manga_detail?' + params.toString();
+}
+
+function favoriteMangaCardHTML(comic, localState) {
+  const localAvailable = localState === 'local';
+  const localPending = localState === 'pending';
+  const unread = Math.max(0, Number.parseInt(comic.unread_count, 10) || 0);
+  const title = comic.title || comic.comic_id || '未命名漫画';
+  const cover = comic.cover || comic.cover_view || '';
+  const unreadBadge = unread > 0
+    ? `<span class="favorite-unread-badge">未读 ${unread} 话</span>` : '';
+  const state = localAvailable ? '已缓存 · 仅显示本地目录'
+    : localPending ? '正在核验本地内容，稍后刷新'
+      : '仅收藏 · 查看完整在线目录';
+  const content = `
+    <div class="favorite-cover-wrap">
+      ${cover ? `<img src="${esc(cover)}" loading="lazy" decoding="async" alt="${esc(title)}封面"
+        onerror="this.hidden=true;this.nextElementSibling.hidden=false">` : ''}
+      <div class="cover-placeholder"${cover ? ' hidden' : ''} aria-hidden="true">▧</div>
+      ${unreadBadge}
+    </div>
+    <div class="favorite-manga-info">
+      <div class="favorite-manga-title">${esc(title)}</div>
+      <div class="favorite-manga-meta">${esc(comic.source_name || comic.source || '漫画源')}${comic.update_time ? ` · ${esc(comic.update_time)}` : ''}</div>
+      <div class="favorite-manga-state">${state}</div>
+    </div>
+  `;
+  const entry = localPending
+    ? `<div class="favorite-manga-pending" role="status" aria-label="《${esc(title)}》本地内容核验中">${content}</div>`
+    : `<a href="${esc(favoriteMangaDetailUrl(comic, localAvailable))}"
+      aria-label="打开《${esc(title)}》${localAvailable ? '本地目录' : '完整目录'}">${content}</a>`;
+  return `${entry}<button class="favorite-manga-remove" type="button">取消收藏</button>`;
+}
+
+function favoriteMangaLocalStates(favorites) {
+  const states = new Map();
+  for (const comic of favorites || []) {
+    const source = String(comic.source || '');
+    const id = String(comic.comic_id || '');
+    if (!source || !id) continue;
+    const count = comic.local_downloaded_chapters;
+    const state = comic.local_catalog_pending || count == null ? 'pending'
+      : Number(count) > 0 ? 'local' : 'online';
+    const identitySource = String(comic.identity_source || source);
+    const key = favoriteMangaIdentityKey(identitySource, id);
+    const priority = {online: 0, pending: 1, local: 2};
+    if (!states.has(key) || priority[state] > priority[states.get(key)]) {
+      states.set(key, state);
+    }
+    states.set(source + ':' + id, state);
+    if (source === 'copymanga' || source === 'copymanga_web') {
+      states.set((source === 'copymanga' ? 'copymanga_web' : 'copymanga') + ':' + id, state);
+    }
+  }
+  return states;
+}
+
+function favoriteMangaIdentityKey(source, comicId) {
+  const canonical = ['copymanga', 'copymanga_web'].includes(String(source || ''))
+    ? 'copymanga' : String(source || '');
+  return canonical + ':' + String(comicId || '');
+}
+
+async function loadFavoriteManga(fromPendingRetry = false) {
+  const box = document.getElementById('favorite-manga-books');
+  if (!box) return null;
+  if (!fromPendingRetry) _favoriteMangaPendingRetries = 0;
+  const loadSeq = ++_favoriteMangaLoadSeq;
+  try {
+    const favoriteResponse = await fetch('/api/manga/favorites');
+    const favoriteData = await favoriteResponse.json().catch(() => ({}));
+    if (!favoriteResponse.ok || favoriteData.recoverable) {
+      throw new Error(favoriteData.error || `收藏暂不可读取（HTTP ${favoriteResponse.status}）`);
+    }
+    const favorites = Array.isArray(favoriteData.favorites) ? favoriteData.favorites : [];
+    // 手动刷新、更新检查完成回调和页面轮询可能并发；较早的慢响应不得覆盖新快照。
+    if (loadSeq !== _favoriteMangaLoadSeq) return favorites;
+    const localStates = favoriteMangaLocalStates(favorites);
+    const hasPendingCatalog = favorites.some(comic =>
+      comic.local_catalog_pending || comic.local_downloaded_chapters == null);
+    if (hasPendingCatalog && _favoriteMangaPendingRetries < 30) {
+      if (!_favoriteMangaPendingTimer) {
+        _favoriteMangaPendingRetries++;
+        _favoriteMangaPendingTimer = setTimeout(() => {
+          _favoriteMangaPendingTimer = 0;
+          loadFavoriteManga(true);
+        }, 2000);
+      }
+    } else {
+      if (_favoriteMangaPendingTimer) clearTimeout(_favoriteMangaPendingTimer);
+      _favoriteMangaPendingTimer = 0;
+      if (!hasPendingCatalog) _favoriteMangaPendingRetries = 0;
+    }
+    const signature = JSON.stringify(favorites.map(comic => [comic.source, comic.comic_id,
+      comic.title, comic.cover, comic.update_time, comic.unread_count, comic.checked_at,
+      comic.local_downloaded_chapters, comic.local_catalog_pending]));
+    if (signature === _favoriteMangaSig) return favorites;
+    _favoriteMangaSig = signature;
+    if (!favorites.length) {
+      box.innerHTML = '<div class="empty" style="grid-column:1/-1;padding:28px 12px;">还没有收藏漫画。搜索作品后点“收藏”，这里会持续跟踪更新。</div>';
+      return favorites;
+    }
+    box.innerHTML = '';
+    favorites.forEach(comic => {
+      const key = favoriteMangaIdentityKey(comic.identity_source || comic.source, comic.comic_id);
+      const localState = localStates.get(key) || 'pending';
+      const card = document.createElement('article');
+      card.className = 'favorite-manga-card';
+      card.innerHTML = favoriteMangaCardHTML(comic, localState);
+      const remove = card.querySelector('.favorite-manga-remove');
+      remove.addEventListener('click', async event => {
+        event.stopPropagation();
+        const title = comic.title || comic.comic_id || '这部漫画';
+        if (!confirm(`取消收藏《${title}》？本地下载和阅读记录会保留。`)) return;
+        remove.disabled = true;
+        try {
+          const response = await fetch('/api/manga/favorites/'
+            + encodeURIComponent(comic.source || '') + '/'
+            + encodeURIComponent(comic.comic_id || ''), {method: 'DELETE'});
+          const result = await response.json().catch(() => ({}));
+          if (!response.ok || result.ok === false) throw new Error(result.error || '取消收藏失败');
+          toast('已取消收藏；本地漫画和阅读记录未删除', 'ok');
+          _favoriteMangaSig = '';
+          await loadFavoriteManga();
+        } catch (error) {
+          remove.disabled = false;
+          toast('取消收藏失败：' + String(error.message || error).slice(0, 100), 'error');
+        }
+      });
+      box.appendChild(card);
+    });
+    return favorites;
+  } catch (error) {
+    if (loadSeq !== _favoriteMangaLoadSeq) return null;
+    _favoriteMangaSig = '';
+    box.innerHTML = `<div role="alert" class="empty" style="grid-column:1/-1;padding:28px 12px;">
+      ${esc(error.message || '收藏加载失败')}<br><button class="btn small" type="button"
+      style="margin-top:10px;" onclick="loadFavoriteManga()">重试</button></div>`;
+    return null;
+  }
+}
+
+async function pollFavoriteMangaUpdateCheck() {
+  const status = document.getElementById('favorite-manga-check-status');
+  if (!status) return;
+  status.hidden = false;
+  for (let attempt = 0; attempt < 300; attempt++) {
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    const response = await fetch('/api/manga/favorites/check-updates/status');
+    if (!response.ok) throw new Error(`无法读取更新进度（HTTP ${response.status}）`);
+    const state = await response.json();
+    if (state.running) {
+      status.textContent = `正在检查收藏更新 ${state.checked || 0}/${state.total || '?'}`;
+      continue;
+    }
+    const succeeded = Number(state.succeeded || 0);
+    const failed = Number(state.failed || 0);
+    status.textContent = failed
+      ? `更新检查完成：${succeeded} 部成功，${failed} 部失败；失败作品可重试。`
+      : `更新检查完成：已检查 ${succeeded} 部收藏。`;
+    status.dataset.kind = failed ? 'error' : 'success';
+    await loadFavoriteManga();
+    return;
+  }
+  status.textContent = '检查仍在后台运行；可以继续阅读，稍后刷新收藏。';
+}
+
+async function checkFavoriteMangaUpdates(force = false, favorites = null) {
+  if (_favoriteUpdateCheckActive) return;
+  _favoriteUpdateCheckActive = true;
+  const button = document.getElementById('btn-favorite-manga-check');
+  const status = document.getElementById('favorite-manga-check-status');
+  if (button) { button.disabled = true; button.textContent = '检查中…'; }
+  if (status) { status.hidden = false; status.textContent = '正在连接书源…'; status.dataset.kind = 'info'; }
+  try {
+    const list = favorites || await loadFavoriteManga();
+    if (list === null) throw new Error('收藏列表读取失败，暂未启动更新检查');
+    if (!list.length) {
+      if (status) status.textContent = '暂无收藏作品可检查';
+      return;
+    }
+    const healthResponse = await fetch('/api/health');
+    if (!healthResponse.ok) throw new Error('引擎暂不可用，稍后可重试');
+    const health = await healthResponse.json();
+    const instanceId = String((health.runtime || {}).instance_id || '').trim();
+    if (!instanceId) throw new Error('无法确认引擎实例，更新检查未启动');
+    const attemptKey = 'manga-favorite-update-check:' + instanceId;
+    const checkStatusResponse = await fetch('/api/manga/favorites/check-updates/status');
+    if (!checkStatusResponse.ok) throw new Error('无法读取收藏更新检查状态');
+    const currentCheck = await checkStatusResponse.json();
+    if (currentCheck.running) {
+      try { sessionStorage.setItem(attemptKey, '1'); } catch (_) {}
+      if (status) status.textContent = '正在接续后台收藏更新检查…';
+      await pollFavoriteMangaUpdateCheck();
+      return;
+    }
+    try {
+      if (!force && sessionStorage.getItem(attemptKey)) {
+        const succeeded = Number(currentCheck.succeeded || 0);
+        const failed = Number(currentCheck.failed || 0);
+        if (status) status.textContent = currentCheck.finished_at
+          ? `本次会话已检查：${succeeded} 部成功${failed ? `，${failed} 部失败` : ''}`
+          : '本次引擎会话已启动过检查';
+        await loadFavoriteManga();
+        return;
+      }
+    } catch (_) {}
+    const response = await fetch('/api/manga/favorites/check-updates', {method: 'POST'});
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || `启动更新检查失败（HTTP ${response.status}）`);
+    try { sessionStorage.setItem(attemptKey, '1'); } catch (_) {}
+    if (!result.already_running && Number(result.started || 0) === 0) {
+      if (status) status.textContent = '暂无可检查的收藏作品';
+      return;
+    }
+    if (status) status.textContent = '更新检查已在后台运行';
+    await pollFavoriteMangaUpdateCheck();
+  } catch (error) {
+    if (status) {
+      status.hidden = false;
+      status.dataset.kind = 'error';
+      status.textContent = `更新检查暂不可用：${String(error.message || error).slice(0, 100)}`;
+    }
+  } finally {
+    _favoriteUpdateCheckActive = false;
+    if (button) { button.disabled = false; button.textContent = '检查更新'; }
+  }
+}
 
 // ── R30: 书库排序（入库时间/最近下载/最近阅读），localStorage 持久化 ──
 // R32: 移除"最早下载"排序规则，保留 最近下载/最近阅读 两档（旧设置回退）
@@ -100,6 +419,18 @@ function sortList(list, sortMode, getDownloaded, getRead) {
   return list.slice().sort((a, b) => k(b) - k(a));
 }
 
+// Keep old records visible until the first real-media scan decides whether the
+// files still exist. Unknown local state must not be filtered as an empty task.
+function mangaLibraryCardVisible(comic) {
+  return comic.local_scan_pending === true
+    || comic.status === 'done' || comic.status === 'downloading';
+}
+
+function mangaLibraryCardCanOpen(comic) {
+  return comic.local_scan_pending !== true
+    && comic.status !== 'downloading' && !comic.missing_images;
+}
+
 async function loadMangaLibrary() {
   const box = document.getElementById('manga-books');
   const sel = document.getElementById('manga-sort');
@@ -107,9 +438,10 @@ async function loadMangaLibrary() {
   try {
     const r = await fetch('/api/manga/library');
     const d = await r.json();
+    if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
     // R35: 展示已下载完成 + 正在下载的任务（带实时进度）；
     // 此前下载中任务被过滤，书库只剩旧完成记录 → 与实际进度不符的错觉
-    let list = (d.comics || []).filter(x => x.status === 'done' || x.status === 'downloading');
+    let list = (d.comics || []).filter(mangaLibraryCardVisible);
     if (!list.length) {
       // R50: 空态也做指纹——从"有内容"到"全删"要重绘,持续为空则跳过
       if (_mangaSig === 'empty') return [];
@@ -124,80 +456,99 @@ async function loadMangaLibrary() {
     // 阅读进度必须进入指纹：否则服务端已写入第20话，书库轮询仍会认为
     // 卡片“没有变化”而跳过重绘，用户看到的就是旧进度。
     const msig = JSON.stringify(list.map(c => [c.source, c.comic_id, c.status,
-      c.dl_done, c.dl_total, c.dl_images, c.local_images, c.missing_images,
+      c.dl_done, c.dl_total, c.dl_images, c.local_images, c.local_scan_pending,
+      c.missing_images,
       c.title, c.cover, c.downloaded_at, c.read_pos, c.read_page,
       c.read_idx, c.read_ratio, c.last_read_ts]));
     if (msig === _mangaSig) return list;
     _mangaSig = msig;
     box.innerHTML = '';
     list.forEach(c => {
-      const card = document.createElement('div');
-      card.className = 'mcard';
-      card.style.cssText = 'background:var(--bg-2,#1c2230);border-radius:10px;overflow:hidden;border:1px solid var(--border);cursor:pointer;transition:.15s;position:relative;';
+      const card = document.createElement('article');
+      card.className = 'mcard manga-library-card';
       // R8 状态徽标
-      const badgeMap = {done:['⬇ 已下载','--done'], downloading:['⏳ 下载中','--running'],
+      const badgeMap = {done:['↓ 已下载','--done'], downloading:['⏳ 下载中','--running'],
         queued:['⏳ 排队','--queued'], paused:['⏸ 暂停','--paused'], error:['⚠ 异常','--error'], stopped:['☁ 在线','--stopped']};
-      const bd = badgeMap[c.status] || ['☁ 在线','--stopped'];
+      const bd = c.local_scan_pending
+        ? ['🔎 核验中','--queued'] : (c.status === 'downloading'
+          ? badgeMap.downloading : (c.missing_images
+            ? ['⚠ 缺页','--error'] : (badgeMap[c.status] || ['☁ 在线','--stopped'])));
       const statusBadge = `<span class="status-badge status-badge${bd[1]}">${bd[0]}</span>`;
       const dlTag = c.status === 'downloading'
-        ? `<div style="font-size:.72rem;color:#e8833a;margin-top:4px;display:flex;align-items:center;gap:4px;">
-            <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#e8833a;animation:blink 1s infinite;"></span>
+        ? `<div class="manga-library-download-meta"><span class="manga-library-pulse" aria-hidden="true"></span>
             ⏳ 下载中 ${c.dl_done||0}/${c.dl_total||'?'} 话 · ${c.dl_images||0}图${c.dl_speed ? ' · ' + c.dl_speed + '/s' : ''}
           </div>`
-        : (c.missing_images
-          ? `<div style="font-size:.72rem;color:#f66;margin-top:4px;">⚠ 本地图片缺失，请重新下载</div>`
-          : `<div style="font-size:.72rem;color:#34a853;margin-top:4px;">✅ 已下载 · ${c.local_images||0} 图</div>`);
-      card.innerHTML = `
+        : (c.local_scan_pending
+          ? `<div class="manga-library-download-meta manga-library-download-meta--pending">🔎 正在核验本地文件；稍后自动更新状态</div>`
+          : c.missing_images
+          ? `<div class="manga-library-download-meta manga-library-download-meta--missing">⚠ 本地图片缺失，请重新下载</div>`
+          : `<div class="manga-library-download-meta">✅ 已下载 · ${c.local_images||0} 图</div>`);
+      const openButton = document.createElement('button');
+      openButton.type = 'button';
+      openButton.className = 'manga-library-open';
+      openButton.setAttribute('aria-label', '继续阅读《' + (c.title || '未命名漫画') + '》');
+      openButton.innerHTML = `
         ${statusBadge}
-        <img src="${esc(c.cover_view || c.cover || '')}" loading="lazy" decoding="async" style="width:100%;aspect-ratio:3/4;object-fit:cover;display:block;background:#0d1117;" onerror="this.onerror=null;this.style.display='none';if(this.parentNode)this.parentNode.classList.add('cover-missing');">
-        <div style="padding:8px 10px;">
-          <div style="font-size:.85rem;font-weight:600;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;">${esc(c.title)}</div>
-          <div style="font-size:.72rem;color:var(--text-dim);margin-top:3px;">${esc(c.source_name)}</div>
+        <img class="manga-library-cover" src="${esc(c.cover_view || c.cover || '')}" loading="lazy" decoding="async" alt="${esc(c.title || '漫画')}封面" onerror="this.onerror=null;this.style.display='none';if(this.closest('.manga-library-card'))this.closest('.manga-library-card').classList.add('cover-missing');">
+        <div class="manga-library-content">
+          <div class="manga-library-title">${esc(c.title)}</div>
+          <div class="manga-library-source">${esc(c.source_name)}</div>
           ${c.read_pos
             ? `<div class="read-line">📖 读到 <b>${esc(c.read_pos)}</b>${c.read_total > 0 ? `<span class="read-sub">${c.read_ratio}%</span>` : ''}</div>` +
               (c.read_total > 0 ? `<div class="bar read"><i style="width:${c.read_ratio}%"></i></div>` : '')
             : `<div class="read-line read-none">📖 未读</div>`}
           ${dlTag}
         </div>`;
-      card.onclick = () => {
-        if (c.status === 'downloading') {
-          alert('该漫画正在下载中，完成后再阅读');
-          return;
-        }
-        if (c.missing_images) {
-          alert('本地图片缺失，请点击下方「⭳ 重新下载」恢复');
-          return;
+      openButton.onclick = () => {
+        if (!mangaLibraryCardCanOpen(c)) {
+          if (c.local_scan_pending) {
+            alert('正在核验本地漫画文件，请稍后刷新书架再阅读');
+            return;
+          }
+          if (c.status === 'downloading') {
+            alert('该漫画正在下载中，完成后再阅读');
+            return;
+          }
+          if (c.missing_images) {
+            alert('本地图片缺失，请点击下方「↓ 重新下载」恢复');
+            return;
+          }
         }
         // 书库卡片是“继续阅读”，不能伪装成用户明确点了第 1 话。
         // 带 ch=0 会让阅读器跳过服务端 resume，历史记录再正确也只能打开第一话。
         location.href = '/manga_reader?source=' + encodeURIComponent(c.source)
           + '&cid=' + encodeURIComponent(c.comic_id)
-          + '&title=' + encodeURIComponent(c.title);
+          + '&title=' + encodeURIComponent(c.title) + '&catalog=local';
       };
-      const delBtn = document.createElement('div');
-      delBtn.style.cssText = 'padding:8px 0;text-align:center;border-top:1px solid var(--border);font-size:.75rem;color:#f66;cursor:pointer;';
-      delBtn.textContent = '🗑 删除';
+      card.appendChild(openButton);
+      const actionRow = document.createElement('div');
+      actionRow.className = 'manga-library-actions';
+      const delBtn = document.createElement('button');
+      delBtn.type = 'button';
+      delBtn.className = 'manga-library-action manga-library-action--remove';
+      delBtn.textContent = '从书架移除';
       delBtn.onclick = async (e) => {
         e.stopPropagation();
-        if (!confirm('删除《' + c.title + '》？将清除所有本地缓存与记录，不可恢复。')) return;
+        if (!confirm('将《' + c.title + '》从书架移除？已下载图片、阅读历史和收藏都会保留。')) return;
         try {
           const r = await fetch('/api/manga/library/' + c.source + '/' + encodeURIComponent(c.comic_id), {method:'DELETE'});
           const d = await r.json();
-          if (d.ok) { card.remove(); alert('已删除'); }
+          if (d.ok) { card.remove(); toast('已从书架移除；下载内容与阅读数据已保留', 'ok'); }
           else alert('删除失败');
         } catch(e) { alert('删除失败'); }
       };
-      card.appendChild(delBtn);
+      actionRow.appendChild(delBtn);
       // 图片缺失 → 提供一键重新下载（下载内容永不自动删，误删后在此恢复）
       if (c.missing_images) {
-        const reBtn = document.createElement('div');
-        reBtn.style.cssText = 'padding:8px 0;text-align:center;border-top:1px solid var(--border);font-size:.75rem;color:#8ab4ff;cursor:pointer;font-weight:600;';
-        reBtn.textContent = '⭳ 重新下载';
+        const reBtn = document.createElement('button');
+        reBtn.type = 'button';
+        reBtn.className = 'manga-library-action';
+        reBtn.textContent = '↓ 重新下载';
         reBtn.onclick = async (e) => {
           e.stopPropagation();
           if (!confirm('重新下载《' + c.title + '》的全部章节？（需重新从源站获取图片）')) return;
           reBtn.textContent = '⏳ 启动下载中…';
-          reBtn.style.pointerEvents = 'none';
+          reBtn.disabled = true;
           try {
             const r = await fetch('/api/manga/' + c.source + '/' + encodeURIComponent(c.comic_id) + '/download', {
               method:'POST', headers:{'Content-Type':'application/json'},
@@ -209,23 +560,24 @@ async function loadMangaLibrary() {
               setTimeout(() => loadMangaLibrary(), 1500);
             } else {
               reBtn.textContent = '⚠ ' + (d.error || '启动失败');
-              reBtn.style.pointerEvents = '';
+              reBtn.disabled = false;
             }
           } catch(err) {
             reBtn.textContent = '⚠ 启动失败';
-            reBtn.style.pointerEvents = '';
+            reBtn.disabled = false;
           }
         };
-        card.appendChild(reBtn);
+        actionRow.appendChild(reBtn);
       }
       // R28: 打包 ZIP 导出（书库直达；大书打包需数秒-数十秒，服务器流式生成）
-      const zipBtn = document.createElement('div');
-      zipBtn.style.cssText = 'padding:8px 0;text-align:center;border-top:1px solid var(--border);font-size:.75rem;color:#8ab4ff;cursor:pointer;font-weight:600;';
+      const zipBtn = document.createElement('button');
+      zipBtn.type = 'button';
+      zipBtn.className = 'manga-library-action';
       zipBtn.textContent = '🗜 打包 ZIP';
       zipBtn.onclick = async (e) => {
         e.stopPropagation();
         zipBtn.textContent = '⏳ 打包中…';
-        zipBtn.style.pointerEvents = 'none';
+        zipBtn.disabled = true;
         try {
           const r = await fetch('/api/manga/' + c.source + '/' + encodeURIComponent(c.comic_id) + '/zip');
           if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || ('HTTP ' + r.status));
@@ -238,20 +590,21 @@ async function loadMangaLibrary() {
           a.remove();
           setTimeout(() => URL.revokeObjectURL(a.href), 30000);
           zipBtn.textContent = '✅ 已开始下载';
-          setTimeout(() => { zipBtn.textContent = '🗜 打包 ZIP'; zipBtn.style.pointerEvents = ''; }, 3000);
+          setTimeout(() => { zipBtn.textContent = '🗜 打包 ZIP'; zipBtn.disabled = false; }, 3000);
         } catch (err) {
           zipBtn.textContent = '⚠ 打包失败: ' + (err.message || err);
-          setTimeout(() => { zipBtn.textContent = '🗜 打包 ZIP'; zipBtn.style.pointerEvents = ''; }, 3000);
+          setTimeout(() => { zipBtn.textContent = '🗜 打包 ZIP'; zipBtn.disabled = false; }, 3000);
         }
       };
-      card.appendChild(zipBtn);
-      const updBtn = document.createElement('div');
-      updBtn.style.cssText = 'padding:8px 0;text-align:center;border-top:1px solid var(--border);font-size:.75rem;color:var(--text-dim);cursor:pointer;';
+      actionRow.appendChild(zipBtn);
+      const updBtn = document.createElement('button');
+      updBtn.type = 'button';
+      updBtn.className = 'manga-library-action';
       updBtn.textContent = '🔄 检查更新';
       updBtn.onclick = async (e) => {
         e.stopPropagation();
         updBtn.textContent = '⏳ 检测中…（约10-30秒）';
-        updBtn.style.pointerEvents = 'none';
+        updBtn.disabled = true;
         try {
           // fetch 超时 90s（copymanga_web 详情渲染慢）
           const ctrl = new AbortController();
@@ -264,11 +617,11 @@ async function loadMangaLibrary() {
           if (d.error) throw new Error(d.error);
           if (d.has_update && d.missing_count) {
             // R57: 不用系统 confirm(移动端弹窗不可靠)——按钮直接变为下载入口
-            updBtn.textContent = '⭳ 补下 ' + d.missing_count + ' 章（点击下载）';
-            updBtn.style.color = '#e8b34b';
+            updBtn.textContent = '↓ 补下 ' + d.missing_count + ' 章（点击下载）';
+            updBtn.classList.add('manga-library-action--download');
             updBtn.onclick = async (e2) => {
               e2.stopPropagation();
-              updBtn.style.pointerEvents = 'none';
+              updBtn.disabled = true;
               updBtn.textContent = '⏳ 下载中…';
               try {
                 const r2 = await fetch('/api/manga/' + c.source + '/' + encodeURIComponent(c.comic_id) + '/download-new', {
@@ -279,32 +632,31 @@ async function loadMangaLibrary() {
                 if (d2.ok) { updBtn.textContent = '🔄 已开始补下'; toast('🔄 已开始补充下载', 'ok'); }
                 else { updBtn.textContent = '⚠ ' + (d2.error || '启动失败'); }
               } catch (err) { updBtn.textContent = '⚠ 启动失败'; }
-              setTimeout(() => { updBtn.textContent = '🔄 检查更新'; updBtn.style.color = ''; updBtn.style.pointerEvents = ''; }, 4000);
+              setTimeout(() => { updBtn.textContent = '🔄 检查更新'; updBtn.classList.remove('manga-library-action--download'); updBtn.disabled = false; }, 4000);
             };
           } else {
             updBtn.textContent = '✅ 已是最新（' + (d.latest || '') + '）';
-            setTimeout(() => updBtn.textContent = '🔄 检查更新', 3000);
+            setTimeout(() => { updBtn.textContent = '🔄 检查更新'; updBtn.disabled = false; }, 3000);
           }
         } catch (e) {
           updBtn.textContent = '⚠ 检查失败' + (e && e.name === 'AbortError' ? '（超时）' : '');
-          setTimeout(() => updBtn.textContent = '🔄 检查更新', 3000);
+          setTimeout(() => { updBtn.textContent = '🔄 检查更新'; updBtn.disabled = false; }, 3000);
         } finally {
-          updBtn.style.pointerEvents = '';
+          if (updBtn.textContent.startsWith('↓ 补下')) updBtn.disabled = false;
         }
       };
-      card.appendChild(updBtn);
-      card.oncontextmenu = (e) => {
-        e.preventDefault();
-        if (confirm('删除该漫画的本地数据？')) {
-          fetch('/api/manga/library/' + c.source + '/' + encodeURIComponent(c.comic_id), {method:'DELETE'})
-            .then(() => loadMangaLibrary());
-        }
-      };
+      actionRow.appendChild(updBtn);
+      card.appendChild(actionRow);
       box.appendChild(card);
     });
     return list;   // B03: 返回数据供轮询器按任务状态调速
   } catch (e) {
-    box.innerHTML = '<div class="empty" style="grid-column:1/-1;">漫画书库加载失败</div>';
+    // 清空签名，确保同一列表在下次成功响应时也会重绘，而不是把错误态卡住。
+    _mangaSig = null;
+    box.innerHTML = `<div class="empty" style="grid-column:1/-1;">
+      <div class="big">⚠️</div>漫画书库暂时无法读取<br>${esc(e.message || '请检查服务状态')}
+      <button class="btn" type="button" style="margin-top:12px;" onclick="loadMangaLibrary()">重试</button>
+    </div>`;
     return null;   // B03: 失败供轮询器指数退避
   }
 }
@@ -469,6 +821,11 @@ const bookPoller = createPoller(loadBooks, {baseMs: 12000});
 // 手动刷新入口（立即拉取并重排计时）
 document.getElementById('btn-books-refresh').onclick = () => bookPoller.kick();
 document.getElementById('btn-manga-refresh').onclick = () => mangaPoller.kick();
+document.getElementById('btn-favorite-manga-refresh').onclick = () => loadFavoriteManga();
+document.getElementById('btn-favorite-manga-check').onclick = () => checkFavoriteMangaUpdates(true);
+loadFavoriteManga().then(favorites => {
+  if (favorites !== null) checkFavoriteMangaUpdates(false, favorites);
+});
 
 // R56: 一键检查书库漫画更新——后台逐部检查; 刷新页面自动恢复进度/结果
 let _mangaPollActive = false;    // 轮询进行中(点击启动或刷新恢复)
@@ -498,7 +855,7 @@ async function mangaPollLoop(bar) {
           + (last ? ' · 刚完成『' + String(last.title || '').slice(0, 16) + '』'
               + (last.has_update ? ' 🔔有更新' : (last.error ? ' ⚠' : ' ✓')) : '')
           + (updN || errN || skipN ? `（已发现 ${updN} 部更新${errN ? '、' + errN + ' 部失败' : ''}${skipN ? '、' + skipN + ' 部风控跳过' : ''}）` : '');
-        bar.style.color = updN ? '#e8b34b' : '';
+        bar.dataset.kind = updN ? 'update' : 'progress';
       }
     } else {
       return s;
@@ -512,7 +869,7 @@ function mangaShowResult(fd, quiet, pollFailed) {
   // 前者必须报真实失败，绝不能显示成 📭 没有可检查的漫画（否则用户误以为检查完成）
   if (pollFailed) {
     const msg = '⚠ 检查状态获取失败：网络长时间中断或服务无响应，请稍后重试';
-    if (bar) { bar.style.display = ''; bar.style.color = '#f66'; bar.textContent = msg; }
+    if (bar) { bar.style.display = ''; bar.style.color = 'var(--red)'; bar.textContent = msg; }
     if (!quiet) toast('⚠ 检查状态获取失败，请稍后重试', 'error');
     return {upd: [], err: []};
   }
@@ -524,7 +881,7 @@ function mangaShowResult(fd, quiet, pollFailed) {
   if (!res.length) { msg = '📭 没有可检查的漫画'; color = 'var(--text-dim)'; }
   else if (!upd.length && !err.length) {
     msg = '✅ 检查完成：' + res.length + ' 部漫画' + (skip.length ? '（' + skip.length + ' 部因源站风控跳过）' : '') + '，其余全部最新';
-    color = '#34a853';
+    color = 'var(--green)';
     if (!quiet) toast(msg, 'ok');
   } else {
     msg = '🔔 ' + upd.length + ' 部有更新' + (err.length ? '，' + err.length + ' 部失败' : '')
@@ -534,7 +891,7 @@ function mangaShowResult(fd, quiet, pollFailed) {
     } else if (err.length) {
       msg += '（' + String(err[0].error || '').slice(0, 60) + '）';
     }
-    color = upd.length ? '#e8b34b' : '#f66';
+    color = upd.length ? 'var(--accent)' : 'var(--red)';
     if (!quiet) toast(upd.length ? ('🔔 ' + upd.length + ' 部漫画有更新') : ('⚠ ' + err.length + ' 部检查失败'), upd.length ? '' : 'error');
   }
   if (bar) {
@@ -543,8 +900,8 @@ function mangaShowResult(fd, quiet, pollFailed) {
     let btnHtml = '';
     if (upd.length) {
       btnHtml = ' <button id="manga-bar-dl" style="margin-left:10px;padding:4px 12px;border-radius:6px;'
-        + 'border:1px solid #e8b34b;background:rgba(232,179,75,.12);color:#e8b34b;font-size:.78rem;cursor:pointer;">'
-        + '⭳ 补下 ' + upd.length + ' 部</button>';
+        + 'border:1px solid var(--accent);background:var(--accent-soft);color:var(--accent);font-size:.78rem;cursor:pointer;">'
+        + '↓ 补下 ' + upd.length + ' 部</button>';
     }
     bar.innerHTML = esc(msg) + btnHtml
       + ' <a href="javascript:void(0)" id="manga-bar-close" style="color:var(--text-dim);font-size:.72rem;margin-left:10px;">✕ 关闭</a>';
@@ -557,7 +914,12 @@ function mangaShowResult(fd, quiet, pollFailed) {
       try {
         const dl = await fetch('/api/manga/check-updates-download', {method:'POST'});
         const dd = await dl.json().catch(() => ({}));
-        if (dd.ok) { dbtn.textContent = '✅ 已开始补下 ' + (dd.started || 0) + ' 部'; toast('🔄 已开始补充下载 ' + (dd.started || 0) + ' 部', 'ok'); }
+        if (dd.ok) {
+          const warning = Number(dd.favorite_failures || 0);
+          dbtn.textContent = '✅ 已开始补下 ' + (dd.started || 0) + ' 部';
+          toast('🔄 已开始补充下载 ' + (dd.started || 0) + ' 部'
+            + (warning ? '；' + warning + ' 部自动收藏失败' : ''), warning ? 'error' : 'ok');
+        }
         else { dbtn.textContent = '⚠ 启动失败'; toast('⚠ ' + (dd.error || '启动失败'), 'error'); }
       } catch (e) { dbtn.textContent = '⚠ 启动失败'; }
     };
@@ -604,7 +966,7 @@ async function mangaCheckRun() {
       await mangaPollThenFinish(false);
     }
   } catch (e) {
-    if (bar) { bar.textContent = '⚠ 检查失败: ' + String(e.message || e).slice(0, 120); bar.style.color = '#f66'; }
+    if (bar) { bar.textContent = '⚠ 检查失败: ' + String(e.message || e).slice(0, 120); bar.style.color = 'var(--red)'; }
   } finally {
     _mangaPollActive = false;
     mangaSetBtn(false);

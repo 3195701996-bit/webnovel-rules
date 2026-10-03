@@ -264,6 +264,10 @@ def _norm(path):
     return "/".join("*" if seg in ("*", "") and seg == "*" else seg for seg in p.split("/"))
 
 
+# 纯触发型 POST：协议约定不带 body，因此不进入 REQUEST_OPTIONAL 的键审计。
+EMPTY_BODY_ENDPOINTS = {"/api/manga/favorites/check-updates"}
+
+
 # ── 客户端 ─────────────────────────────────────────────────────────────
 
 PUT_RE = re.compile(r'\.\s*put\(\s*"([^"]+)"')
@@ -531,13 +535,19 @@ def compare(routes, calls, optional=None):
     sent_by_path = {}
     for fn, line, method, path, raw, keys, ok, body in calls:
         if not ok:
+            if (path == "/api/manga/favorites/check-updates" and
+                    body.strip() in {"", '"{}"'} and
+                    path in EMPTY_BODY_ENDPOINTS):
+                sent_by_path.setdefault(path, set())
+                continue
             unresolved.append(f"{fn}:{line} {method} {raw[:60]} → body 解析不了：{body[:60]}")
             continue
         sent_by_path.setdefault(path, set()).update(keys)
 
     # ① 客户端发了、服务端不读
     for fn, line, method, path, raw, keys, ok, body in calls:
-        if not ok:
+        if not ok or (path in EMPTY_BODY_ENDPOINTS and
+                      body.strip() in {"", '"{}"'}):
             continue
         targets = DYNAMIC_PATH_TARGETS.get(path)
         if targets:

@@ -7,6 +7,7 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.LargeTest
@@ -44,8 +45,8 @@ class SettingsScreensUiTest {
         waitText("书架", timeoutMs = 150_000)
         waitText("设置")
         rule.onAllNodesWithText("设置")[0].performClick()
-        waitText("书源管理")
-        rule.onNodeWithText("备份与恢复").assertIsDisplayed()
+        waitText("高级 · 诊断", substring = true)
+        rule.onAllNodesWithText("备份与恢复")[0].performScrollTo().assertIsDisplayed()
         rule.onNodeWithText("书源管理", substring = true).assertIsDisplayed()
         ev("设置页：书源管理与备份恢复入口在位")
 
@@ -82,13 +83,13 @@ class SettingsScreensUiTest {
         }
         ev("阅读设置：字号/行距/主题与漫画方向可改，改动有回执")
         rule.onAllNodesWithText("← 返回")[0].performClick()
-        waitText("书源管理")
+        waitText("高级 · 诊断", substring = true)
 
         // 2) 书源管理：统计、导入入口与 SSRF 提示
         rule.onNodeWithText("书源管理", substring = true).performClick()
-        waitText("共 ", substring = true)
-        rule.onAllNodesWithText("共 ", substring = true)[0].assertIsDisplayed()
-        // "启用 N" 出现在两处：书源统计行与通过率行，故取第一个
+        // 当前摘要用“启用 N 个”呈现；旧版的“共 N 个”文案已被移除。
+        waitText("启用 ", substring = true)
+        // “启用 N”出现在摘要与通过率行，故取第一个
         rule.onAllNodesWithText("启用 ", substring = true)[0].assertIsDisplayed()
         // 通过率行必须显式带上"未验证"的数量，不能只报通过数
         rule.onNodeWithText("通过率 ", substring = true).assertIsDisplayed()
@@ -100,12 +101,12 @@ class SettingsScreensUiTest {
         rule.onNodeWithText("服务端会拒绝内网地址", substring = true).assertIsDisplayed()
         ev("书源管理：统计与导入入口在位，SSRF 提示在位")
 
-        // 3) 返回设置，再进备份与恢复
+        // 3) 返回设置后，从设置首页直接进入备份；导航不经过书源管理子页。
         waitText("← 返回")
         rule.onAllNodesWithText("← 返回")[0].performClick()
-        waitText("备份与恢复")
-        rule.onNodeWithText("备份与恢复").performClick()
-        waitText("备份内容")
+        waitText("高级 · 诊断", substring = true)
+        rule.onAllNodesWithText("备份与恢复")[0].performScrollTo().performClick()
+        waitText("备份内容", substring = true)
         rule.onNodeWithText("不含书籍正文与漫画图片", substring = true).assertIsDisplayed()
         rule.onNodeWithText("创建备份（选择保存位置）").assertIsDisplayed()
         rule.onNodeWithText("从备份恢复（选择文件）").assertIsDisplayed()
@@ -114,7 +115,7 @@ class SettingsScreensUiTest {
 
         // 4) 返回设置且不崩溃
         rule.onAllNodesWithText("← 返回")[0].performClick()
-        waitText("书源管理")
+        waitText("高级 · 诊断", substring = true)
         ev("返回设置页正常")
     }
 }

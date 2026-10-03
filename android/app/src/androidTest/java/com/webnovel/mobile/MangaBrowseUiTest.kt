@@ -8,6 +8,7 @@ import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.printToLog
 import androidx.compose.ui.test.performClick
@@ -97,14 +98,28 @@ class MangaBrowseUiTest {
         val lastVisible = cardNodes.fetchSemanticsNodes().size - 1
         assertTrueMsg("应有可见卡片可点（实际 $lastVisible+1 张）", lastVisible >= 0)
         cardNodes[lastVisible].performClick()
-        // 详情页话数是动态的（共 N 话 · 已下载 M 话）→ 必须按子串匹配
-        waitText("话 · 已下载", timeoutMs = 120_000, substring = true)
-        rule.onNodeWithText("话 · 已下载", substring = true).assertIsDisplayed()
-        ev("点卡片已进入漫画详情（显示『共 N 话 · 已下载 M 话』）")
+        // 源站可能刚好下架分类里的作品：两种状态都必须诚实呈现；若详情可取，
+        // 展示动态话数；若源站 404，则显示解码后的明确原因与重试入口，而非原始 JSON。
+        rule.waitUntil(120_000) {
+            nodes("manga_detail_counts") > 0 ||
+                texts("读取漫画详情失败", substring = true) > 0
+        }
+        if (nodes("manga_detail_counts") > 0) {
+            rule.onNodeWithTag("manga_detail_counts").assertIsDisplayed()
+            ev("点卡片进入详情并显示目录/本地下载状态")
+        } else {
+            assertTrueMsg("源站失败必须显示可读原因",
+                texts("漫画不存在/已下架", substring = true) > 0 ||
+                    texts("请求超时", substring = true) > 0 ||
+                    texts("HTTP", substring = true) > 0)
+            assertTrueMsg("详情失败不得把转义 JSON 当作用户文案",
+                texts("\\u", substring = true) == 0)
+            ev("分类作品详情源站不可用：显示了明确错误状态与重试入口")
+        }
 
         // 6) 导航可逆**且状态保留**（方向基线 §5.2 必达要求）：
         //    返回后必须仍在原来的分类结果里，并且**滚动位置也回到离开时的位置**。
-        rule.onAllNodesWithText("← 返回")[0].performClick()
+        rule.onNodeWithContentDescription("返回").performClick()
         // 注意：caption/list 是 **testTag**，要用 onAllNodesWithTag 判断
         // （上一版误用 onAllNodesWithText 找 tag 名，明明恢复了却等到超时）
         try {
@@ -129,7 +144,7 @@ class MangaBrowseUiTest {
         ev("返回后仍在分类结果里：卡片 $afterBack 张，且『加载更多』无需滚动即可见（滚动位置已恢复）")
 
         // 7) 再返回一层才回到探索页（层级没有被状态恢复打乱）
-        rule.onAllNodesWithText("← 返回")[0].performClick()
+        rule.onNodeWithContentDescription("返回").performClick()
         waitText("漫画分类（来自适配器自己声明的排名/分类）", timeoutMs = 60_000)
         ev("再返回一次回到探索页（层级正确）")
     }

@@ -131,11 +131,11 @@ def test_fallback_only_for_copymanga():
         "图片降级应限定 copymanga 源"
 
 
-# ── 整卷过滤仍需生效（与 R36 联动，防修复间互相破坏）──────────
+# ── 卷条目不可按标题过滤（保留旧下载策略入口作兼容）──────────
 
 def test_volume_filter_still_applied_in_worker():
-    """整卷过滤仍在生效（0.74.12 起走纯函数；判据本体仍在 download_manager）"""
+    """worker 仍经过兼容策略入口，但所有卷/话均原样进入下载。"""
     src = inspect.getsource(dm.DownloadManager._worker)
     assert "filter_volume_only" in src
     fn = inspect.getsource(dm.filter_volume_only)
-    assert "_is_volume_only" in fn
+    assert "return chs, \"\"" in fn

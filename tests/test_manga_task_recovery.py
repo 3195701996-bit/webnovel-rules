@@ -27,6 +27,8 @@ import json
 import os
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from engine.manga.download_manager import DownloadManager  # noqa: E402
@@ -49,13 +51,59 @@ def _running_task(key="copymanga:demo"):
 
 
 def test_running_task_is_converged_to_stopped_with_reason(tmp_path):
-    m, _p = _manager(tmp_path, _running_task())
+    m, path = _manager(tmp_path, _running_task())
     m.load()
     t = m.all_tasks()["copymanga:demo"]
     assert t["status"] == "stopped", "重启后不允许还显示 running（线程已经没了）"
     reason = t.get("stop_reason") or ""
     assert "中断" in reason and "继续" in reason, reason
     assert t.get("current") == "", "停在半截的'当前章节'要清掉，否则界面像还在跑"
+    persisted = json.loads(path.read_text(encoding="utf-8"))["copymanga:demo"]
+    assert persisted["status"] == "stopped"
+    assert persisted["stop_kind"] == "process_restart"
+    assert persisted["stop_reason"] == reason
+
+
+def test_queued_task_is_converged_to_resumable_stopped_after_restart(tmp_path):
+    """内存队列不会跨进程保存；不能让孤立 queued 永久伪装成进行中。"""
+    queued = _running_task()
+    queued["copymanga:demo"].update({
+        "status": "queued", "done": 0, "images_done": 0,
+        "current": "等待同源任务完成",
+    })
+    manager, path = _manager(tmp_path, queued)
+
+    manager.load()
+
+    task = manager.status("copymanga:demo")
+    assert task["status"] == "stopped"
+    assert task["stop_kind"] == "process_restart"
+    assert "仍在等待队列" in task["stop_reason"]
+    assert "尚未开始执行" in task["stop_reason"]
+    assert task["current"] == ""
+    assert manager.paused_keys() == ["copymanga:demo"]
+    saved = json.loads(path.read_text(encoding="utf-8"))["copymanga:demo"]
+    assert saved["status"] == "stopped"
+    assert saved["chapters"] == ["v1", "v2"]
+
+
+def test_legacy_queued_user_pause_remains_paused_after_restart(tmp_path):
+    """旧快照若以 queued+paused 表示用户暂停，恢复时也必须尊重暂停意图。"""
+    queued = _running_task()
+    queued["copymanga:demo"].update({
+        "status": "queued", "paused": True,
+        "stop_kind": "user_pause", "stop_reason": "用户已暂停排队任务",
+    })
+    manager, _path = _manager(tmp_path, queued)
+
+    manager.load()
+
+    task = manager.status("copymanga:demo")
+    assert task["status"] == "paused"
+    assert task["paused"] is True
+    assert task["stop_kind"] == "user_pause"
+    assert task["stop_reason"] == "用户已暂停排队任务"
+    assert manager.paused_keys() == ["copymanga:demo"]
 
 
 def test_progress_and_chapter_list_survive_the_restart(tmp_path):
@@ -80,6 +128,72 @@ def test_done_and_paused_tasks_are_not_downgraded(tmp_path):
     assert allt["copymanga:held"]["status"] == "paused"
 
 
+def test_resume_clears_terminal_diagnostics_from_previous_worker_run(tmp_path):
+    """Retry summaries are per run; stale bad-page/removal counts must not accumulate."""
+    task = _running_task()["copymanga:demo"]
+    task.update({
+        "status": "error", "failed_chapters": 2,
+        "failed_ids": ["chapter-a", "chapter-b"],
+        "bad_page_chapters": 3, "bad_page_ids": ["a", "b", "c"],
+        "bad_page_count": 8, "removed_chapters": 1,
+        "removed_ids": ["chapter-gone"],
+    })
+    manager, _path = _manager(tmp_path, {"copymanga:demo": task})
+    manager.load()
+    manager._kick_workers = lambda: None
+
+    assert manager.resume_result("copymanga:demo") == "resumed"
+    resumed = manager.status("copymanga:demo")
+    assert resumed["status"] == "queued"
+    assert resumed["failed_chapters"] == 0 and resumed["failed_ids"] == []
+    assert resumed["bad_page_chapters"] == 0
+    assert resumed["bad_page_ids"] == [] and resumed["bad_page_count"] == 0
+    assert resumed["removed_chapters"] == 0 and resumed["removed_ids"] == []
+
+
+def test_queued_task_merges_mixed_chapter_ids_without_duplicates(tmp_path):
+    task = _running_task()["copymanga:demo"]
+    task.update({"status": "paused", "chapters": ["v1", {"id": "v2"}],
+                 "paused": True})
+    manager, _path = _manager(tmp_path, {"copymanga:demo": task})
+    manager.load()
+    manager._kick_workers = lambda: None
+
+    key, status = manager.start("copymanga", "demo", "演示", chapters=[
+        "v1", {"id": "v2", "name": "卷二"}, "v3", "v3", {"name": "缺少 ID"},
+    ])
+
+    assert key == "copymanga:demo" and status == "queued"
+    assert manager.status(key)["chapters"] == ["v1", {"id": "v2"}, "v3"]
+
+
+@pytest.mark.parametrize("status", ["queued", "running"])
+def test_user_pause_is_persisted_and_survives_restart(tmp_path, status):
+    """暂停操作先落盘；进程重启不得把用户暂停误成意外中断/待运行任务。"""
+    m, path = _manager(tmp_path, {})
+    key = "copymanga:held"
+    job = _running_task()["copymanga:demo"]
+    job["status"] = status
+    job["paused"] = False
+    with m._lock:
+        m._tasks[key] = job
+
+    assert m.pause(key)
+    saved = json.loads(path.read_text(encoding="utf-8"))[key]
+    assert saved["stop_kind"] == "user_pause"
+    assert saved["paused"] is True
+    if status == "queued":
+        assert saved["status"] == "paused"
+
+    recovered = DownloadManager(state_file=str(path))
+    recovered.load()
+    restored = recovered.status(key)
+    assert restored["status"] == "paused"
+    assert restored["paused"] is True
+    assert restored["stop_kind"] == "user_pause"
+    assert "继续" in restored["stop_reason"]
+
+
 def test_load_is_idempotent(tmp_path):
     """重复装载不得重复任务、也不得把已收敛的 stopped 再改一次"""
     m, _p = _manager(tmp_path, _running_task())
@@ -89,12 +203,73 @@ def test_load_is_idempotent(tmp_path):
 
 
 def test_missing_or_broken_state_file_is_survivable(tmp_path):
-    """状态文件缺失/损坏只影响装载，不得让管理器起不来"""
+    """无备份的损坏状态仍可启动，且原始字节不能被后续保存抹掉。"""
     m = DownloadManager(state_file=str(tmp_path / "nope.json"))
     m.load()
     assert m.all_tasks() == {}
     bad = tmp_path / "bad.json"
-    bad.write_text("{not json", encoding="utf-8")
+    corrupt_bytes = b"{not json\xff"
+    bad.write_bytes(corrupt_bytes)
     m2 = DownloadManager(state_file=str(bad))
     m2.load()
     assert m2.all_tasks() == {}
+    recovery_files = list(tmp_path.glob("bad.json.corrupt*"))
+    assert len(recovery_files) == 1
+    assert recovery_files[0].read_bytes() == corrupt_bytes
+    m2.save()
+    assert recovery_files[0].read_bytes() == corrupt_bytes, \
+        "空内存态后续落盘也不得销毁唯一的损坏原件"
+
+
+def test_corrupt_primary_recovers_previous_valid_snapshot(tmp_path):
+    """主快照损坏时回退上一代有效任务，并保留损坏主文件原字节。"""
+    path = tmp_path / "tasks.json"
+    manager = DownloadManager(state_file=str(path))
+    key = "copymanga:recover"
+    task = _running_task()["copymanga:demo"]
+    task.update({"status": "paused", "images_done": 5, "paused": True})
+    manager._tasks[key] = task
+    manager.save()  # 第一代主快照
+    manager._tasks[key]["images_done"] = 9
+    manager.save()  # 第二代主快照，第一代进入 .bak
+    assert json.loads((tmp_path / "tasks.json.bak").read_text(encoding="utf-8"))[
+        key]["images_done"] == 5
+
+    corrupt_bytes = b"truncated task snapshot"
+    path.write_bytes(corrupt_bytes)
+    recovered = DownloadManager(state_file=str(path))
+    recovered.load()
+    restored = recovered.status(key)
+    assert restored["images_done"] == 5
+    assert restored["status"] == "paused"
+    assert (tmp_path / "tasks.json.corrupt").read_bytes() == corrupt_bytes
+
+    # 下一次正常保存可以修复主路径，但原始损坏文件仍保留供诊断/人工恢复。
+    recovered.save()
+    assert json.loads(path.read_text(encoding="utf-8"))[key]["images_done"] == 5
+    assert (tmp_path / "tasks.json.corrupt").read_bytes() == corrupt_bytes
+
+
+def test_deleted_task_is_not_resurrected_from_previous_snapshot(tmp_path):
+    """A later corrupt primary must not undo a user's explicit task deletion."""
+    path = tmp_path / "tasks.json"
+    manager = DownloadManager(state_file=str(path))
+    key = "mangadex:deleted-task"
+    task = _running_task()["copymanga:demo"]
+    task.update({"status": "paused", "paused": True})
+    manager._tasks[key] = task
+    manager.save()
+    assert key in json.loads(path.read_text(encoding="utf-8"))
+
+    manager.delete(key)
+    assert json.loads(path.read_text(encoding="utf-8")) == {}
+    backup = json.loads((tmp_path / "tasks.json.bak").read_text(encoding="utf-8"))
+    assert backup == {}, \
+        "the recovery generation must not retain explicitly deleted task identities"
+
+    corrupt_bytes = b"truncated after delete"
+    path.write_bytes(corrupt_bytes)
+    recovered = DownloadManager(state_file=str(path))
+    recovered.load()
+    assert recovered.all_tasks() == {}
+    assert (tmp_path / "tasks.json.corrupt").read_bytes() == corrupt_bytes

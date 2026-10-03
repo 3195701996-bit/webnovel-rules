@@ -53,7 +53,7 @@ class MangaSearchStreamUiTest {
         rule.onAllNodesWithText("浏览")[0].performClick()
         waitText("漫画（优先）", timeoutMs = 60_000)
         rule.onAllNodesWithText("搜漫画")[0].performClick()
-        waitText("漫画搜索", timeoutMs = 30_000)
+        waitText("发现漫画", timeoutMs = 30_000)
 
         // 真实关键词（保证有结果可观察）。**每次换一个**：服务端搜索缓存 TTL 1h，
         // 用同一个词连跑两轮会命中缓存，汇总行不再出现「N/M 个源已返回」，
@@ -81,9 +81,7 @@ class MangaSearchStreamUiTest {
         // 旧断言只认后者，源站慢/有源失败时会误判（实测：32s 只回来 1/6 个源，
         // 拷贝漫画网页版直接失败 → 汇总行迟迟不出现）。
         rule.waitUntil(90_000) {
-            texts("已返回", substring = true) > 0 ||
-                texts("缓存", substring = true) > 0 ||
-                texts("没有结果", substring = true) > 0 ||
+            nodes("manga_search_summary") > 0 ||
                 texts("流式搜索不可用", substring = true) > 0 ||
                 texts("搜索失败", substring = true) > 0
         }
@@ -93,10 +91,8 @@ class MangaSearchStreamUiTest {
         // 走没走流式端点：实况流会出现「N/M 个源已返回」；命中**服务端搜索缓存**时
         // 响应 2ms 返回、没有逐源进度，但界面会标「缓存」——两者都说明走的是流式端点
         // （实测：缓存 TTL 1h，同一个词连跑两轮就会命中缓存，把这条断言误伤）。
-        assertTrue("应走流式端点：界面要出现逐源进度「已返回 N/M 个源」或缓存标记「缓存」",
-            texts("已返回", substring = true) > 0 ||
-                texts("缓存", substring = true) > 0 ||
-                texts("没有结果", substring = true) > 0)
+        assertTrue("应走流式端点并完成收尾：搜索汇总行需出现",
+            nodes("manga_search_summary") > 0)
         // 2) 不得回落到阻塞端点
         assertTrue("不应回落到一次性搜索",
             texts("流式搜索不可用", substring = true) == 0)
@@ -105,7 +101,7 @@ class MangaSearchStreamUiTest {
         ev("走流式端点；首屏 ${firstMs}ms；未回落")
 
         // 4) 结果状态必须明确
-        val hasList = nodes("manga_search_results") > 0
+        val hasList = nodes("manga_result_card") > 0
         val noResult = texts("没有结果") > 0
         val failed = texts("搜索失败", substring = true) > 0
         assertTrue("必须有确定状态（结果列表 / 没有结果 / 失败说明）",
@@ -146,7 +142,7 @@ class MangaSearchStreamUiTest {
         rule.onAllNodesWithText("浏览")[0].performClick()
         waitText("漫画（优先）", timeoutMs = 60_000)
         rule.onAllNodesWithText("搜漫画")[0].performClick()
-        waitText("漫画搜索", timeoutMs = 30_000)
+        waitText("发现漫画", timeoutMs = 30_000)
 
         rule.onNodeWithTag("manga_search_field").performTextInput("巨人")
         rule.onNodeWithTag("manga_search_btn").performClick()

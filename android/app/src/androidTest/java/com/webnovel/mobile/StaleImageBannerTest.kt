@@ -3,6 +3,8 @@ package com.webnovel.mobile
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -77,6 +79,7 @@ class StaleImageBannerTest {
         // （mangadex 这类无后处理的源按设计不受约束，用它测不出这条规则）。
         comic = SelfTestComic(source = "jm", comicId = uniq)
         comic.create()
+        rule.activityRule.scenario.recreate()
         gateway = EngineGateway(ctx)
         val st = runBlocking { gateway.connect() }
         assertTrue("引擎未就绪：$st", st is EngineState.Ready)
@@ -108,6 +111,7 @@ class StaleImageBannerTest {
             o.optString("stale_reason").contains("重新获取"))
 
         // 2) 原生阅读器里必须出现横幅与"重新获取"按钮
+        rule.openCachedShelf()
         waitText(SelfTestComic.TITLE)
         rule.onAllNodesWithText(SelfTestComic.TITLE)[0].performScrollTo().performClick()
         waitText("开始阅读")
@@ -141,12 +145,17 @@ class StaleImageBannerTest {
         assertFalse("当前版本不得再报 stale_processing：${r2.body.take(160)}",
             JSONObject(r2.body).optBoolean("stale_processing"))
 
-        rule.onAllNodesWithText("← 返回")[0].performClick()
+        rule.waitUntil(30_000) { nodes("manga_pages") > 0 || nodes("manga_pager") > 0 }
+        rule.tapReaderCenterAndShowControls()
+        rule.onNodeWithContentDescription("返回").performClick()
         waitText(SelfTestComic.TITLE, timeoutMs = 60_000)
         rule.onAllNodesWithText(SelfTestComic.TITLE)[0].performScrollTo().performClick()
         waitText("继续阅读", timeoutMs = 60_000, substring = true)
         rule.onAllNodesWithText("继续阅读", substring = true)[0].performClick()
-        rule.waitUntil(60_000) { texts("/ 3", substring = true) > 0 }
+        // 本地目录过滤掉第 3 话（未下载），所以阅读器只含两话。
+        rule.waitUntil(30_000) { nodes("manga_pages") > 0 || nodes("manga_pager") > 0 }
+        rule.tapReaderCenterAndShowControls()
+        rule.waitUntil(60_000) { texts("/ 2", substring = true) > 0 }
         assertEquals("标记为当前版本后不应再有旧缓存横幅", 0, nodes("stale_cache_banner"))
         ev("标记恢复当前版本后：元信息不报 stale、界面横幅消失")
         Unit

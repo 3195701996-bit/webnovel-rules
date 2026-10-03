@@ -212,12 +212,12 @@ def usage():
 
 # ── 备份范围（"完整备份范围明确"）──────────────────────────────────
 # 备份 = 用户数据里**体积小、丢了最麻烦、又无法从源站重新拿到**的那部分：
-# 书源配置、启用状态、阅读进度、漫画书库与历史。正文与图片明确不进：
+# 书源配置、启用状态、阅读进度、漫画书库、历史与收藏。正文与图片明确不进：
 # 它们体积大（桌面实测 11.4 GB）且可以从书源重新下载。
 BACKUP_INCLUDE = [
     {"what": "书源配置与启用状态", "why": "丢了要重新一个个加；源站变化后未必找得回来"},
     {"what": "小说阅读进度（读到第几章/章内位置）", "why": "丢了要从头找位置"},
-    {"what": "漫画书库与阅读历史", "why": "丢了不知道看过哪些"},
+    {"what": "漫画书库、阅读历史与收藏", "why": "保留本地作品清单、阅读位置及追更/未读基准"},
 ]
 BACKUP_EXCLUDE = [
     {"what": "小说正文缓存", "why": "可以从书源重新下载",
@@ -250,7 +250,8 @@ def backup_scope():
     progress_files = []
     total_bytes = src_bytes
     for rel in ("book_progress.json", os.path.join("manga", "_library.json"),
-                os.path.join("manga", "_history.json")):
+                os.path.join("manga", "_history.json"),
+                os.path.join("manga", "_favorites.json")):
         p = os.path.join(DATA_DIR, rel)
         if os.path.isfile(p):
             sz = _file_size(p)

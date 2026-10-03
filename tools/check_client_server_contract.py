@@ -44,6 +44,9 @@ ENDPOINTS = {
     "sources":       ("GET", "/api/manga/sources", "sources"),
     "bookSources":   ("GET", "/api/sources", "sources"),
     "mangaHistory":  ("GET", "/api/manga/history", ""),
+    "mangaFavorites": ("GET", "/api/manga/favorites", "favorites"),
+    "mangaFavoriteCheckStart": ("POST", "/api/manga/favorites/check-updates", ""),
+    "mangaFavoriteCheckStatus": ("GET", "/api/manga/favorites/check-updates/status", ""),
     "readProgress":  ("GET", "/api/books/{book}/progress", ""),
     "chapter":       ("GET", "/api/books/{book}/chapter/1", ""),
     "verifications": ("GET", "/api/sources/verify/results", "items"),
@@ -70,6 +73,9 @@ ENDPOINTS = {
 COVERED_ELSEWHERE = {
     "engineSummary": "走「原生状态通道核对」一节（/__mobile/status 是移动入口的 WSGI 包装层，"
                      "不经 Flask 路由，test_client 到不了），那一节按它的需求逐条溯源",
+    "httpErrorMessage": "纯错误文案格式化器，不解析服务端字段契约；HTTP 状态映射由 "
+                        "android/app/src/test/.../HttpErrorMessageTest.kt 单元测试覆盖",
+    "canonical": "漫画来源身份归一化的纯字符串 helper（不是 body/JSON 响应解析器）",
 }
 
 SKIPPED_PARSERS = {
@@ -275,8 +281,12 @@ def parse_requirements(fn_name):
                 # 找一个不存在的数组 → 报"该夹具未构造该状态"（看起来像跳过，其实漏检）。
                 if lv[0] == "object":
                     lv = ("array", f"{lv[1]}.{key}")
-                elif lv[0] == "array" and len(lv) > 2:
-                    lv = ("array", f"{lv[1]}.{lv[2]}.{key}")
+                elif lv[0] == "array":
+                    # 数组元素内部取出的数组本身也是一个字段，既检查该键存在，
+                    # 又把后续元素解析继续放在这个嵌套路径下。
+                    prefix = f"{lv[2]}." if len(lv) > 2 and lv[2] else ""
+                    add_array(lv[1], f"{prefix}{key}")
+                    lv = ("array", f"{lv[1]}.{prefix}{key}")
                 else:
                     lv = ("array", key)
             else:
@@ -458,6 +468,13 @@ def main():
     # 写一条阅读进度：/progress 只有存在记录时才返回 idx/pct/name
     c.post("/api/books/src_deadbeef/progress",
            json={"idx": 2, "pct": 30, "name": "第2章"})
+    # 漫画历史包含完整“曾读章节身份集合”，不是只有当前 idx；确保响应字段契约
+    # 在有真实历史行的状态下检查，而不因默认空数组漏掉 read_chapter_ids。
+    c.post("/api/manga/history", json={
+        "source": "contract-fixture", "comic_id": "read-set-fixture",
+        "idx": 2, "chapter_id": "chapter-3", "chapter_label": "第3话",
+        "pos": "第3话 P4", "title": "契约漫画",
+    })
 
     # 造一条**能用真实源**的小说任务：源 uid 不存在时任务会立刻失败，
     # progress 里就没有 current/total —— 那样核对出来的"缺失"是夹具问题，不是漂移。

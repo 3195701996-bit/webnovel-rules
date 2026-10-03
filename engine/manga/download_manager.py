@@ -7,8 +7,10 @@
 - 图片级进度/速度/ETA + 持久化（重启后恢复）
 """
 import copy
+import errno
 import json
 import os
+import shutil
 import threading
 import time
 import traceback
@@ -29,11 +31,58 @@ STOP_KIND_RESTART = "process_restart"
 STOP_KIND_ERROR = "error"
 STOP_KIND_DONE = "done"
 
+_DOWNLOAD_INFO_LOCK = threading.Lock()
+
+
+class MangaLibraryWriteError(RuntimeError):
+    """书库索引不能安全更新；下载媒体必须保留并允许用户恢复重试。"""
+
+
+def _preserve_corrupt_library(path):
+    backup = path + ".corrupt"
+    if os.path.exists(backup):
+        backup += "." + str(time.time_ns())
+    try:
+        shutil.copy2(path, backup)
+    except OSError as exc:
+        raise MangaLibraryWriteError(
+            "书库索引损坏且原件无法安全备份；已停止覆盖，请检查存储空间后重试") from exc
+    return backup
+
+
+def _read_library_list(path):
+    with open(path, encoding="utf-8") as stream:
+        value = json.load(stream)
+    if not isinstance(value, list) or any(not isinstance(item, dict) for item in value):
+        raise ValueError("manga library root must be a list of records")
+    return value
+
 MAX_PARALLEL = 2          # 全局并发下载任务数（可配置）
 SAVE_EVERY_CHAPTERS = 3   # 每 N 章持久化一次
 # 图片并发按源分级（2026-09-16 实测：jm CDN 对并行是真的并行，阅读预热 8 路
 # 长期无恙；jm 下载取 6）。拷贝漫画有 IP 级 210 软限制前科 → 单独保守档 4。
 IMG_PARALLEL = 6          # 单任务图片并发下载数（同章内，默认档）
+_TASK_STATE_EMERGENCY_RESERVE_BYTES = 512 * 1024
+def _record_download_page_count(info_path, chapter_id, page_count):
+    """Atomically persist the source-confirmed page count for one chapter."""
+    try:
+        with _DOWNLOAD_INFO_LOCK:
+            with open(info_path, encoding="utf-8") as f:
+                info = json.load(f)
+            if not isinstance(info, dict) or not isinstance(info.get("chapters"), list):
+                return False
+            chapter = next((item for item in info["chapters"]
+                            if isinstance(item, dict) and
+                            str(item.get("id") or "") == str(chapter_id or "")), None)
+            if chapter is None:
+                return False
+            chapter["download_page_count"] = max(0, int(page_count))
+            atomic_write(info_path, info)
+        return True
+    except (OSError, ValueError, TypeError, AttributeError):
+        return False
+
+
 def _img_parallel_for(source):
     # 下载任务必须显式覆盖 adapter.concurrent：copymanga_web 的适配器为 1，
     # 若交给 ImageDownloader 默认推导，只会得到 2 路，外层 4 路线程形同虚设。
@@ -48,12 +97,7 @@ def _img_parallel_for(source):
 
 
 def _img_interval_for(source):
-    """下载任务图片间隔；并发已受控时不再按 1 秒串行节流。
-
-    拷贝漫画历史上使用 1s/图，实际会把 4 路线程退化成单路吞吐。
-    0.25s 仍保留温和节流，同时允许 4 路连接形成有效带宽利用。
-    可用 WR_MANGA_DL_INTERVAL 覆盖，风控时设置为 1 或更高。
-    """
+    """兼容配置查询；实际配额由 downloader 的统一 source gate 执行。"""
     raw = os.environ.get("WR_MANGA_DL_INTERVAL", "").strip()
     try:
         if raw:
@@ -61,7 +105,28 @@ def _img_interval_for(source):
     except ValueError:
         pass
     return 0.25 if source in ("copymanga", "copymanga_web") else 0.0
-# 兼容旧配置名；实际下载任务通过 _img_interval_for() 选择间隔。
+
+
+def _sample_image_speed(task, sample, images_total, now=None):
+    """Update a running task's image throughput and ETA from a monotonic window.
+
+    Caller holds the manager lock. `sample` is process-local; the public task
+    schema remains limited to user-visible progress fields.
+    """
+    now = time.monotonic() if now is None else float(now)
+    dt = now - float(sample.get("at", now))
+    if dt < 1.0:
+        return False
+    done = int(task.get("images_done") or 0)
+    rate = max(0.0, (done - int(sample.get("done") or 0)) / dt)
+    sample.update(at=now, done=done)
+    task["speed"] = round(rate, 1)
+    remaining = max(0, int(images_total or 0) - done)
+    task["eta"] = int(remaining / rate) if rate > 0 else None
+    return True
+
+
+# 兼容旧配置名；图片请求配额统一由 downloader source gate 控制。
 # 历史值曾为 1s/图，会把多线程下载退化成串行，保留常量仅避免外部引用断裂。
 IMG_MIN_INTERVAL = 1.0
 # P1-1: 章节图片列表解析钩子（server/state.py 启动时注入 _get_chapter_images，
@@ -86,14 +151,52 @@ def _sort_chapters(chapters):
     附加类（带文字但无话号的休載公告/特別篇/贺图/番外等）排正片之后；
     整卷条目排正片后、附加前；无数字章节排最后）
     修复：'特別篇2'/'休載公告1' 等带文字的章节被兜底数字误当话号插入正片中间"""
+    def _number(token):
+        """Parse Arabic or common Chinese volume/episode numerals."""
+        try:
+            return float(token)
+        except (TypeError, ValueError):
+            pass
+        digits = {"零": 0, "〇": 0, "一": 1, "二": 2, "两": 2, "兩": 2,
+                  "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8,
+                  "九": 9}
+        if token in ("廿", "卅"):
+            return 20.0 if token == "廿" else 30.0
+        if token.startswith("廿"):
+            return 20.0 + _number(token[1:])
+        if token.startswith("卅"):
+            return 30.0 + _number(token[1:])
+        if "十" not in token and "百" not in token:
+            return float(sum(digits.get(ch, 0) * (10 ** (len(token) - i - 1))
+                             for i, ch in enumerate(token)))
+        total, section, pending = 0, 0, None
+        for ch in token:
+            if ch in digits:
+                pending = digits[ch]
+            elif ch == "十":
+                section += (pending if pending is not None else 1) * 10
+                pending = None
+            elif ch == "百":
+                section += (pending if pending is not None else 1) * 100
+                pending = None
+            else:
+                return float("inf")
+        return float(total + section + (pending or 0))
+
     def _num_key(ch):
         name = ch.get("name") or ""
         # 话号（第X话/話/回/章/集；繁简都要识别，否则"第01話"被误判为附加）
-        m = _re.search(r"第\s*(\d+(?:\.\d+)?)\s*(?:话|話|回|章|集|话数|話数)", name)
-        ep = float(m.group(1)) if m else None
+        numeral = r"(?:\d+(?:\.\d+)?|[零〇一二两兩三四五六七八九十百廿卅]+)"
+        m = _re.search(r"第\s*(" + numeral + r")\s*(?:话|話|回|章|集|话数|話数)", name)
+        ep = _number(m.group(1)) if m else None
         # 卷号（第X卷/Vol.X/卷X）
-        m2 = _re.search(r"(?:第\s*(\d+(?:\.\d+)?)\s*卷|Vol\.?\s*(\d+(?:\.\d+)?)|卷\s*(\d+(?:\.\d+)?))", name, _re.I)
-        vol = float(m2.group(1) or m2.group(2) or m2.group(3)) if m2 else 0.0
+        m2 = _re.search(
+            r"(?:第\s*(" + numeral + r")\s*[卷巻]"
+            r"|Vol\.?\s*(\d+(?:\.\d+)?)"
+            r"|[卷巻]\s*(" + numeral + r"))",
+            name, _re.I,
+        )
+        vol = _number(next(value for value in m2.groups() if value)) if m2 else 0.0
         if ep is None:
             if m2:
                 # 整卷条目：无话号有卷号 → 排正片之后、附加之前
@@ -153,32 +256,15 @@ def _is_volume_only(name):
     return bool(_VOL_ONLY_RE.fullmatch(n))
 
 def filter_volume_only(chapters, sel_chapters=None):
-    """剔除"纯整卷合集"章节 → (最终章节列表, 说明文本)。
+    """兼容旧调用名，但不再剔除整卷阅读单元。
 
-    规则本体沿用 R36（整名匹配"第N卷/Vol.N/第一卷"，那是 APP 的 chapter2 接口
-    返回 null 的打包条目）。2026-09-18 补两条**例外**，实测《巨人》(jurenmeiman)
-    的 5 章全叫"第01卷…第05卷"，按规则全被剔除 → 整本下载 total=0 → 任务 error，
-    **该作品完全下载不了**（而网页通道实测这些卷能取到 24 张图）：
-
-      · **用户明确选了话 → 不剔除**：他点了就是要下，选择优先于自动规则；
-      · **剔完一章不剩 → 不剔除**：宁可按"卷就是可下载单元"处理，
-        也不要把整本变成不可下载（真要下不了，逐章失败会如实记账）。
-
-    混合列表仍按原规则剔除（保护 R36 的初衷：别把时间花在打包条目上）。
+    卷是有效的阅读/下载单元；尤其混合目录中，前半部可能按整卷发布，
+    后半部才逐话发布。按标题过滤卷会造成无法下载、目录缺项及更新漏报。
+    是否能取到图片由 adapter.images() 的实际结果决定，失败应按普通章节
+    错误处理，不能根据标题预先丢弃。
     """
     chs = list(chapters or [])
-    sel = bool(sel_chapters)
-    kept = [c for c in chs if not _is_volume_only(c.get("name") or "")]
-    if not chs:
-        return chs, ""
-    if sel:
-        return chs, "用户已明确选择章节，不做整卷排除"
-    if not kept:
-        return chs, ("该作品 %d 章在源站全部是整卷条目（如“第01卷”）："
-                     "不再按整卷规则排除（这些卷就是可下载单元）" % len(chs))
-    if len(kept) != len(chs):
-        return kept, "按整卷规则跳过 %d 个整卷合集条目" % (len(chs) - len(kept))
-    return kept, ""
+    return chs, ""
 
 
 _ADAPTERS_LOADED = False
@@ -214,6 +300,8 @@ class DownloadManager:
         self._tasks = {}          # key -> task dict
         self._lock = threading.Lock()
         self._state_file = state_file
+        self._emergency_reserve_file = (
+            state_file + ".reserve" if state_file else None)
         # 进度落盘节流时间戳（见 _save_throttled）
         self._last_save_at = 0.0
         self._queue_cond = threading.Condition(self._lock)
@@ -223,11 +311,56 @@ class DownloadManager:
         # 保证同一 key 任何时刻最多一个活 worker——cancel/delete 后任务 dict
         # 可能已被替换/删除，但旧 worker 还没到检查点，此时禁止重建同 key 任务
         self._worker_alive = set()
+        # Process-local throughput windows are not part of the persisted task schema.
+        self._speed_samples = {}
+        # 本地媒体删除预约：与 start/resume 共用 _lock，阻止删除校验后新任务插队。
+        self._media_deleting = set()
         self._save_io_lock = threading.Lock()
         self._save_seq = 0
         self._save_written = 0
 
     # ── 持久化 ──
+    def _ensure_emergency_reserve(self):
+        """Keep real allocated blocks available for one task-state write on ENOSPC.
+
+        A sparse/truncated file does not reserve blocks on common Android filesystems,
+        so write and fsync the complete bounded reserve. It is disposable: task state
+        remains authoritative, and the reserve is recreated after storage recovers.
+        """
+        path = self._emergency_reserve_file
+        if not path:
+            return
+        reserve_bytes = _TASK_STATE_EMERGENCY_RESERVE_BYTES
+        try:
+            # Atomic replacement temporarily needs one full new snapshot while
+            # the current generation still occupies blocks. Scale the reserve
+            # for a large recovered task queue instead of assuming a tiny file.
+            reserve_bytes = max(
+                reserve_bytes, os.path.getsize(self._state_file) + 128 * 1024)
+        except OSError:
+            pass
+        try:
+            if os.path.getsize(path) == reserve_bytes:
+                return
+        except OSError:
+            pass
+        try:
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            chunk = b"\0" * 65536
+            with open(path, "wb") as stream:
+                remaining = reserve_bytes
+                while remaining:
+                    part = chunk[:min(len(chunk), remaining)]
+                    stream.write(part)
+                    remaining -= len(part)
+                stream.flush()
+                os.fsync(stream.fileno())
+        except OSError:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+
     def save(self):
         if not self._state_file:
             return
@@ -250,8 +383,40 @@ class DownloadManager:
             with self._save_io_lock:
                 if _seq < self._save_written:
                     return
-                atomic_write(self._state_file, data)
+                # Keep one validated previous generation, but never let recovery
+                # resurrect a task explicitly removed from the current snapshot.
+                try:
+                    with open(self._state_file, encoding="utf-8") as _f:
+                        previous = json.load(_f)
+                    if isinstance(previous, dict):
+                        previous = {k: v for k, v in previous.items() if k in data}
+                        atomic_write(self._state_file + ".bak", previous)
+                except FileNotFoundError:
+                    pass
+                except Exception as _backup_error:
+                    print(f"[manga-dl] 上一版任务快照备份失败: "
+                          f"{type(_backup_error).__name__}", flush=True)
+                try:
+                    atomic_write(self._state_file, data)
+                except OSError as _write_error:
+                    # At zero free space even the error status cannot normally be
+                    # serialized. Release the proactively allocated reserve and
+                    # retry the authoritative snapshot without spending blocks on
+                    # a redundant backup. This keeps the task resumable after the
+                    # user frees storage or the process restarts.
+                    _no_space = _write_error.errno in (
+                        errno.ENOSPC, getattr(errno, "EDQUOT", errno.ENOSPC))
+                    if not _no_space or not self._emergency_reserve_file:
+                        raise
+                    try:
+                        os.unlink(self._emergency_reserve_file)
+                    except OSError:
+                        raise _write_error
+                    atomic_write(self._state_file, data)
+                    print("[manga-dl] 磁盘空间不足：已释放应急预留空间并保存任务状态",
+                          flush=True)
                 self._save_written = _seq
+                self._ensure_emergency_reserve()
         except Exception as e:
             print(f"[manga-dl] 持久化失败: {e}", flush=True)
 
@@ -286,26 +451,78 @@ class DownloadManager:
                   flush=True)
             return
         try:
-            with open(self._state_file, encoding="utf-8") as _f:
-                data = json.load(_f)
-            if not isinstance(data, dict):
-                print(f"[manga-dl] 任务状态文件格式异常（{type(data).__name__}），跳过装载",
-                      flush=True)
-                return
+            try:
+                with open(self._state_file, encoding="utf-8") as _f:
+                    data = json.load(_f)
+                if not isinstance(data, dict):
+                    raise ValueError(f"root must be an object, got {type(data).__name__}")
+            except Exception as _primary_error:
+                # Preserve the exact unreadable bytes before any later save can
+                # replace the primary path with an empty/new task snapshot.
+                corrupt_copy = self._state_file + ".corrupt"
+                if os.path.exists(corrupt_copy):
+                    corrupt_copy += "." + str(time.time_ns())
+                try:
+                    shutil.copy2(self._state_file, corrupt_copy)
+                    print(f"[manga-dl] 损坏任务快照已保留: {corrupt_copy}", flush=True)
+                except OSError as _copy_error:
+                    print(f"[manga-dl] 损坏快照保留失败: "
+                          f"{type(_copy_error).__name__}", flush=True)
+                backup_path = self._state_file + ".bak"
+                try:
+                    with open(backup_path, encoding="utf-8") as _f:
+                        data = json.load(_f)
+                    if not isinstance(data, dict):
+                        raise ValueError("backup root is not an object")
+                    print(f"[manga-dl] 主任务快照损坏，已回退到上一版有效快照："
+                          f"{backup_path}（{type(_primary_error).__name__}）", flush=True)
+                except Exception as _backup_error:
+                    print(f"[manga-dl] 加载失败: {type(_primary_error).__name__}; "
+                          f"有效备份不可用: {type(_backup_error).__name__}", flush=True)
+                    return
             n = 0
+            normalized = False
             with self._lock:
                 for key, job in data.items():
                     if not isinstance(job, dict):
                         continue
-                    if job.get("status") == "running":
-                        job["status"] = "stopped"  # 重启后线程消失
+                    original_status = job.get("status")
+                    if original_status in ("running", "queued"):
+                        normalized = True
                         job["current"] = ""
-                        # P1-1: 记录原因（界面照实显示"为什么停了"，可继续）
-                        job["stop_kind"] = STOP_KIND_RESTART
-                        job["stop_reason"] = ("应用进程或前台服务已停止，下载随之中断；"
-                                              "已下载的图片保留，可点「继续」接着下。")
+                        job["current_chapter_id"] = ""
+                        if job.get("paused") or job.get("stop_kind") == STOP_KIND_USER_PAUSE:
+                            # 用户明确暂停的任务在重启后仍保持暂停；不能把它混成
+                            # 可自动恢复/意外中断任务，否则会违背用户的暂停意图。
+                            job["status"] = "paused"
+                            job["paused"] = True
+                            job.setdefault("stop_kind", STOP_KIND_USER_PAUSE)
+                            job.setdefault("stop_reason", "你在 App 里暂停了下载；已下载的图片保留，可点「继续」接着下。")
+                        else:
+                            # running 和 queued 都只描述旧进程内的 worker/队列，
+                            # 重启后这些运行时实体已不存在。queued 若原样保留，
+                            # 下载页会持续显示“排队中”，却既无人调度也不在可恢复列表。
+                            job["status"] = "stopped"
+                            # P1-1: 记录原因（界面照实显示"为什么停了"，可继续）
+                            job["stop_kind"] = STOP_KIND_RESTART
+                            if original_status == "queued":
+                                job["stop_reason"] = (
+                                    "应用进程或前台服务已停止；此任务当时仍在等待队列，"
+                                    "尚未开始执行，可点「继续」开始下载。")
+                            else:
+                                job["stop_reason"] = ("应用进程或前台服务已停止，下载随之中断；"
+                                                      "已下载的图片保留，可点「继续」接着下。")
                     self._tasks[key] = job
                     n += 1
+            # Immediately persist restart recovery so a second crash before the
+            # first user action cannot leave disk claiming these workers run.
+            if normalized:
+                self.save()
+            else:
+                # Existing installs may have task snapshots from before emergency
+                # reserves existed. Provision one as soon as a usable state file
+                # is read, not only after the next download progress write.
+                self._ensure_emergency_reserve()
             print(f"[manga-dl] 已装载 {n} 个任务记录（{self._state_file}）", flush=True)
         except Exception as e:
             print(f"[manga-dl] 加载失败: {e}", flush=True)
@@ -319,6 +536,8 @@ class DownloadManager:
         key = f"{source}:{comic_id}"
         _kick = False
         with self._lock:
+            if key in self._media_deleting:
+                return key, "deleting"
             exist = self._tasks.get(key)
             if exist:
                 status = exist.get("status")
@@ -326,12 +545,21 @@ class DownloadManager:
                     return key, "running"
                 if status in ("queued", "paused"):
                     if chapters:
-                        old_ids = {c.get("id") for c in exist.get("chapters", [])
-                                   if isinstance(c, dict) and "id" in c}
+                        existing_chapters = exist.get("chapters")
+                        if not isinstance(existing_chapters, list):
+                            existing_chapters = []
+                            exist["chapters"] = existing_chapters
+
+                        def _chapter_id(chapter):
+                            return chapter.get("id") if isinstance(chapter, dict) else chapter
+
+                        old_ids = {chapter_id for chapter in existing_chapters
+                                   if (chapter_id := _chapter_id(chapter)) is not None}
                         for c in chapters:
-                            cid = c.get("id") if isinstance(c, dict) else c
-                            if cid not in old_ids:
-                                exist.setdefault("chapters", []).append(c)
+                            cid = _chapter_id(c)
+                            if cid is not None and cid not in old_ids:
+                                existing_chapters.append(c)
+                                old_ids.add(cid)
                     exist["paused"] = False
                     exist["stop_kind"] = ""    # 重新跑起来了，旧停止原因作废
                     exist["stop_reason"] = ""
@@ -353,6 +581,7 @@ class DownloadManager:
                     _cur_status = "queued"
                     self._tasks[key] = {
                         "status": "queued", "total": 0, "done": 0, "current": "",
+                        "current_chapter_id": "",
                         "error": "", "title": title, "source": source,
                         "comic_id": comic_id, "cover": cover,
                         "speed": 0, "eta": 0, "images_done": 0, "images_total": 0,
@@ -370,6 +599,7 @@ class DownloadManager:
                 _cur_status = "queued"
                 self._tasks[key] = {
                     "status": "queued", "total": 0, "done": 0, "current": "",
+                    "current_chapter_id": "",
                     "error": "", "title": title, "source": source,
                     "comic_id": comic_id, "cover": cover,
                     "speed": 0, "eta": 0, "images_done": 0, "images_total": 0,
@@ -402,7 +632,7 @@ class DownloadManager:
                 key = queued.pop(0)
                 # P1-2: 同 key 旧 worker 仍存活（cancel/delete 后未到检查点）→
                 # 跳过，绝不并发双 worker；其 finally 释放槽位时会再次
-                # _kick_workers 把这个 queued 任务拉起
+        # _kick_workers 把这个 queued 任务拉起
                 if key in self._worker_alive:
                     continue
                 _src = self._tasks[key].get("source")
@@ -421,6 +651,7 @@ class DownloadManager:
             t.start()
 
     def pause(self, key):
+        changed = False
         with self._lock:
             t = self._tasks.get(key)
             if not t:
@@ -430,25 +661,42 @@ class DownloadManager:
                 t["paused"] = True
                 t["stop_kind"] = STOP_KIND_USER_PAUSE
                 t["stop_reason"] = "你在 App 里暂停了下载（已下载的图片保留，可点「继续」）"
-                return True
-            if st == "queued":
+                changed = True
+            elif st == "queued":
                 # R67: 排队中任务直接置 paused——否则点了暂停它仍会被
                 # _kick_workers 启动(此前 queued 任务暂停按钮完全无效)
                 t["paused"] = True
                 t["status"] = "paused"
                 t["current"] = "已暂停（排队中）"
                 t["stop_kind"] = STOP_KIND_USER_PAUSE
-                t["stop_reason"] = "你在 App 里暂停了下载（排队中，尚未开始）"
-                return True
-        return False
+                t["stop_reason"] = ("你在 App 里暂停了下载（排队中，尚未开始）；"
+                                    "可点「继续」恢复")
+                changed = True
+        if changed:
+            # 暂停意图必须先落盘，避免系统在 worker 到达章节检查点前回收进程，
+            # 或排队中的暂停状态只停留在内存里。
+            self.save()
+        return changed
 
-    def resume(self, key):
+    def resume_result(self, key):
+        """Resume atomically and classify refusal for the HTTP boundary.
+
+        Return ``resumed``, ``deleting``, ``no_task`` or ``not_resumable``. The
+        classification and state transition share the same lock so a concurrent
+        media-delete reservation cannot be confused with an absent task.
+        """
         with self._lock:
+            if key in self._media_deleting:
+                return "deleting"
             t = self._tasks.get(key)
+            if not t:
+                return "no_task"
+            if t.get("status") in ("running", "queued"):
+                return "resumed"
             # cancel：用户点了取消但 worker 还没到检查点（旧 worker 存活时
             # 分配器会跳过，等它退出再拉起）——这也是"可继续"的一种，
             # 此前 resume 对它直接返回 True 却什么都不做（界面点「继续」无反应）
-            if t and t.get("status") in ("paused", "stopped", "error", "cancel"):
+            if t.get("status") in ("paused", "stopped", "error", "cancel"):
                 t["paused"] = False
                 t["status"] = "queued"
                 t["error"] = ""
@@ -461,11 +709,46 @@ class DownloadManager:
                 t["images_done"] = 0
                 t["images_total"] = 0
                 t["failed_chapters"] = 0
+                t["failed_ids"] = []
+                # These diagnostics describe the previous worker run, not the
+                # lifetime of the comic task. Keeping them across retries made
+                # the terminal note accumulate the same bad pages/removals each
+                # time the user retried a transient failure.
+                t["bad_page_chapters"] = 0
+                t["bad_page_ids"] = []
+                t["bad_page_count"] = 0
+                t["removed_chapters"] = 0
+                t["removed_ids"] = []
                 t["speed"] = 0
                 t["eta"] = 0
                 t["current"] = ""
+            else:
+                return "not_resumable"
         self._kick_workers()
-        return True
+        return "resumed"
+
+    def resume(self, key):
+        """Boolean compatibility wrapper for existing callers."""
+        return self.resume_result(key) == "resumed"
+
+    def begin_media_delete(self, key):
+        """Atomically reserve an idle comic against concurrent start/resume."""
+        with self._lock:
+            task = self._tasks.get(key) or {}
+            if (key in self._media_deleting or key in self._worker_alive or
+                    task.get("status") in ("running", "queued")):
+                return False
+            self._media_deleting.add(key)
+            return True
+
+    def end_media_delete(self, key):
+        with self._lock:
+            self._media_deleting.discard(key)
+
+    def is_media_deleting(self, key):
+        """Whether local media for this comic is currently reserved for deletion."""
+        with self._lock:
+            return key in self._media_deleting
 
     def interrupt_running(self, reason):
         """服务/引擎停止：把运行中/排队中的下载标记为可解释的中断（幂等）。
@@ -572,6 +855,8 @@ class DownloadManager:
             t = self._tasks.get(key)
             if t:
                 t.update(status=status, **extra)
+                if status != "running":
+                    t["current_chapter_id"] = ""
                 # P1-1: 终态的结构化原因（与小说任务同字段同取值）。
                 # 只写 error/done 两种自身可判定的终态；stopped/paused 的原因
                 # 由 pause()/cancel()/interrupt_running() 事先写清，此处不覆盖
@@ -642,7 +927,9 @@ class DownloadManager:
                 ad, cache_root,
                 # 显式并发，避免 copymanga_web.concurrent=1 把下载任务压成 2 路。
                 concurrency=_img_parallel_for(source),
-                min_interval=_img_interval_for(source))
+                # 下载任务间隔由跨任务共享预算统一执行，避免 APP/Web 各自节流
+                # 后仍以两倍频率打到同一个上游站点。
+                min_interval=0)
             print(f"[manga-dl] worker {key} downloader 就绪", flush=True)
             try:
                 # 1) 获取章节列表
@@ -707,11 +994,21 @@ class DownloadManager:
                     # 策略：对比新旧列表与磁盘目录的 ID 重叠度，选用重叠最多的列表；
                     # 新列表与目录零重叠且目录非空时，保留旧列表（幂等续传）。
                     _old_chapters = None
+                    _old_page_counts = {}
                     if os.path.exists(info_p):
                         try:
                             with open(info_p, encoding="utf-8") as _f:
                                 _old_info = json.load(_f)
                             _old_chapters = _old_info.get("chapters") or []
+                            for _row in _old_chapters:
+                                if (not isinstance(_row, dict) or not _row.get("id") or
+                                        _row.get("download_page_count") is None):
+                                    continue
+                                try:
+                                    _old_page_counts[str(_row["id"])] = max(
+                                        0, int(_row["download_page_count"]))
+                                except (TypeError, ValueError, OverflowError):
+                                    continue
                         except Exception:
                             pass
                     _dir_ids = set()
@@ -730,6 +1027,19 @@ class DownloadManager:
                                   f"({_new_ov} vs 旧列表 {_old_ov})，沿用旧列表避免全量重下",
                                   flush=True)
                             chapters = _old_chapters
+                    # Refreshing the source catalog must not discard authoritative
+                    # page counts for already downloaded chapter identities. Those
+                    # counts are required to distinguish complete downloads from
+                    # contiguous but truncated local page sets after an incremental
+                    # task rewrites _info.json.
+                    if _old_page_counts:
+                        chapters = [dict(row) if isinstance(row, dict) else row
+                                    for row in chapters]
+                        for row in chapters:
+                            if isinstance(row, dict):
+                                old_count = _old_page_counts.get(str(row.get("id") or ""))
+                                if old_count is not None:
+                                    row.setdefault("download_page_count", old_count)
                     os.makedirs(cache_root, exist_ok=True)
                     # 续传依赖的关键文件：原子写，避免半截 JSON；同时关闭句柄
                     atomic_write(info_p, {"chapters": chapters, "cover": cover,
@@ -750,15 +1060,8 @@ class DownloadManager:
                               f"({len(chapters)} 章)", flush=True)
                 # 3) 绝对顺序：按章节序号（第X话/卷X话）升序下载（前章节→后章节）
                 chapters = _sort_chapters(chapters)
-                # 只排除**纯整卷合集**（章节名就是"第X卷/Vol.X/卷X"，APP 的 chapter2
-                # 接口返回 null 不可下载）；"01卷番外/02卷宣傳圖"等卷附加内容是实际
-                # 可下载章节（实测可取到图片），必须保留。
-                #
-                # 2026-09-18 两处修正（实测《巨人》jurenmeiman 的 5 章全叫"第0N卷"）：
-                #   ① **用户明确选的话不做排除**——他点了就是要下；
-                #      旧行为：选了也被滤掉 → total=0 → 任务 error，用户无从理解；
-                #   ② 滤完若一章不剩，**不再谎称"源在风控/已下架"**，而是说清真因
-                #      （是我们按整卷规则跳过的），并告诉用户下一步怎么做。
+                # 卷是完整阅读/下载单元。混合目录也必须保留卷条目，由 adapter
+                # 对每个单元实际取图；不能仅凭标题过滤，否则卷式作品会缺目录。
                 chapters, _vol_note = filter_volume_only(chapters, sel_chapters)
                 if _vol_note:
                     print(f"[manga-dl] worker {key} {_vol_note}", flush=True)
@@ -795,6 +1098,8 @@ class DownloadManager:
                 t0 = time.time()
                 last_speed_t = t0
                 last_done = 0
+                with self._lock:
+                    self._speed_samples[key] = {"at": time.monotonic(), "done": 0}
                 # ── 章节流水线：下一话的图片清单与当前话的图片下载重叠 ──
                 # 此前每话串行"取清单(0.5-3s 源站往返) → 下图"，整本下来清单
                 # 往返占掉可观比例；预取单线程、复用同一条解析路径（含重试与
@@ -831,6 +1136,10 @@ class DownloadManager:
                 if chapters:
                     _kick(chapters[0]["id"])
                 for _ci, ch in enumerate(chapters):
+                    with self._lock:
+                        _current_task = self._tasks.get(key)
+                        if _current_task and _current_task.get("status") == "running":
+                            _current_task["current_chapter_id"] = str(ch.get("id") or "")
                     # R67: 统一检查点——主循环开头（含 current 预置名称）
                     _cp = self._checkpoint(key)
                     if _cp == "gone":
@@ -861,6 +1170,11 @@ class DownloadManager:
                             # 当作"0 图成功"会让用户以为下载完了，实际整章没有
                             # 一张图——下载与阅读两处的假成功必须统一成可重试失败。
                             raise MangaError("图片列表为空（源站可能限流）")
+                        # 将源站确认的页数与已验证落盘页数写入下载清单。
+                        # 详情/书架据此避免把只有部分图片的章节误显示为完整下载。
+                        if not _record_download_page_count(
+                                info_p, ch.get("id"), len(imgs)):
+                            print("[manga-dl] 下载页数元数据写入失败", flush=True)
                         images_total += len(imgs)
                         with self._lock:
                             t = self._tasks.get(key)
@@ -871,6 +1185,7 @@ class DownloadManager:
                         # ch["id"] 用默认参数固化：闭包引用循环变量时，
                         # 只要线程池改为跨章节复用就会把图片写到错误章节目录
                         _ch_id = ch["id"]
+                        _storage_errors = []
 
                         def _dl_one(item, _cid=_ch_id):
                             _i, _u = item
@@ -880,12 +1195,25 @@ class DownloadManager:
                             if self._checkpoint(key):
                                 return 2
                             try:
-                                dl.get(_u, comic_id, _cid, _i)
+                                dl.get(
+                                    _u, comic_id, _cid, _i,
+                                    priority="download",
+                                    cancel_check=lambda: bool(
+                                        self._checkpoint(key)))
                             except BadImageError:
                                 return -1    # 源站坏页：永久失败，不计入可续传失败
-                            except StorageWriteError:
+                            except StorageWriteError as _storage_error:
+                                # Preserve the original disk cause across the worker
+                                # boundary. The UI can then distinguish ENOSPC from
+                                # a read-only/permission failure and tell the user
+                                # what action will make a retry succeed.
+                                from ..app_utils import disk_error_text as _disk_text
+                                _storage_errors.append(
+                                    _disk_text(_storage_error) or str(_storage_error))
                                 return -2    # 本地写不进去：立刻终止任务并如实报错
                             except Exception:
+                                if self._checkpoint(key):
+                                    return 2
                                 return 0    # 网络/临时失败：可重试
                             # R49h: 单张下载成功即更新内存进度——前端轮询(1.5s)
                             # 实时可见图片级进度;单章几十张不再"几分钟不动"
@@ -894,7 +1222,14 @@ class DownloadManager:
                                 _t = self._tasks.get(key)
                                 if _t:
                                     _t["images_done"] = _t.get("images_done", 0) + 1
-                                    _t["images_total"] = _t.get("images_total") or                                         _t.get("images_total", 0)
+                                    _t["images_total"] = images_total
+                                    # Update throughput while a chapter is in flight.
+                                    # Previously the sampler ran only after a chapter
+                                    # finished, so a long chapter showed 0/unknown ETA.
+                                    _speed_state = self._speed_samples.setdefault(
+                                        key, {"at": time.monotonic(), "done": 0})
+                                    _sample_image_speed(
+                                        _t, _speed_state, images_total)
                             # 进度定期落盘（节流）：强杀/断电后恢复出来的进度不能是 0
                             self._save_throttled()
                             return 1
@@ -907,11 +1242,21 @@ class DownloadManager:
                         if _store_here:
                             # 本地写不进去（目录不可写/磁盘满）：继续重试其它页毫无意义，
                             # 立刻终止任务并说清原因——否则用户看到的是"一直在下载"
-                            _msg = ("本地写入失败：存储不可写或空间不足"
-                                    "（本章 %d 张未写入；已下载的内容不受影响）。"
-                                    "请清理空间或检查权限后重试" % _store_here)
+                            _disk_reason = next(
+                                (reason for reason in _storage_errors
+                                 if reason and reason != _storage_errors[0]), "")
+                            if not _disk_reason and _storage_errors:
+                                _disk_reason = _storage_errors[0]
+                            _space_full = bool(_disk_reason and any(
+                                marker in _disk_reason.lower() for marker in
+                                ("空间不足", "no space", "disk full", "quota")))
+                            _cause = (_disk_reason if _space_full
+                                      else "存储不可写或空间不足，请检查空间和权限")
+                            _msg = (f"本地写入失败：{_cause}（本章 {_store_here} 张未写入；"
+                                    "已下载的内容不受影响）。释放空间或修复权限后点「继续下载」")
                             print(f"[manga-dl] {key} {_msg}", flush=True)
-                            self._mark_done(key, "error", error=_msg)
+                            self._mark_done(key, "error", error=_msg,
+                                            stop_reason=_msg)
                             return
                         images_done += _done_here
                         if _skip_here:
@@ -1065,21 +1410,19 @@ class DownloadManager:
                                     print(f"[manga-dl] 复查: 章节 {_fid} 源站取图失败"
                                           f"（风控/瞬态），留待重启续传", flush=True)
                                     continue
+                                from .downloader import _downloaded_page_indices
                                 _fdir = os.path.join(cache_root, _fid)
-                                _fhave = 0
-                                if os.path.isdir(_fdir):
-                                    _fhave = sum(1 for fn in os.listdir(_fdir)
-                                                 if fn.lower().endswith(
-                                                     (".webp", ".jpg", ".png")))
-                                if _fhave >= len(_fimgs):
+                                _fpages = _downloaded_page_indices(_fdir)
+                                _expected_pages = set(range(len(_fimgs)))
+                                if _fpages == _expected_pages:
                                     print(f"[manga-dl] 复查: 章节 {_fid} 磁盘完整 "
-                                          f"({_fhave}/{len(_fimgs)})，剔除失败", flush=True)
+                                          f"({len(_fpages)}/{len(_fimgs)})，剔除失败", flush=True)
                                     continue
                                 # R49o: 源站可取而磁盘缺失 → 复查自动补齐缺失页
                                 # （原实现只对比不重下：瞬时缺页把任务永久判 error，
                                 # 正是"明明能下却报失败"的根因）
                                 print(f"[manga-dl] 复查: 章节 {_fid} 缺页补齐 "
-                                      f"({_fhave}/{len(_fimgs)})…", flush=True)
+                                      f"({len(_fpages)}/{len(_fimgs)})…", flush=True)
                                 for _i in range(len(_fimgs)):
                                     # R67: 补页长循环低频检查点(每 5 页)
                                     if _i > 0 and _i % 5 == 0:
@@ -1088,27 +1431,25 @@ class DownloadManager:
                                             return
                                         if _cpi and self._apply_checkpoint(key, _cpi):
                                             return
-                                    _ip = os.path.join(_fdir, f"{_i:04d}")
-                                    _has = any(
-                                        os.path.isfile(_ip + _e) for _e in
-                                        (".webp", ".jpg", ".jpeg", ".png"))
-                                    if _has:
+                                    if _i in _fpages:
                                         continue
                                     for _try in range(2):
                                         try:
-                                            dl.get(_fimgs[_i], comic_id, _fid, _i)
+                                            dl.get(
+                                                _fimgs[_i], comic_id, _fid, _i,
+                                                priority="download",
+                                                cancel_check=lambda: bool(
+                                                    self._checkpoint(key)))
                                             break
                                         except BadImageError:
                                             break
                                         except Exception:
                                             if _try == 0:
                                                 time.sleep(2.0)
-                                _fhave2 = sum(1 for fn in os.listdir(_fdir)
-                                              if fn.lower().endswith(
-                                                  (".webp", ".jpg", ".png")))
-                                if _fhave2 >= len(_fimgs):
+                                _fpages2 = _downloaded_page_indices(_fdir)
+                                if _fpages2 == _expected_pages:
                                     print(f"[manga-dl] 复查: 章节 {_fid} 补齐完成 "
-                                          f"({_fhave2}/{len(_fimgs)})，剔除失败",
+                                          f"({len(_fpages2)}/{len(_fimgs)})，剔除失败",
                                           flush=True)
                                     continue
                                 _real_fail.append(_fid)
@@ -1138,10 +1479,14 @@ class DownloadManager:
                             if _removed:
                                 _note = (f"{len(_removed)} 章已从源站移除"
                                          f"（Chapter not found），永久缺失非下载遗漏")
-                            self._mark_done(key, "done", images_done=images_done,
-                                            eta=0)
                             self._write_library(ad, key, title, cover, total,
                                                 images_done)
+                            # Publish the terminal task state only after the
+                            # durable library index and its refresh hook have
+                            # completed. UI pollers use "done" as permission to
+                            # stop polling and reload the downloaded catalog.
+                            self._mark_done(key, "done", images_done=images_done,
+                                            eta=0)
                             if _note:
                                 with self._lock:
                                     t = self._tasks.get(key)
@@ -1163,8 +1508,8 @@ class DownloadManager:
                             t = self._tasks.get(key)
                             _bad_n = int((t or {}).get("bad_page_chapters") or 0)
                             _bad_c = int((t or {}).get("bad_page_count") or 0)
-                        self._mark_done(key, "done", images_done=images_done, eta=0)
                         self._write_library(ad, key, title, cover, total, images_done)
+                        self._mark_done(key, "done", images_done=images_done, eta=0)
                         if _bad_n:
                             _note = (f"{_bad_n} 章共 {_bad_c} 页为源站坏页"
                                      f"（占位图/已删除，非下载遗漏）")
@@ -1185,10 +1530,12 @@ class DownloadManager:
                 # 磁盘类错误给可行动原因（与小说任务同一归因，见 app_utils）
                 from ..app_utils import disk_error_text as _disk_text
                 _disk = _disk_text(e)
+                _library_error = isinstance(e, MangaLibraryWriteError)
                 self._mark_done(key, "error",
-                                error=_disk or "下载过程异常中断，可重新启动续传",
-                                stop_reason=_disk or
-                                            "下载过程异常中断（已下载的图片保留，可点「继续」）")
+                                error=_disk or (str(e) if _library_error else
+                                                "下载过程异常中断，可重新启动续传"),
+                                stop_reason=_disk or (str(e) if _library_error else
+                                    "下载过程异常中断（已下载的图片保留，可点「继续」）"))
         except Exception as e:
             # 启动期异常兜底：主体 try 之前的失败（适配器构造/导入等）
             print(f"[manga-dl] worker {key} 未捕获异常: "
@@ -1197,9 +1544,12 @@ class DownloadManager:
             from ..app_utils import disk_error_text as _disk_text
             _disk = _disk_text(e)
             self._mark_done(key, "error",
-                            error=_disk or "下载过程异常中断，可重新启动续传",
-                            stop_reason=_disk or
-                                        "下载过程异常中断（已下载的图片保留，可点「继续」）")
+                            error=_disk or (str(e) if isinstance(
+                                e, MangaLibraryWriteError) else
+                                "下载过程异常中断，可重新启动续传"),
+                            stop_reason=_disk or (str(e) if isinstance(
+                                e, MangaLibraryWriteError) else
+                                "下载过程异常中断（已下载的图片保留，可点「继续」）"))
         finally:
             # P1-1: _active 槽位释放的唯一位置——正常完成/cancel/pause/
             # gone/异常五条退出路径在此精确递减一次并踢起队列。
@@ -1211,6 +1561,7 @@ class DownloadManager:
             except Exception:
                 pass
             with self._lock:
+                self._speed_samples.pop(key, None)
                 self._worker_alive.discard(key)
                 self._threads.pop(key, None)
                 self._active = max(0, self._active - 1)
@@ -1219,49 +1570,62 @@ class DownloadManager:
     def _write_library(self, ad, key, title, cover, total, images):
         """写入书库记录（data/manga/_library.json）
         R29(技术评审5.3): 全程持锁 + 原子替换——并发任务完成时
-        后写入者不再覆盖先写入者的更新"""
-        try:
-            lib_p = os.path.join(self._get_library_file())
-            with self._lock:
-                lib = []
-                if os.path.exists(lib_p):
+        后写入者不再覆盖先写入者的更新。坏 JSON 先保留原始字节并从上一
+        个有效 .bak 恢复；两者都不可信时拒绝覆盖，交由 worker 标记可恢复失败。"""
+        lib_p = self._get_library_file()
+        backup_path = lib_p + ".bak"
+        source, comic_id = key.split(":", 1)
+        with self._lock:
+            if not os.path.exists(lib_p):
+                if os.path.exists(backup_path):
                     try:
-                        with open(lib_p, encoding="utf-8") as _f:
-                            lib = json.load(_f)
-                    except Exception:
-                        lib = []  # 损坏则重建（原子写后基本不会出现）
-                source = key.split(":", 1)[0]
-                comic_id = key.split(":", 1)[1]
-                # 合并旧记录：增量/补充下载（如补卷番外）不能覆盖全量下载的数字，
-                # 否则书库 images/chapters 会被小值污染（如 1097→49）
-                _old = next((x for x in lib if x.get("source") == source
-                             and x.get("comic_id") == comic_id), None)
-                if _old:
-                    images = max(int(_old.get("images") or 0), int(images or 0))
-                    total = max(int(_old.get("chapters") or 0), int(total or 0))
-                # R32 已下线"最早下载"排序档，first_downloaded_at 无消费方，
-                # 且其字符串比较在时钟回拨时会重置首次时间——一并移除
-                _now_str = time.strftime("%Y-%m-%d %H:%M:%S")
-                lib = [x for x in lib if not (x.get("source") == source
-                                              and x.get("comic_id") == comic_id)]
-                lib.append({"source": source, "comic_id": comic_id, "title": title,
-                            "cover": cover or (_old or {}).get("cover", ""),
-                            "chapters": total, "images": images,
-                            "status": "done",
-                            "downloaded_at": _now_str,
-                            "source_name": getattr(ad, "name", source)})
-                # 原子替换：复用 atomic_write（含 makedirs+fsync+os.replace），
-                # 自建 mkstemp 在目录缺失时会抛 FileNotFoundError 并被吞成日志
-                atomic_write(lib_p, lib)
-            # B03: 写库成功 → 通知 server 增量重扫该部快照（锁外；钩子异常不影响写库）
-            _hook = library_change_hook
-            if _hook:
+                        lib = _read_library_list(backup_path)
+                    except Exception as backup_error:
+                        _preserve_corrupt_library(backup_path)
+                        raise MangaLibraryWriteError(
+                            "书库索引备份损坏；备份原件已保留，下载图片未删除，"
+                            "请恢复书库数据后重试") from backup_error
+                else:
+                    lib = []
+            else:
                 try:
-                    _hook(source, comic_id)
-                except Exception:
-                    pass
-        except Exception as e:
-            print(f"[manga-dl] 书库记录失败: {e}", flush=True)
+                    lib = _read_library_list(lib_p)
+                except Exception as primary_error:
+                    corrupt_path = _preserve_corrupt_library(lib_p)
+                    try:
+                        lib = _read_library_list(backup_path)
+                    except Exception as backup_error:
+                        raise MangaLibraryWriteError(
+                            "书库索引损坏且没有可用备份；原件已保留，下载图片未删除，"
+                            "请恢复书库备份后重试") from backup_error
+                    print(f"[manga-dl] 书库索引已从有效备份恢复；损坏原件保存在 "
+                          f"{corrupt_path}（{type(primary_error).__name__}）", flush=True)
+            previous_lib = [dict(item) for item in lib]
+            # 合并旧记录：增量/补充下载不能用较小的本次计数覆盖全量数据。
+            old = next((x for x in lib if x.get("source") == source
+                        and x.get("comic_id") == comic_id), None)
+            if old:
+                images = max(int(old.get("images") or 0), int(images or 0))
+                total = max(int(old.get("chapters") or 0), int(total or 0))
+            now_str = time.strftime("%Y-%m-%d %H:%M:%S")
+            lib = [x for x in lib if not (x.get("source") == source
+                                          and x.get("comic_id") == comic_id)]
+            lib.append({"source": source, "comic_id": comic_id, "title": title,
+                        "cover": cover or (old or {}).get("cover", ""),
+                        "chapters": total, "images": images, "status": "done",
+                        "downloaded_at": now_str,
+                        "source_name": getattr(ad, "name", source)})
+            # 先原子备份当前有效代，再原子替换主记录；任何一步失败都不会
+            # 误报成功。下载媒体本身保留，可在修复索引后安全续传/重试。
+            atomic_write(backup_path, previous_lib)
+            atomic_write(lib_p, lib)
+        # B03: 写库成功 → 通知 server 增量重扫该部快照（锁外）。
+        _hook = library_change_hook
+        if _hook:
+            try:
+                _hook(source, comic_id)
+            except Exception:
+                pass
 
     # ── 路径辅助（由外部注入）──
     _cache_root = None

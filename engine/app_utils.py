@@ -8,8 +8,10 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import tempfile
 import threading
+import time
 
 try:
     from opencc import OpenCC
@@ -259,7 +261,18 @@ def update_json(p, mutator, default=None):
                 with open(p, encoding="utf-8") as f:
                     data = json.load(f)
             except Exception:
-                pass
+                # JSON 更新器服务于收藏、阅读历史、书架与任务周边状态。
+                # 损坏文件不能静默当空数据后被新写入覆盖，否则一次收藏/进度
+                # 保存就会把唯一的旧字节永久抹掉。先留证；无法留存时拒绝更新。
+                corrupt_copy = p + ".corrupt"
+                if os.path.exists(corrupt_copy):
+                    corrupt_copy += "." + str(time.time_ns())
+                try:
+                    shutil.copy2(p, corrupt_copy)
+                except OSError:
+                    raise OSError("损坏 JSON 原件无法安全留存，已取消覆盖")
+                print(f"[json] 损坏文件已保留，使用默认值重建: {corrupt_copy}",
+                      flush=True)
         new_data = mutator(data)
         atomic_write(p, new_data)
         return new_data

@@ -3,6 +3,7 @@ package com.webnovel.mobile
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -61,7 +62,13 @@ class AcceptanceEntryPointsTest {
     }
 
     private fun back() {
-        rule.onAllNodesWithText("← 返回")[0].performClick()
+        val labeled = rule.onAllNodesWithText("← 返回")
+        if (labeled.fetchSemanticsNodes().isNotEmpty()) {
+            labeled[0].performClick()
+        } else {
+            // 部分页面（如存储管理）使用带无障碍描述的图标返回按钮。
+            rule.onAllNodesWithContentDescription("返回")[0].performClick()
+        }
     }
 
     @Test

@@ -15,7 +15,7 @@
   2. 混淆源（jm）缺页必须是 lazy 服务器通道，绝不能给浏览器直连 CDN
      的乱序图；
   3. 已下载目录（downloads/）无权威页数时仍保持原短路（整章下载语义，
-     零源站请求）；
+     零源站请求）；在线阅读缓存无权威页数时必须有界回源并补齐旧下载清单；
   4. 两层 URL 缓存都没有权威页数时，宁可做一次有界回源，也不截断。
 """
 import json
@@ -176,6 +176,153 @@ def test_complete_reading_cache_still_short_circuits(env):
     d = _urls(env)
     assert d["count"] == N_PAGES and d.get("local_only") is True
     assert env["warmed"] == []
+
+
+def test_local_catalog_partial_is_strictly_local(env):
+    d = _mark_current(_touch_pages(os.path.join(str(env["dl"]), "jm", CID, CH1), PARTIAL))
+    _write_url_list(env["dl"], CH1)
+    remote_calls = []
+    env["monkeypatch"].setattr(env["ma"], "_manga_read_images",
+                               lambda *a: remote_calls.append(a) or (env["ad"], []))
+    r = env["c"].get(f"/api/manga/jm/{CID}/chapter/{CH1}/urls?catalog=local")
+    assert r.status_code == 200, r.get_data(as_text=True)
+    payload = r.get_json()
+    assert payload["count"] == PARTIAL
+    assert payload["local_only"] is True
+    assert all(e["local"] and "catalog=local" in e["url"] for e in payload["images"])
+    assert env["warmed"] == []
+    assert remote_calls == []
+
+
+def test_local_catalog_with_no_pages_returns_404_without_remote_fetch(env):
+    remote_calls = []
+    env["monkeypatch"].setattr(env["ma"], "_manga_read_images",
+                               lambda *a: remote_calls.append(a) or (env["ad"], []))
+    r = env["c"].get(f"/api/manga/jm/{CID}/chapter/{CH1}/urls?catalog=local")
+    assert r.status_code == 404, r.get_data(as_text=True)
+    assert remote_calls == []
+
+
+def test_local_catalog_excludes_corrupt_numbered_image_files(env):
+    """坏图片扩展名不能抬高本地目录页数或被返回为可读页。"""
+    chapter_dir = _mark_current(_touch_pages(
+        os.path.join(str(env["dl"]), "jm", CID, CH1), 3))
+    with open(os.path.join(chapter_dir, "10000.jpg"), "wb") as bad:
+        bad.write(b"<html>rate limited</html>")
+
+    urls = env["c"].get(
+        f"/api/manga/jm/{CID}/chapter/{CH1}/urls?catalog=local")
+    assert urls.status_code == 200
+    payload = urls.get_json()
+    assert payload["count"] == 3
+    assert all(not item["url"].endswith("/img/10000?catalog=local")
+               for item in payload["images"])
+    assert env["st"]._manga_local_page_dir(
+        "jm", CID, CH1, 10000, downloaded_only=True) is None
+    image = env["c"].get(
+        f"/api/manga/jm/{CID}/chapter/{CH1}/img/10000?catalog=local")
+    assert image.status_code == 404
+
+
+def test_download_zip_omits_corrupt_image_payloads(env):
+    import io
+    import zipfile
+
+    chapter_dir = os.path.join(str(env["dl"]), "jm", CID, CH1)
+    os.makedirs(chapter_dir, exist_ok=True)
+    with open(os.path.join(chapter_dir, "0000.webp"), "wb") as good:
+        good.write(b"RIFF\x00\x00\x00\x00WEBP" + b"x" * 128)
+    with open(os.path.join(chapter_dir, "0001.webp"), "wb") as bad:
+        bad.write(b"<html>rate limited</html>")
+
+    response = env["c"].get(f"/api/manga/jm/{CID}/zip")
+    assert response.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(response.data)) as archive:
+        assert archive.namelist() == [f"{CH1}/0000.webp"]
+
+
+def test_legacy_chapter_endpoint_honors_local_catalog_without_remote_fetch(env):
+    _mark_current(_touch_pages(
+        os.path.join(str(env["dl"]), "jm", CID, CH1), 3))
+    remote_calls = []
+    env["monkeypatch"].setattr(env["ma"], "_manga_read_images",
+                               lambda *a: remote_calls.append(a) or (env["ad"], []))
+
+    response = env["c"].get(
+        f"/api/manga/jm/{CID}/chapter/{CH1}?catalog=local")
+    assert response.status_code == 200, response.get_data(as_text=True)
+    payload = response.get_json()
+    assert payload["local_only"] is True
+    assert payload["count"] == 3
+    assert all("catalog=local" in image for image in payload["images"])
+    assert remote_calls == []
+
+
+def test_legacy_chapter_endpoint_local_catalog_missing_chapter_stays_offline(env):
+    _mark_current(_touch_pages(
+        os.path.join(str(env["cache"]), "jm", CID, CH1), 3))
+    remote_calls = []
+    env["monkeypatch"].setattr(env["ma"], "_manga_read_images",
+                               lambda *a: remote_calls.append(a) or (env["ad"], []))
+
+    response = env["c"].get(
+        f"/api/manga/jm/{CID}/chapter/{CH1}?catalog=local")
+    assert response.status_code == 404
+    assert remote_calls == []
+
+
+def test_local_catalog_does_not_promote_online_read_cache_to_download(env):
+    """_cache 的在线阅读落盘仍可供完整目录复用，但不能进入书库本地目录。"""
+    cached = _touch_pages(os.path.join(str(env["cache"]), "jm", CID, CH1), 3)
+    _mark_current(cached)
+    r = env["c"].get(f"/api/manga/jm/{CID}/chapter/{CH1}/urls?catalog=local")
+    assert r.status_code == 404, r.get_data(as_text=True)
+    image = env["c"].get(
+        f"/api/manga/jm/{CID}/chapter/{CH1}/img/0?catalog=local")
+    assert image.status_code == 404, image.get_data(as_text=True)
+
+
+def test_local_catalog_image_missing_page_never_falls_back_online(env):
+    d = _mark_current(_touch_pages(os.path.join(str(env["cache"]), "jm", CID, CH1), 1))
+    remote_calls = []
+    env["monkeypatch"].setattr(env["ma"], "_serve_remote_image",
+                               lambda *a: remote_calls.append(a))
+    r = env["c"].get(
+        f"/api/manga/jm/{CID}/chapter/{CH1}/img/9?catalog=local")
+    assert r.status_code == 404, r.get_data(as_text=True)
+    assert remote_calls == []
+
+
+def test_wide_numeric_filenames_share_catalog_and_image_page_identity(env):
+    """Page indexes wider than four digits must survive all local read APIs."""
+    import server.state as st
+
+    chapter_dir = os.path.join(str(env["dl"]), "jm", CID, CH1)
+    os.makedirs(chapter_dir, exist_ok=True)
+    with open(os.path.join(chapter_dir, "10000.jpg"), "wb") as image:
+        image.write(b"\xff\xd8\xff\xe0" + b"x" * 2048)
+    _mark_current(chapter_dir)
+
+    # Local catalog and the legacy chapter listing expose the same true index.
+    r = env["c"].get(
+        f"/api/manga/jm/{CID}/chapter/{CH1}/urls?catalog=local")
+    assert r.status_code == 200, r.get_data(as_text=True)
+    payload = r.get_json()
+    assert payload["count"] == 1
+    assert payload["images"][0]["url"].endswith("/img/10000?catalog=local")
+    chapter = env["c"].get(
+        f"/api/manga/jm/{CID}/chapter/{CH1}?catalog=local")
+    assert chapter.status_code == 200, chapter.get_data(as_text=True)
+    assert chapter.get_json()["images"] == [
+        f"/api/manga/jm/{CID}/chapter/{CH1}/img/10000?catalog=local"]
+
+    # The page resolver and image endpoint must serve the original filename.
+    assert st._manga_local_page_dir(
+        "jm", CID, CH1, 10000, downloaded_only=True) == chapter_dir
+    image = env["c"].get(
+        f"/api/manga/jm/{CID}/chapter/{CH1}/img/10000?catalog=local")
+    assert image.status_code == 200, image.get_data(as_text=True)
+    assert image.data.startswith(b"\xff\xd8\xff")
 
 
 def test_downloaded_chapter_short_circuits_without_url_cache(env):

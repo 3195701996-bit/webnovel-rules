@@ -56,6 +56,7 @@ class LocalServerService : Service() {
     @Volatile private var port: Int = 0
     @Volatile private var stateDesc: String = "stopped"
     @Volatile private var lastStopReason: String = ""
+    @Volatile private var restoreRecoveryBlocked: Boolean = false
     private var starting = false
 
     override fun onBind(intent: Intent?): IBinder = binder
@@ -78,7 +79,13 @@ class LocalServerService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> stopServer("user_notification")
-            else -> ensureForegroundAndStart()
+            else -> {
+                // 同一个 Service 实例可能在 stopForeground() 后尚未销毁时再次收到
+                // startForegroundService()。此时不会重跑 onCreate；若只在 onCreate
+                // 前台化，新的 FGS startId 会一直 pending，最终触发系统 ANR。
+                promoteToForeground()
+                ensureForegroundAndStart()
+            }
         }
         return START_NOT_STICKY   // 不自动复活（设计 §6.2）
     }
@@ -108,6 +115,14 @@ class LocalServerService : Service() {
         }, "python-boot").start()
     }
 
+    private fun promoteToForeground() {
+        // 幂等刷新同一常驻通知，同时满足每个 startForegroundService 调用对应的
+        // 前台化时限；此方法只在主线程的 onCreate/onStartCommand 同步执行。
+        startForeground(NOTIF_ID, buildNotification(
+            if (stateDesc == "ready" && port > 0) "运行中 · 127.0.0.1:$port"
+            else "正在启动本机服务…"))
+    }
+
     @Synchronized
     private fun startServerIfNeeded(): Map<String, Any?> {
         runtime?.let { rt ->
@@ -133,6 +148,17 @@ class LocalServerService : Service() {
 
         val dataDir = File(filesDir, "runtime").absolutePath
         val cacheDir = cacheDir.absolutePath
+        val interruptedRestores = Backup.recoverInterruptedRestores(File(dataDir))
+        if (interruptedRestores.isNotEmpty()) {
+            restoreRecoveryBlocked = true
+            stateDesc = "failed"
+            updateNotification("恢复事务需要人工处理；引擎已阻止启动")
+            throw IllegalStateException(
+                "检测到未完成的备份恢复，已阻止引擎读写以保护数据：" +
+                    interruptedRestores.joinToString("；"),
+            )
+        }
+        restoreRecoveryBlocked = false
         // 内置书源：从 APK 的 assets/sources 解到应用私有目录（设计 §7：
         // 首启只复制经审核的初始书源，且不覆盖用户已有修改）
         // 解压内置书源：与备份共用同一实现（BundledSources），幂等
@@ -156,13 +182,24 @@ class LocalServerService : Service() {
 
     @Synchronized
     private fun stopServer(reason: String): Map<String, Any?> {
+        if (restoreRecoveryBlocked) {
+            return mapOf("state" to "failed",
+                "error" to "未完成恢复事务需要处理；为保护用户数据，拒绝继续操作")
+        }
         val rt = runtime
-        val st = try { rt?.stop(reason) ?: mapOf("state" to "stopped") }
-                 catch (t: Throwable) { Log.w(TAG, "stop: $t"); mapOf("state" to "stopped") }
+        val st = try {
+            rt?.stop(reason) ?: mapOf("state" to "stopped")
+        } catch (t: Throwable) {
+            Log.w(TAG, "stop: $t")
+            mapOf("state" to "failed", "error" to (t.message ?: t.javaClass.simpleName))
+        }
         stateDesc = st["state"] as? String ?: "stopped"
         recordReason(reason)
-        stopForegroundCompat()
-        stopSelf()
+        if (stateDesc == "stopped") {
+            runtime = null
+            stopForegroundCompat()
+            stopSelf()
+        }
         return st
     }
 

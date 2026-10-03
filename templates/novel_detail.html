@@ -16,41 +16,41 @@
 .manga-head { display:flex; gap:16px; padding:8px 4px 16px; }
 .manga-head .cover {
   width:120px; height:168px; border-radius:10px; flex-shrink:0;
-  background:var(--bg-2,#1c2230); display:flex; align-items:center; justify-content:center;
-  font-size:2.6rem; box-shadow:0 4px 14px rgba(0,0,0,.4); overflow:hidden;
+  background:var(--bg-elevated); display:flex; align-items:center; justify-content:center;
+  font-size:2.6rem; box-shadow:var(--shadow); overflow:hidden;
 }
 .manga-head .cover img { width:100%; height:100%; object-fit:cover; }
 .manga-head .hi { flex:1; display:flex; flex-direction:column; gap:6px; min-width:0; }
 .manga-head .title { font-size:1.15rem; font-weight:700; line-height:1.4; }
 .manga-head .sub { font-size:.8rem; color:var(--text-dim); }
 .info-sec { display:flex; flex-wrap:wrap; gap:6px; }
-.info-item { background:var(--bg-2,#1c2230); padding:3px 10px; border-radius:8px; font-size:.75rem; color:var(--text-dim); }
+.info-item { background:var(--bg-elevated); border:1px solid var(--border); padding:3px 10px; border-radius:8px; font-size:.75rem; color:var(--text-dim); }
 /* 主按钮区（复用漫画详情 R3 风格） */
 .fn-row { display:grid; grid-template-columns:1fr 1fr; gap:10px; padding:4px 0 10px; }
 .fn-btn { min-height:46px; display:flex; align-items:center; justify-content:center; gap:6px;
   border-radius:12px; border:none; cursor:pointer; font-size:.95rem; font-weight:600; color:#fff; transition:.15s; }
 .fn-btn:hover { filter:brightness(1.08); }
-.fn-continue { background:var(--accent); color:#1a1400; box-shadow:0 2px 10px rgba(232,179,75,.25); }
-.fn-download { background:#9b7bd6; }
+.fn-continue { background:var(--accent); color:#fffaf5; box-shadow:0 2px 10px rgba(66,48,31,.12); }
+.fn-download { background:var(--accent-2); color:#fff; }
 .fn-btn:disabled { opacity:.4; cursor:not-allowed; }
 /* 次按钮 */
 .ops-row { display:flex; gap:8px; padding:0 0 12px; flex-wrap:wrap; }
 .op-btn { display:flex; align-items:center; gap:6px; min-height:36px; padding:8px 14px; border-radius:10px;
-  border:1px solid var(--border); background:var(--bg-2,#1c2230); color:var(--text-dim);
+  border:1px solid var(--border); background:var(--bg-elevated); color:var(--text-dim);
   cursor:pointer; font-size:.82rem; transition:.15s; }
 .op-btn:hover { color:var(--text); border-color:var(--accent-2); }
 .op-btn.danger:hover { color:var(--red); border-color:var(--red); }
 /* 进度提示 */
 .history-tip {
   display:flex; align-items:center; gap:8px; padding:10px 14px; margin-bottom:14px;
-  border:1px solid rgba(232,179,75,.35); border-left:3px solid var(--accent);
-  background:rgba(232,179,75,.07); color:var(--text); font-weight:500;
+  border:1px solid color-mix(in srgb, var(--accent) 28%, transparent); border-left:3px solid var(--accent);
+  background:var(--accent-soft); color:var(--text); font-weight:500;
   border-radius:10px; font-size:.85rem;
 }
 /* 简介 */
 .novel-intro { color:var(--text-dim); font-size:.88rem; line-height:1.7; margin-bottom:16px; white-space:pre-wrap; }
 /* 章节列表 */
-.chap-sec { background:var(--bg-2,#1c2230); border-radius:12px; padding:14px; margin-bottom:16px; }
+.chap-sec { background:var(--bg-elevated); border:1px solid var(--border); border-radius:12px; padding:14px; margin-bottom:16px; }
 .chap-head { display:flex; align-items:center; justify-content:space-between; padding-bottom:10px; font-size:.95rem; font-weight:700; position:sticky; top:0; background:var(--bg); z-index:5; }
 .chap-list { display:grid; grid-template-columns:repeat(auto-fill,minmax(160px,1fr)); gap:8px; max-height:55vh; overflow-y:auto; }
 .chap-item { padding:9px 12px; border-radius:8px; background:var(--bg); font-size:.85rem;
@@ -71,7 +71,7 @@
   .manga-head { flex-direction:row; }
   .manga-head .cover { width:100px; height:140px; }
   .fn-row { gap:8px; }
-  .op-btn { min-height:34px; padding:6px 10px; font-size:.78rem; }
+  .op-btn { min-height:44px; padding:8px 10px; font-size:.78rem; }
   .chap-list { grid-template-columns:repeat(auto-fill,minmax(140px,1fr)); max-height:60vh; }
 }
 </style>
@@ -95,7 +95,7 @@
 
   <div class="fn-row">
     <button class="fn-btn fn-continue" id="read-btn" style="display:none;">▶ 继续阅读</button>
-    <button class="fn-btn fn-download" id="dl-btn" style="display:none;">⭳ 下载本书</button>
+    <button class="fn-btn fn-download" id="dl-btn" style="display:none;">↓ 下载本书</button>
   </div>
 
   <div class="ops-row" id="ops-row" style="display:none;">
@@ -124,9 +124,8 @@ const params = new URLSearchParams(location.search);
 const KEY = params.get('key') || '';
 const SRC_UID = params.get('source_uid') || '';
 const BOOK_URL = params.get('book_url') || '';
-// B2: 畸形 % 序列抛 URIError 会毁掉整段脚本——拦截并保留原始值兜底
-let NAME = '';
-try { NAME = decodeURIComponent(params.get('name') || ''); } catch (e) { NAME = params.get('name') || ''; }
+// URLSearchParams.get() 已解码一次；二次解码会破坏书名中的字面百分号和编码文本。
+const NAME = params.get('name') || '';
 function fmtWords(w) { if (!w) return ''; const n = parseInt(w); if (!n) return w; return n >= 10000 ? Math.round(n/10000) + '万字' : n + '字'; }
 
 // C04: 目录分段渲染视图（书库/搜索两种模式共用 static/js/toc_render.js）。
@@ -195,7 +194,7 @@ async function loadLibraryMode() {
           const it = document.createElement('div');
           it.dataset.chIdx = c.index;
           it.className = 'chap-item' + (c.downloaded ? ' dl' : '') + (c.failed ? ' failed' : '');
-          it.textContent = (c.downloaded ? '⬇ ' : '') + c.index + '. ' + c.name + (c.failed ? ' ⚠' : '');
+          it.textContent = (c.downloaded ? '↓ ' : '') + c.index + '. ' + c.name + (c.failed ? ' ⚠' : '');
           // C03: 点已下载章节携带章节参数，阅读器直接打开该章（而非一律续读）
           it.onclick = () => { if (c.downloaded) location.href = '/reader/' + encodeURIComponent(KEY) + '?ch=' + c.index; };
           return it;
@@ -346,7 +345,7 @@ async function loadSearchToc(src, gen, signal) {
         it.title = '下载本书后可阅读';
         it.onclick = () => {
           // 搜索模式未下载：点击章节 → 提示下载后阅读（在线阅读已移除）
-          toast('请先点击「⭳ 下载本书」，完成后在书库阅读', '');
+          toast('请先点击「↓ 下载本书」，完成后在书库阅读', '');
         };
         return it;
       },
@@ -384,7 +383,7 @@ async function loadSearchDetail(src, gen, signal) {
     else { $('#intro').textContent = ''; $('#intro').style.display = 'none'; }  // A04: 新源无简介不得沿用旧简介
     $('#history-tip').style.display = '';
     $('#history-pos').textContent = '全网搜索 · ' + (src.source_name || '当前书源') + ' · 点击下载后自动进入书库';
-    $('#dl-btn').textContent = '⭳ 下载本书' + (d.chapter_count ? '（' + d.chapter_count + '章）' : '');
+    $('#dl-btn').textContent = '↓ 下载本书' + (d.chapter_count ? '（' + d.chapter_count + '章）' : '');
     $('#dl-btn').disabled = false;
     $('#dl-btn').onclick = async () => {
       if (gen !== _srcGen) return;   // A04: 按钮闭包仍属旧源时拒绝下载（双保险）
@@ -392,13 +391,13 @@ async function loadSearchDetail(src, gen, signal) {
       try {
         const r = await (await fetch('/api/tasks', {method:'POST', headers:{'Content-Type':'application/json'},
           body: JSON.stringify({source_uid: src.source_uid, book_url: src.book_url})})).json();
-        if (r.error) { toast('下载失败: ' + r.error, 'error'); $('#dl-btn').disabled = false; $('#dl-btn').textContent = '⭳ 下载本书'; }
+        if (r.error) { toast('下载失败: ' + r.error, 'error'); $('#dl-btn').disabled = false; $('#dl-btn').textContent = '↓ 下载本书'; }
         else { toast('已加入下载任务，完成后可在书库阅读'); $('#dl-btn').textContent = '✓ 已加入任务'; }
-      } catch (e) { toast('下载失败: ' + e, 'error'); $('#dl-btn').disabled = false; $('#dl-btn').textContent = '⭳ 下载本书'; }
+      } catch (e) { toast('下载失败: ' + e, 'error'); $('#dl-btn').disabled = false; $('#dl-btn').textContent = '↓ 下载本书'; }
     };
   } catch (e) {
     if (e.name === 'AbortError' || gen !== _srcGen) return;  // A04: 已换源，旧源错误提示与按钮回退不落地
-    $('#dl-btn').textContent = '⭳ 下载本书';
+    $('#dl-btn').textContent = '↓ 下载本书';
     $('#dl-btn').disabled = false;
     $('#dl-btn').onclick = async () => {
       if (gen !== _srcGen) return;   // A04: 按钮闭包仍属旧源时拒绝下载（双保险）

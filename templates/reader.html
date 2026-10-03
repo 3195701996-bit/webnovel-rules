@@ -9,13 +9,41 @@
 <style>
 /* ── 书库阅读器手机体验（对齐在线阅读器）── */
 :root { --reader-fs: 17px; --reader-lh: 1.9; }
-[data-theme="dark"] {
-  --bg: #10131a; --bg-2: #171b25; --text: #c8ccd4; --text-dim: #7a8090;
-  --border: #262b38; --accent: #e8b34b;
+html[data-theme="light"] {
+  color-scheme: light;
+  --bg-base: #f5f1e9; --bg-elevated: #fbf8f2; --bg-overlay: #fffdf9;
+  --bg-hover: #efe8dc; --bg-2: var(--bg-elevated); --border: #e3d9cc;
+  --text-primary: #29251f; --text-secondary: #70665b;
+  --accent: #a84f35; --accent-hover: #923f2a; --accent-pressed: #7d3524;
+  --accent-2: #4f746c; --accent-soft: rgba(168,79,53,.10); --accent-2-soft: rgba(79,116,108,.10);
+  --green: #47734d; --green-soft: rgba(71,115,77,.10); --red: #b4473f; --red-soft: rgba(180,71,63,.09);
+  --bg: var(--bg-base); --bg-soft: var(--bg-elevated); --bg-card: var(--bg-overlay);
+  --text: var(--text-primary); --text-dim: var(--text-secondary); --text-muted: #81766b;
+  --accent-dim: var(--accent-2-soft);
 }
-[data-theme="sepia"] {
-  --bg: #f4ecd8; --bg-2: #eae0c8; --text: #3d3220; --text-dim: #8a7a5c;
-  --border: #d8c9a8; --accent: #8a6d2f;
+html[data-theme="sepia"] {
+  color-scheme: light;
+  --bg-base: #f3ead6; --bg-elevated: #f8f0df; --bg-overlay: #fbf5e8;
+  --bg-hover: #ebe0c9; --bg-2: var(--bg-elevated); --border: #d8c9a8;
+  --text-primary: #3d3220; --text-secondary: #75664d;
+  --accent: #8a5d35; --accent-hover: #744b2b; --accent-pressed: #603d23;
+  --accent-2: #63735a; --accent-soft: rgba(138,93,53,.12); --accent-2-soft: rgba(99,115,90,.12);
+  --green: #547044; --green-soft: rgba(84,112,68,.12); --red: #a34d3f; --red-soft: rgba(163,77,63,.10);
+  --bg: var(--bg-base); --bg-soft: var(--bg-elevated); --bg-card: var(--bg-overlay);
+  --text: var(--text-primary); --text-dim: var(--text-secondary); --text-muted: #817254;
+  --accent-dim: var(--accent-2-soft);
+}
+html[data-theme="dark"] {
+  color-scheme: dark;
+  --bg-base: #171a1c; --bg-elevated: #202426; --bg-overlay: #262b2d;
+  --bg-hover: #303638; --bg-2: var(--bg-elevated); --border: #3a4243;
+  --text-primary: #e7e4dc; --text-secondary: #b4b1a8;
+  --accent: #e0a084; --accent-hover: #eab196; --accent-pressed: #cf896a;
+  --accent-2: #a6c4b8; --accent-soft: rgba(224,160,132,.15); --accent-2-soft: rgba(166,196,184,.14);
+  --green: #9dc49d; --green-soft: rgba(157,196,157,.14); --red: #e59b91; --red-soft: rgba(229,155,145,.14);
+  --bg: var(--bg-base); --bg-soft: var(--bg-elevated); --bg-card: var(--bg-overlay);
+  --text: var(--text-primary); --text-dim: var(--text-secondary); --text-muted: #aaa69b;
+  --accent-dim: var(--accent-2-soft);
 }
 html, body { transition: background .2s, color .2s; }
 /* P2-2 目录分段展开按钮（区间渲染：每段 200 章，按需上下扩段） */
@@ -53,7 +81,7 @@ html, body { transition: background .2s, color .2s; }
   }
   .mobile-bar .bar-info b { color: var(--text); font-size: .8rem; }
 
-  /* 设置按钮（顶部） */
+  /* 设置按钮（底部右侧，避开阅读正文的中心轻触区） */
   .reader-settings-btn {
     position: fixed; right: 12px; bottom: calc(76px + env(safe-area-inset-bottom));
     width: 42px; height: 42px; border-radius: 50%; z-index: 75;
@@ -65,9 +93,9 @@ html, body { transition: background .2s, color .2s; }
     position: fixed; left: 0; right: 0; bottom: 0; z-index: 95;
     background: var(--bg-2); border-radius: 18px 18px 0 0;
     border-top: 1px solid var(--border); padding: 14px 16px calc(16px + env(safe-area-inset-bottom));
-    transform: translateY(105%); transition: transform .25s ease;
+    visibility: hidden; transform: translateY(105%); transition: transform .25s ease, visibility .25s;
   }
-  .settings-sheet.open { transform: translateY(0); }
+  .settings-sheet.open { visibility: visible; transform: translateY(0); }
   .settings-sheet h3 { margin: 0 0 12px; font-size: .9rem; }
   .settings-row { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
   .settings-row .label { font-size: .82rem; color: var(--text-dim); width: 56px; }
@@ -84,24 +112,55 @@ html, body { transition: background .2s, color .2s; }
   .settings-row .fs-val { width: 46px; text-align: center; font-size: .8rem; color: var(--text-dim); }
   .sheet-mask {
     position: fixed; inset: 0; z-index: 90; background: rgba(0,0,0,.4);
-    opacity: 0; pointer-events: none; transition: opacity .2s;
+    visibility: hidden; opacity: 0; pointer-events: none; transition: opacity .2s, visibility .2s;
   }
-  .sheet-mask.open { opacity: 1; pointer-events: auto; }
+  .sheet-mask.open { visibility: visible; opacity: 1; pointer-events: auto; }
   .chapter-fade { animation: fadeIn .25s ease; }
   @keyframes fadeIn { from { opacity: .35; } to { opacity: 1; } }
 }
-@media (min-width: 769px) { .mobile-bar, .reader-settings-btn, .settings-sheet, .sheet-mask { display: none !important; } }
+@media (min-width: 769px) {
+  .mobile-bar, .reader-settings-btn { display: none !important; }
+  .reader-desktop-settings {
+    min-height: 38px; padding: 6px 12px; border: 1px solid var(--border); border-radius: 10px;
+    background: var(--bg-elevated); color: var(--text-primary); cursor: pointer;
+  }
+  .reader-desktop-settings:hover { border-color: var(--accent-2); color: var(--accent-2); }
+  .settings-sheet {
+    position: fixed; z-index: 95; top: 70px; right: max(24px, calc((100vw - 1120px) / 2));
+    width: min(360px, calc(100vw - 32px)); padding: 18px; border: 1px solid var(--border);
+    border-radius: 16px; background: var(--bg-overlay); box-shadow: var(--shadow-hover);
+    visibility: hidden; opacity: 0; transform: translateY(-8px); pointer-events: none;
+    transition: opacity .18s ease, transform .18s ease, visibility .18s;
+  }
+  .settings-sheet.open { visibility: visible; opacity: 1; transform: translateY(0); pointer-events: auto; }
+  .settings-sheet h3 { margin: 0 0 14px; font-size: 1rem; }
+  .settings-row { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+  .settings-row:last-child { margin-bottom: 0; }
+  .settings-row .label { width: 48px; color: var(--text-secondary); font-size: .85rem; }
+  .settings-row .group { display: flex; flex: 1; gap: 6px; }
+  .settings-row .group button, .settings-row .fs-btn {
+    min-height: 42px; border: 1px solid var(--border); border-radius: 10px;
+    background: var(--bg-base); color: var(--text-primary); cursor: pointer;
+  }
+  .settings-row .group button { flex: 1; padding: 0 8px; }
+  .settings-row .group button.active { border-color: var(--accent); color: var(--accent); font-weight: 700; }
+  .settings-row .fs-btn { width: 46px; font-size: 1rem; }
+  .settings-row .fs-val { width: 46px; text-align: center; color: var(--text-secondary); font-size: .85rem; }
+  .sheet-mask { position: fixed; inset: 58px 0 0; z-index: 90; background: rgba(30,25,20,.12); visibility: hidden; opacity: 0; pointer-events: none; }
+  .sheet-mask.open { visibility: visible; opacity: 1; pointer-events: auto; }
+}
 </style>
 </head>
 <body>
 <header class="topbar">
-  <span class="logo">📚 webnovel_rules<small>小说爬虫与阅读中心</small></span>
+  <span class="logo">📚 webnovel_rules<small>发现 · 收藏 · 阅读</small></span>
   <nav>
     <a href="/">书库</a>
     <a href="/manga">🎨 漫画</a>
   </nav>
   <div class="spacer"></div>
   <span style="font-size:.8rem;color:var(--text-dim);" id="book-progress"></span>
+  <button class="reader-desktop-settings" id="desktop-settings" aria-label="阅读设置" aria-controls="m-sheet" aria-expanded="false">⚙ 阅读设置</button>
   <a class="btn small" id="txt-download" style="display:none;">下载全文</a>
 </header>
 
@@ -129,14 +188,14 @@ html, body { transition: background .2s, color .2s; }
   </main>
 </div>
 
-<button class="reader-settings-btn" id="m-settings" aria-label="阅读设置">⚙</button>
+<button class="reader-settings-btn" id="m-settings" aria-label="阅读设置" aria-controls="m-sheet" aria-expanded="false">⚙</button>
 <div class="mobile-bar">
   <button class="bar-btn" id="m-prev">← 上一章</button>
   <div class="bar-info"><b id="m-info">1 / 0</b><span id="m-pct">0%</span></div>
   <button class="bar-btn primary" id="m-next">下一章 →</button>
 </div>
-<div class="sheet-mask" id="m-mask"></div>
-<div class="settings-sheet" id="m-sheet">
+<div class="sheet-mask" id="m-mask" aria-hidden="true"></div>
+<div class="settings-sheet" id="m-sheet" role="dialog" aria-label="阅读设置" aria-hidden="true">
   <h3>阅读设置</h3>
   <div class="settings-row">
     <span class="label">字号</span>
@@ -147,17 +206,17 @@ html, body { transition: background .2s, color .2s; }
   <div class="settings-row">
     <span class="label">行距</span>
     <div class="group" id="m-lh-group">
-      <button data-lh-val="1.6">紧凑</button>
-      <button data-lh-val="1.9" class="active">适中</button>
-      <button data-lh-val="2.3">宽松</button>
+      <button data-lh-val="1.6" aria-pressed="false">紧凑</button>
+      <button data-lh-val="1.9" class="active" aria-pressed="true">适中</button>
+      <button data-lh-val="2.3" aria-pressed="false">宽松</button>
     </div>
   </div>
   <div class="settings-row">
     <span class="label">主题</span>
     <div class="group" id="m-theme-group">
-      <button data-theme-val="light">日间</button>
-      <button data-theme-val="sepia">护眼</button>
-      <button data-theme-val="dark" class="active">夜间</button>
+      <button data-theme-val="light" aria-pressed="false">日间</button>
+      <button data-theme-val="sepia" aria-pressed="false">护眼</button>
+      <button data-theme-val="dark" aria-pressed="false">夜间</button>
     </div>
   </div>
 </div>
@@ -631,17 +690,23 @@ document.addEventListener('visibilitychange', () => {
 
   // 设置持久化
   const SET_KEY = 'reader_settings';
-  let settings = { fs: 17, lh: 1.9, theme: 'dark' };  // 默认 dark 与全站深色一致（夜间不白屏）
+  let settings = { fs: 17, lh: 1.9, theme: 'light' };
   try { settings = Object.assign(settings, JSON.parse(localStorage.getItem(SET_KEY) || '{}')); } catch (e) {}
   function applySettings() {
     document.documentElement.style.setProperty('--reader-fs', settings.fs + 'px');
     document.documentElement.style.setProperty('--reader-lh', (settings.lh || 1.9));
     document.documentElement.setAttribute('data-theme', settings.theme);
     const v = $m('#m-fs-val'); if (v) v.textContent = settings.fs + 'px';
-    document.querySelectorAll('#m-theme-group button').forEach(b =>
-      b.classList.toggle('active', b.dataset.themeVal === settings.theme));
-    document.querySelectorAll('#m-lh-group button').forEach(b =>
-      b.classList.toggle('active', String(b.dataset.lhVal) === String(settings.lh)));
+    document.querySelectorAll('#m-theme-group button').forEach(b => {
+      const active = b.dataset.themeVal === settings.theme;
+      b.classList.toggle('active', active);
+      b.setAttribute('aria-pressed', String(active));
+    });
+    document.querySelectorAll('#m-lh-group button').forEach(b => {
+      const active = String(b.dataset.lhVal) === String(settings.lh);
+      b.classList.toggle('active', active);
+      b.setAttribute('aria-pressed', String(active));
+    });
     try { localStorage.setItem(SET_KEY, JSON.stringify(settings)); } catch (e) {}
   }
   const fsDec = $m('#m-fs-dec'), fsInc = $m('#m-fs-inc');
@@ -649,18 +714,35 @@ document.addEventListener('visibilitychange', () => {
   if (fsInc) fsInc.onclick = () => { settings.fs = Math.min(24, settings.fs + 1); applySettings(); };
   document.querySelectorAll('#m-theme-group button').forEach(b => {
     b.onclick = () => { settings.theme = b.dataset.themeVal; applySettings(); };
+  });
   document.querySelectorAll('#m-lh-group button').forEach(b => {
     b.onclick = () => { settings.lh = parseFloat(b.dataset.lhVal); applySettings(); };
   });
-  });
+  let lastSettingsTrigger = null;
   function toggleSheet(open) {
     const s = $m('#m-sheet'), mask = $m('#m-mask');
     if (s) s.classList.toggle('open', open);
     if (mask) mask.classList.toggle('open', open);
+    if (s) s.setAttribute('aria-hidden', String(!open));
+    if (mask) mask.setAttribute('aria-hidden', String(!open));
+    [$m('#m-settings'), $m('#desktop-settings')].filter(Boolean).forEach(button =>
+      button.setAttribute('aria-expanded', String(open)));
+    if (open) {
+      lastSettingsTrigger = document.activeElement;
+      const active = s && s.querySelector('button');
+      if (active) active.focus({preventScroll: true});
+    } else if (lastSettingsTrigger && lastSettingsTrigger.isConnected) {
+      lastSettingsTrigger.focus({preventScroll: true});
+    }
   }
   const ms = $m('#m-settings'), mm = $m('#m-mask');
   if (ms) ms.onclick = () => toggleSheet(true);
+  const ds = $m('#desktop-settings');
+  if (ds) ds.onclick = () => toggleSheet(true);
   if (mm) mm.onclick = () => toggleSheet(false);
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && $m('#m-sheet')?.classList.contains('open')) toggleSheet(false);
+  });
   applySettings();
 
   // 移动端翻章（复用桌面按钮逻辑）

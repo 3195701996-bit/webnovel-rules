@@ -84,7 +84,7 @@ def _install_fake_downloader(monkeypatch):
         def __init__(self, ad, cache_root, **kw):
             self.cache_root = cache_root
 
-        def get(self, url, comic_id, chapter_id, idx, timeout=20):
+        def get(self, url, comic_id, chapter_id, idx, timeout=20, **kwargs):
             d = os.path.join(self.cache_root, str(chapter_id))
             os.makedirs(d, exist_ok=True)
             p = os.path.join(d, f"{idx:04d}.jpg")

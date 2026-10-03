@@ -42,6 +42,15 @@ data class HttpText(val code: Int, val body: String) {
     val ok: Boolean get() = code in 200..299
 }
 
+/** 漫画搜索屏所需的最小网关面，允许用离线响应验收真实 Compose 页面。 */
+internal interface MangaSearchGateway {
+    suspend fun httpText(port: Int, path: String, auth: Boolean = true): HttpText
+    suspend fun httpPost(port: Int, path: String, json: String? = null,
+                         auth: Boolean = true): HttpText
+    suspend fun streamEvents(port: Int, path: String, readTimeoutMs: Int = 60_000,
+                             onEvent: (JSONObject) -> Unit): Int
+}
+
 /**
  * 本机引擎网关（P0-1/P0-2/P0-3/P1-1 的修复点集中在这里）：
  *
@@ -56,7 +65,7 @@ data class HttpText(val code: Int, val body: String) {
  * - **代次守卫**：并发的连接/停止/重连，旧异步结果不得覆盖新状态。
  * - 日志只记路径/状态码/阶段，**不记 token**。
  */
-class EngineGateway(private val appContext: Context) {
+class EngineGateway(private val appContext: Context) : MangaSearchGateway {
 
     companion object {
         private const val TAG = "EngineGateway"
@@ -175,7 +184,9 @@ class EngineGateway(private val appContext: Context) {
         gen.incrementAndGet()
         endpoint = null
         val b = binder
-        val ok = runCatching { b?.stop("ui") }.isSuccess
+        val stopped = runCatching { b?.stop("ui") }
+            .getOrNull()?.get("state") == "stopped"
+        val ok = b != null && stopped
         Log.i(TAG, "已请求停止引擎 ok=$ok")
         ok
     }
@@ -204,7 +215,7 @@ class EngineGateway(private val appContext: Context) {
         }
 
     /** GET：读接口（书架、目录、章节正文）。 */
-    suspend fun httpText(port: Int, path: String, auth: Boolean = true): HttpText =
+    override suspend fun httpText(port: Int, path: String, auth: Boolean): HttpText =
         request("GET", port, path, null, auth)
 
     /**
@@ -213,8 +224,8 @@ class EngineGateway(private val appContext: Context) {
      * 重爬会真的去抓一章（服务端 timeout=25s），因此 POST 的读超时放宽到 45s；
      * 其余与 GET 共用同一条链路（认证、代次校验、状态码与 errorStream 处理）。
      */
-    suspend fun httpPost(port: Int, path: String, json: String? = null,
-                         auth: Boolean = true): HttpText =
+    override suspend fun httpPost(port: Int, path: String, json: String?,
+                                  auth: Boolean): HttpText =
         request("POST", port, path, json, auth)
 
     /** DELETE：删除书源等资源（与 GET/POST 共用认证与代次处理） */
@@ -229,9 +240,9 @@ class EngineGateway(private val appContext: Context) {
      * （-1 表示连接层失败）。取消协程时会断开连接（不会泄漏读线程）。
      * 调用方拿到事件后自行解析 JSON——服务端事件格式见 /api/manga/search/stream。
      */
-    suspend fun streamEvents(port: Int, path: String,
-                             readTimeoutMs: Int = 60_000,
-                             onEvent: (JSONObject) -> Unit): Int =
+    override suspend fun streamEvents(port: Int, path: String,
+                                      readTimeoutMs: Int,
+                                      onEvent: (JSONObject) -> Unit): Int =
         withContext(Dispatchers.IO) {
             val mine = gen.get()
             val token = endpoint?.token ?: ""

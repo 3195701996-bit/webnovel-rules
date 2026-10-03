@@ -119,7 +119,9 @@ class BackupScopeUiTest {
         val scope = m.optJSONObject("scope") ?: throw AssertionError("清单缺少 scope（范围不明确）")
         val inc = scope.optJSONArray("includes")!!
         val exc = scope.optJSONArray("excludes")!!
-        assertTrue("includes 应说明包含书源与进度", inc.length() >= 3)
+        assertTrue("includes 应说明包含书源、进度与收藏", inc.length() >= 4)
+        val incText = (0 until inc.length()).joinToString(" ") { inc.optString(it) }
+        assertTrue("备份范围应明确包含漫画收藏：$incText", incText.contains("收藏"))
         assertTrue("excludes 必须明确列出不含的内容", exc.length() >= 3)
         val excText = (0 until exc.length()).joinToString(" ") { exc.optString(it) }
         assertTrue("必须明确'不含正文'：$excText", excText.contains("正文"))
@@ -165,8 +167,12 @@ class BackupScopeUiTest {
         ev("备份页范围：$summary")
         assertTrue("范围摘要要说清'包含…合计…不含…'：$summary",
             summary.contains("包含") && summary.contains("不含") && summary.contains("合计"))
-        assertTrue("必须显示不含部分的真实体积（KB/MB/GB）：$summary",
-            summary.contains("MB") || summary.contains("KB") || summary.contains("GB"))
+        // 空测试设备可能确实没有被排除的数据；零值应如实显示为“0 字节”，
+        // 非零值才要求使用人类可读单位，不能为了通过测试虚报容量。
+        val reportsMeasuredZero = summary.contains("0 字节")
+        assertTrue("必须显示不含部分的实测体积（零值可显示 0 字节）：$summary",
+            reportsMeasuredZero || summary.contains("MB") ||
+                summary.contains("KB") || summary.contains("GB"))
         assertFalse("范围摘要不能是空壳", summary.isBlank())
         waitWhileIdle()
     }

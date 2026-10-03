@@ -691,7 +691,7 @@ def test_overwrite_holds_txn_lock_across_download(client, monkeypatch):
     real_fetch = MAPI._repair_fetch_pages
     probe = {}
 
-    def _spy(imgs, target_dir, indexes):
+    def _spy(imgs, target_dir, indexes, **kwargs):
         res = {}
 
         def _try():
@@ -703,7 +703,7 @@ def test_overwrite_holds_txn_lock_across_download(client, monkeypatch):
         t.start()
         t.join(3)
         probe["locked"] = res.get("locked")
-        return real_fetch(imgs, target_dir, indexes)
+        return real_fetch(imgs, target_dir, indexes, **kwargs)
 
     monkeypatch.setattr(MAPI, "_repair_fetch_pages", _spy)
     r = _repair(client, "ov_lock_cycle", "ch1")

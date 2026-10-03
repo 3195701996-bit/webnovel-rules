@@ -102,8 +102,12 @@ const srcSandbox = {
 };
 vm.createContext(srcSandbox);
 vm.runInContext(SRC_BLOCK +
-  '\n;globalThis.__src = { loadSources, selectedUids, batchToggle, srcAutoRefresh };', srcSandbox);
+  '\n;globalThis.__src = { loadSources, renderSources, selectedUids, batchToggle, srcAutoRefresh };', srcSandbox);
 const srcApi = srcSandbox.__src;
+assert.ok(/addEventListener\('input', renderSources\)/.test(SRC_BLOCK),
+  '书源关键字筛选应使用本地渲染，不应每次输入重新请求');
+assert.ok(/addEventListener\('change', renderSources\)/.test(SRC),
+  '书源分组筛选应使用本地渲染');
 
 async function testSources() {
   const box = srcGet('source-list');
@@ -159,6 +163,22 @@ async function testSources() {
   const u2row = rows.find((h) => h.includes('data-uid="u2"'));
   assert.ok(u1row && u1row.includes('data-uid="u1" checked'), 'u1 勾选应被保留');
   assert.ok(u2row && !u2row.includes('data-uid="u2" checked'), 'u2 不应被勾选');
+
+  // (d2) 关键字与分组筛选只重绘缓存，不应为每个输入字符重新请求列表
+  srcReq.length = 0;
+  srcGet('src-filter-input').value = 'B';
+  srcApi.renderSources();
+  assert.strictEqual(srcReq.length, 0, '输入关键字筛选不得发起网络请求');
+  let filteredHtml = renderedHtml(box);
+  assert.ok(filteredHtml.includes('data-uid="u2"'), '本地关键字筛选应显示匹配书源');
+  assert.ok(!filteredHtml.includes('data-uid="u1"'), '本地关键字筛选应隐藏不匹配书源');
+  srcGet('src-filter-input').value = '';
+  srcGet('src-group-filter').value = 'missing-group';
+  srcApi.renderSources();
+  assert.strictEqual(srcReq.length, 0, '分组筛选不得发起网络请求');
+  assert.ok(box.innerHTML.includes('没有匹配的书源'), '本地分组筛选应更新无匹配提示');
+  srcGet('src-group-filter').value = '';
+  srcApi.renderSources();
 
   // (e) 批量：如实统计成功/失败 + 按钮禁用→恢复
   srcReq.length = 0; srcToast.length = 0;
@@ -308,6 +328,7 @@ let _zoomLevel = 1.0;
 let chapters = [];
 let chIdx = 0;
 let settings = {mode:'scroll', flip:'zone'};
+let LOCAL_CATALOG = false;
 // 0.64.0：续读落点由服务端按章节身份解析（detail.resume），这两个声明位于
 // 被测片段之外，抽取时需补上
 let _resume = null;
@@ -359,21 +380,29 @@ const rcSandbox = {
   Image: function () { return {}; },
   preloadPaged: () => {},
   saveProgress: () => {},
-  setTimeout: (fn, ms) => { const id = ++rcTimerId; rcTimers.push({ id, fn, ms }); return id; },
+  setTimeout: (fn, ms) => {
+    const id = ++rcTimerId;
+    if (ms === 1500 || ms === 3000) fn();
+    else rcTimers.push({ id, fn, ms });
+    return id;
+  },
   clearTimeout: () => {},
   SOURCE: 'src', CID: 'cid', TITLE: 'TITLE', chIdx0: 0, pg0: 1, _urlChExplicit: false, _histTimer: null,
   location: { hostname: 'localhost' },
   // gotoChapter 依赖：章节加载用 fetch（队列驱动）+ AbortController + 定位桩
-  AbortController: class { constructor() { this.signal = {}; } abort() {} },
+  AbortController: class { constructor() { this.signal = {aborted:false}; } abort() { this.signal.aborted = true; } },
   fetch: (u, opt) => rcFetch(u, opt),
   scrollToPage: () => {},
+  syncReaderProgress: () => {},
   _locateY: -1, _userMoved: false, loading: false, _urlChExplicit2: false,
 };
 // gotoChapter 的 fetch 队列：每个 spec = {json} 或 {reject}
 let rcFetchQueue = [];
+let rcFetchOverride = null;
 const rcFetchLog = [];
-const rcFetch = (u) => {
+const rcFetch = (u, opt) => {
   rcFetchLog.push(u);
+  if (rcFetchOverride) return rcFetchOverride(u, opt);
   if (!rcFetchQueue.length) {
     return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ images: [] }) });
   }
@@ -391,7 +420,8 @@ vm.runInContext(RC_DECL + 'let loading = false;\nlet chIdx0 = 0;\nlet pg0 = 1;\n
    get renderGen(){return _renderGen;}, set renderGen(v){_renderGen=v;},
    get curChId(){return _curChId;}, set curChId(v){_curChId=v;},
    get scrollIO(){return _scrollIO;}, setChapters(a){chapters=a;}, set chIdx(v){chIdx=v;},
-   get chIdx(){return chIdx;}, get loading(){return loading;} };`,
+   get chIdx(){return chIdx;}, get loading(){return loading;},
+   setLocalCatalog(v){LOCAL_CATALOG=v;} };`,
   rcSandbox);
 const R = rcSandbox.__r;
 const flushTimers = () => { while (rcTimers.length) rcTimers.shift().fn(); };
@@ -399,6 +429,9 @@ const wrapsOf = (stage) => stage.children.filter((c) => (c.className || '').incl
 
 async function testReader() {
   const stage = rcGet('#stage');
+  rcSandbox.window._curImgs = [];
+  R.setChapters([{ id: 'C1', name: 'ch1' }, { id: 'C2', name: 'ch2' },
+                  { id: 'C3', name: 'ch3' }, { id: 'C4', name: 'ch4' }]);
   const imgsA = [{ url: 'http://cdn/a1.jpg' }, { url: 'http://cdn/a2.jpg' }];
 
   // (a) renderScroll 建 IO；切章后旧 IO 回调必须 disconnect 且不再挂图
@@ -452,7 +485,7 @@ async function testReader() {
   R.curChId = 'CH_CUR';                             // 当前章已变为其它章
   R.setChapters([{ id: 'CH_CUR' }]); R.chIdx = 0;
   img2.onerror();                                   // 同代错误 → 安排降级
-  assert.ok(rcTimers.length >= 1, '同代 onerror 应安排代理降级定时器');
+  assert.ok(rcTimers.length >= 1, '同代 onerror 应安排重试定时器');
   flushTimers();
   assert.ok(img2.src.includes('/chapter/CH_OWN/proxy'), '代理地址应含所属章 CH_OWN：' + img2.src);
   assert.ok(!img2.src.includes('CH_CUR'), '代理地址不得引用当前章 CH_CUR');
@@ -513,6 +546,34 @@ async function testReader() {
 async function testReaderChapterLoading() {
   const stage = rcGet('#stage');
 
+  // 本地书架严格只读已下载目录，不能预取完整在线目录中的未下载章节。
+  R.setLocalCatalog(true);
+  R.setChapters([{id:'DOWNLOADED', name:'已下载'}, {id:'ONLINE_ONLY', name:'未下载'}]);
+  R.chIdx = 0;
+  rcSandbox.window._dlSet = new Set(['DOWNLOADED']);
+  rcSandbox.window._nextChImgs = null;
+  rcSandbox.window._nextChPrefetch = null;
+  rcFetchLog.length = 0;
+  rcFetchQueue = [{json:{images:[{url:'/api/manga/jm/cid/chapter/DOWNLOADED/img/0'}]}}];
+  await R.gotoChapter(0);
+  assert.ok(rcFetchLog.some(url => url.includes('/chapter/DOWNLOADED/urls')),
+    '本地已下载章节必须仍可阅读');
+  assert.ok(!rcFetchLog.some(url => url.includes('/chapter/ONLINE_ONLY/urls')),
+    '本地阅读不得为未下载章节发出预取请求');
+  R.setLocalCatalog(false);
+  R.chIdx = 0;
+  rcSandbox.window._nextChImgs = null;
+  rcSandbox.window._nextChPrefetch = null;
+  rcFetchLog.length = 0;
+  rcFetchOverride = url => Promise.resolve({json: () => Promise.resolve({
+    images: [{url: `online:${url.match(/chapter\/([^/]+)\/urls/)?.[1] || 'unknown'}`}],
+  })});
+  await R.gotoChapter(0);
+  await Promise.resolve(); await Promise.resolve();
+  assert.ok(rcFetchLog.some(url => url.includes('/chapter/ONLINE_ONLY/urls')),
+    '完整在线目录仍应预取未下载的下一话以支持混合阅读');
+  rcFetchOverride = null;
+
   // (a) 空的"下一话预取"必须丢弃并重新请求 /urls
   //     —— 旧实现直接把空 images 当有效数据复用，这一章永远是"没有图"，
   //     而且客户端不会再请求一次（用户看到：切章后/刷新后页面再也不加载）
@@ -554,7 +615,35 @@ async function testReaderChapterLoading() {
   assert.strictEqual(wrapsOf(stage).length, 0, '空章节不得渲染空白页框');
   assert.strictEqual(R.loading, false, '异常后 loading 必须复位（否则之后再也切不了章）');
 
-  // (d) jm 服务器通道（/api/ 相对地址）失败 → 同地址缓存击穿重试，绝不走 /proxy
+  // (d) 上一章的迟到预取不能覆盖新章启动的下一话预取。
+  // C1 发起 C2 预取 → 用户进入 C2 并预取 C3 → 旧 C2 预取最后返回。
+  R.setChapters([{ id: 'C1', name: 'ch1' }, { id: 'C2', name: 'ch2' }, { id: 'C3', name: 'ch3' }]);
+  R.chIdx = 0; rcSandbox.window._nextChImgs = null; rcSandbox.window._nextChPrefetch = null;
+  let resolveLateC2;
+  let c2Calls = 0;
+  rcFetchOverride = (url) => {
+    if (url.includes('/chapter/C2/urls') && ++c2Calls === 1) {
+      return new Promise(resolve => {
+        resolveLateC2 = () => resolve({json: () => Promise.resolve({images:[{url:'late-C2'}]})});
+      });
+    }
+    const id = url.match(/chapter\/(C\d+)\/urls/)?.[1] || 'unknown';
+    return Promise.resolve({json: () => Promise.resolve({images:[{url:`fresh-${id}`}]})});
+  };
+  await R.gotoChapter(0);
+  const staleRequest = rcSandbox.window._nextChPrefetch;
+  assert.ok(staleRequest && staleRequest.idx === 1, 'C1 should start a tagged prefetch for C2');
+  await R.gotoChapter(1);
+  assert.strictEqual(staleRequest.controller.signal.aborted, true, 'switching chapters must abort the old prefetch');
+  await Promise.resolve(); await Promise.resolve();
+  assert.strictEqual(rcSandbox.window._nextChImgs?.idx, 2, 'C2 should own the completed C3 prefetch');
+  resolveLateC2();
+  await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+  assert.strictEqual(rcSandbox.window._nextChImgs?.idx, 2, 'late C2 response must not replace C3 cache');
+  assert.strictEqual(rcSandbox.window._nextChImgs?.images?.[0]?.url, 'fresh-C3', 'next chapter cache must contain C3 images');
+  rcFetchOverride = null;
+
+  // (e) jm 服务器通道（/api/ 相对地址）失败 → 同地址缓存击穿重试，绝不走 /proxy
   const w4 = makeEl('div');
   const ph4 = makeEl('div'); ph4.className = 'img-placeholder'; w4.appendChild(ph4);
   const imgsD = [{ url: '/api/manga/jm/cid/chapter/CHX/img/3' }];
@@ -615,6 +704,12 @@ let _pageIdx = 0;
 // 的门槛依赖的当前渲染章节 id
 let _resume = null;
 let _resumeInexact = false;
+function IDENTITY_SOURCE(value) { return value === 'copymanga_web' ? 'copymanga' : value; }
+const histNote = { dataset: {} };
+function clearHistoryLoadError() {
+  if (histNote.dataset.historyLoadError === '1') histNote._removed = true;
+}
+function showHistoryLoadError(text) { histNote.textContent = text; histNote.dataset.historyLoadError = '1'; }
 let _curChId = '';
 const _mpBeacons = [];
 const navigator = {sendBeacon: (u, b) => { _mpBeacons.push({u, b}); return _mpBeaconOk; }};
@@ -640,17 +735,19 @@ const mpSandbox = {
   clearTimeout: () => {},
   fetch: (u, opt) => mpFetch(u, opt),
   document: { querySelector: () => null, querySelectorAll: () => mpStage.children, addEventListener() {} },
+  URLSearchParams,
+  location: { search: '' },
   window: { _curImgs: [], scrollY: 0, innerHeight: 800 },
   $: () => makeEl('div'),
 };
 let mpQueue = [];
 function mpFetch(u, opt) {
   const method = (opt && opt.method) || 'GET';
-  if (method === 'POST') { mpPosts.push({ u, body: (opt && opt.body) || '' }); return Promise.resolve({ json: () => Promise.resolve({ ok: true }) }); }
+  if (method === 'POST') { mpPosts.push({ u, body: (opt && opt.body) || '' }); return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true }) }); }
   const spec = mpQueue.shift();
-  if (!spec) return Promise.resolve({ json: () => Promise.resolve({ history: [] }) });
+  if (!spec) return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ history: [] }) });
   if (spec.reject) return Promise.reject(spec.reject);
-  return Promise.resolve({ json: () => Promise.resolve(spec.json) });
+  return Promise.resolve({ ok: spec.ok !== false, status: spec.status || (spec.ok === false ? 503 : 200), json: () => Promise.resolve(spec.json) });
 }
 vm.createContext(mpSandbox);
 vm.runInContext(MP_DECL + '\n' + MP_RESTORE + '\n' + MP_PAGE + '\n' + MP_BEACON + '\n' + MP_SAVE +
@@ -704,6 +801,14 @@ async function testMangaProgressSync() {
   assert.ok(String(MP.sent()[0].pos).startsWith('第5話 P'),
     '写入的应是当前话与页码：' + MP.sent()[0].pos);
 
+  // (b1) HTTP 503 即使返回可解析 JSON，也不得误当作成功读取并开放进度写回。
+  MP.ready = false; MP.clearSent();
+  mpQueue = [{ ok: false, status: 503, json: { history: [], recoverable: true, error: 'unavailable' } }];
+  await MP.restoreProgress(6); // 最终重试轮次：避免在测试中安排后台重试定时器
+  assert.strictEqual(MP.ready, false, 'HTTP 失败不得进入可写状态');
+  MP.saveProgress();
+  assert.strictEqual(MP.sent().length, 0, 'HTTP 失败后不得提交阅读进度');
+
   // (c) 显式点章（URL 带 ch）：与历史同话时必须恢复章内页码
   MP.ready = false; MP.explicit = true; MP.chIdx0 = 5; MP.pg0 = 1;
   mpQueue = [{ json: { history: [{ source: 'src', comic_id: 'cid', idx: 5, pos: '第6話 P37' }] } }];
@@ -724,7 +829,7 @@ async function testMangaProgressSync() {
                   {id: 'c3', name: '第3話'}, {id: 'c4', name: '第4話'},
                   {id: 'c5', name: '第5話'}]);
   MP.chIdx = 0; MP.fallback = 0;
-  mpQueue = [{ json: { history: [{ source: 'src', comic_id: 'cid', idx: 4, pos: '第5話 P9' }] } }];
+  mpQueue = [{ json: { history: [{ source: 'src', identity_source: 'src', comic_id: 'cid', idx: 4, pos: '第5話 P9' }] } }];
   await MP.restoreProgress(1);
   assert.strictEqual(MP.ready, true);
   assert.strictEqual(MP.jumped().length, 1, '用户未导航时应跟随服务器进度');

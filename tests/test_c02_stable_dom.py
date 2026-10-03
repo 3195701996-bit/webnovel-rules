@@ -75,7 +75,7 @@ class TestTasksRowUpsert:
         assert "tr.dataset.busy = '1';" in TASKS
 
     def test_aria_busy_for_loading(self):
-        assert 'id="tasks" aria-busy="true"' in TASKS
+        assert re.search(r'id="tasks"[^>]*aria-busy="true"', TASKS)
         assert "box.setAttribute('aria-busy', 'true')" in TASKS
         assert "box.removeAttribute('aria-busy')" in TASKS
 

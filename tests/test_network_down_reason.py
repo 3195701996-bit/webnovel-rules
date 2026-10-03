@@ -17,6 +17,7 @@ import errno
 import os
 import socket
 import sys
+import threading
 import time
 
 import pytest
@@ -26,6 +27,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from engine import neterr as ne  # noqa: E402
 import server.manga_api as ma  # noqa: E402
 from server import state as st  # noqa: E402
+
+
+_HANG_EVENTS = []
 
 
 # ── 1) 异常分类 ────────────────────────────────────────────────────────────
@@ -208,6 +212,23 @@ def test_unknown_source_endpoint_returns_business_result(monkeypatch):
     assert "没有可用的漫画源" in (body.get("errors") or {}).get("_sources", "")
 
 
+def test_unknown_source_stream_returns_business_result(monkeypatch):
+    """Web/App 主用的 SSE 路径也必须区分空源与真实搜索无结果。"""
+    import json
+    import app as _app
+    _patch(monkeypatch, [])
+    client = _app.app.test_client()
+    r = client.get("/api/manga/search/stream?q=空源流式回归&source=nosuch")
+    assert r.status_code == 200
+    events = [json.loads(line[6:]) for line in r.get_data(as_text=True).splitlines()
+              if line.startswith("data: ")]
+    assert events and events[-1]["finished"] is True
+    assert events[-1]["network_down"] is False
+    error = (events[-1].get("errors") or {}).get("_sources", "")
+    assert "没有可用的漫画源" in error
+    assert "缺少运行依赖" in error
+
+
 def test_round_is_offline_uses_probe_for_ambiguous_round(monkeypatch):
     monkeypatch.setattr(ne, "local_network_down", lambda *a, **k: True)
     assert ne.round_is_offline(False, ["A 搜索超时（源站无响应或服务器繁忙），请稍后重试"]) is True
@@ -242,11 +263,14 @@ class _OkAdapter:
 
 @pytest.fixture(autouse=True)
 def _clean_caches():
+    _HANG_EVENTS.clear()
     st._manga_search_cache.clear()
     st._manga_search_partial.clear()
     st._manga_search_fail.clear()
     ma._manga_search_latency.clear()
     yield
+    for gate in _HANG_EVENTS:
+        gate.set()
     st._manga_search_cache.clear()
     st._manga_search_partial.clear()
     st._manga_search_fail.clear()
@@ -344,7 +368,9 @@ class _HangAdapter:
     key, name = "hang", "卡死源"
 
     def search(self, keyword, page=1, order=None):
-        time.sleep(60)          # 模拟要拖满 20/25s 期限的源
+        gate = threading.Event()
+        _HANG_EVENTS.append(gate)
+        gate.wait(60)           # 模拟要拖满 20/25s 期限的源
         return []
 
 

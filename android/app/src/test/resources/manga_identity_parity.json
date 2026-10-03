@@ -1,0 +1,28 @@
+{
+  "cases": [
+    {
+      "name": "copymanga_app_transport",
+      "transport": "copymanga",
+      "identity": "copymanga",
+      "aliases": ["copymanga", "copymanga_web"]
+    },
+    {
+      "name": "copymanga_web_transport",
+      "transport": "copymanga_web",
+      "identity": "copymanga",
+      "aliases": ["copymanga", "copymanga_web"]
+    },
+    {
+      "name": "jm_identity_is_source_scoped",
+      "transport": "jm",
+      "identity": "jm",
+      "aliases": ["jm"]
+    },
+    {
+      "name": "similar_source_names_are_not_aliases",
+      "transport": "copymanga_v2",
+      "identity": "copymanga_v2",
+      "aliases": ["copymanga_v2"]
+    }
+  ]
+}

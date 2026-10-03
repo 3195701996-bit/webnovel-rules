@@ -3,25 +3,25 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>书源管理 · webnovel_rules</title>
+<title>内容来源 · webnovel_rules</title>
 <link rel="icon" href="data:,">
 <link rel="stylesheet" href="/static/css/style.css">
 </head>
-<body>
+<body class="sources-page">
 <header class="topbar">
-  <span class="logo">📚 webnovel_rules<small>书源驱动 · 小说爬虫</small></span>
+  <span class="logo">📚 webnovel_rules<small>发现 · 收藏 · 阅读</small></span>
   <nav>
-    <a href="/">🔍 搜索/书库</a>
-    <a href="/sources" class="active">书源管理</a>
-    <a href="/library">📖 我的书库</a>
-    <a href="/tasks_page">📋 任务管理</a>
+    <a href="/">🔍 发现</a>
+    <a href="/sources" class="active">来源管理</a>
+    <a href="/library">📖 书架</a>
+    <a href="/tasks_page">⬇ 下载</a>
     <a href="/manga">🎨 漫画</a>
   </nav>
   <div class="spacer"></div>
 </header>
 
 <div class="container">
-  <h1 class="page-title">书源管理</h1>
+  <h1 class="page-title">内容来源</h1>
   <p class="page-sub">导入 legado（阅读 App）格式书源，导入时自动校验可用性；支持启用/禁用与重新校验。</p>
 
   <div class="form-card">
@@ -31,30 +31,29 @@
       <button class="btn primary" id="btn-import">导入并校验</button>
       <span class="hint" style="margin:0;">支持从 <a href="https://github.com/liufuyou/read" target="_blank">liufuyou/read</a>、<a href="https://github.com/aoaostar/legado" target="_blank">aoaostar/legado</a> 等开源书源合集复制 JSON</span>
     </div>
-    <div class="import-result" id="import-result"></div>
+    <div class="import-result" id="import-result" aria-live="polite"></div>
   </div>
 
   <h3 style="margin:20px 0 10px;">已导入书源（<span id="src-count">0</span>）
     <span id="src-stats" style="font-size:.8rem;color:var(--text-dim);font-weight:400;margin-left:8px;"></span>
     <button class="btn small primary" id="btn-check-all" style="margin-left:12px;">🔍 一键检验全部源</button>
-    <span id="check-all-status" style="font-size:.78rem;color:var(--text-dim);margin-left:8px;"></span></h3>
-  <div id="check-all-result" style="margin-bottom:12px;"></div>
+    <span id="check-all-status" class="source-check-status" role="status" aria-live="polite"></span></h3>
+  <div id="check-all-result" class="source-check-result"></div>
   <div class="src-filter">
     <input type="text" id="src-filter-input" placeholder="🔍 过滤书源（名称 / 网址 / 分组）…">
     <select id="src-group-filter" style="padding:9px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);">
       <option value="">全部分组</option>
     </select>
-  
+  </div>
 
   <div class="batch-bar" id="batch-bar" style="display:none;">
-    <label style="display:flex;align-items:center;gap:6px;font-size:.85rem;cursor:pointer;">
+    <label class="source-select-all">
       <input type="checkbox" id="sel-all"> 全选 <span id="sel-count" style="color:var(--text-dim);"></span>
     </label>
     <button class="btn small primary" id="batch-enable">启用选中</button>
     <button class="btn small" id="batch-disable">停用选中</button>
     <button class="btn small danger" id="batch-del">删除选中</button>
   </div>
-</div>
   <div id="source-list"><div class="empty">加载中…</div></div>
 </div>
 
@@ -83,13 +82,13 @@ $('#btn-check-all').onclick = async () => {
     if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
     if (!d.total) {
       st.textContent = '✅ 没有启用的书源';
-      st.style.color = '#34a853';
+      st.className = 'source-check-status is-success';
       return;
     }
     await pollSrcCheckAll(st, box, false);
   } catch (e) {
     st.textContent = '⚠ 检验失败: ' + esc(String(e).slice(0,120));
-    st.style.color = '#f66';
+    st.className = 'source-check-status is-error';
   } finally {
     _checkingAll = false;
     btn.disabled = false;
@@ -100,16 +99,16 @@ function renderSrcCheckTable(box, results) {
   if (!results.length) { box.innerHTML = ''; return; }
   const sorted = results.slice().sort((a, b) =>
     (a.ok ? 1 : 0) - (b.ok ? 1 : 0) || String(a.name).localeCompare(String(b.name)));
-  let html = '<div style="border:1px solid var(--border);border-radius:10px;overflow:hidden;font-size:.8rem;">';
-  html += '<table style="width:100%;border-collapse:collapse;"><thead><tr style="background:var(--bg-2,#1c2230);">'
+  let html = '<div class="source-check-table-wrap">';
+  html += '<table class="source-check-table"><thead><tr>'
     + '<th style="padding:6px 10px;text-align:left;">书源</th><th style="padding:6px 10px;">状态</th>'
     + '<th style="padding:6px 10px;text-align:left;">结果/备注</th></tr></thead><tbody>';
   sorted.forEach(x => {
     const bad = !x.ok;
-    html += `<tr style="border-top:1px solid var(--border);${bad ? 'background:rgba(224,92,92,.06);' : ''}">`
-      + `<td style="padding:6px 10px;">${esc(x.name)}</td>`
-      + `<td style="padding:6px 10px;text-align:center;"><span class="dot ${bad ? 'error' : 'done'}"></span>${bad ? '异常' : '可用'}</td>`
-      + `<td style="padding:6px 10px;color:var(--text-dim);">${esc((x.error || x.note || x.sample || '').slice(0, 120))}</td></tr>`;
+    html += `<tr class="${bad ? 'is-error' : 'is-success'}">`
+      + `<td>${esc(x.name)}</td>`
+      + `<td class="source-check-state"><span class="dot ${bad ? 'error' : 'done'}"></span>${bad ? '异常' : '可用'}</td>`
+      + `<td class="source-check-note">${esc((x.error || x.note || x.sample || '').slice(0, 120))}</td></tr>`;
   });
   html += '</tbody></table></div>';
   box.innerHTML = html;
@@ -137,13 +136,13 @@ async function pollSrcCheckAll(st, box, quiet) {
       if (results.length !== lastDone) {
         st.textContent = '⏳ 正在检验 ' + results.length + '/' + (d.total || '?')
           + (badN ? '（已发现 ' + badN + ' 个异常）' : '');
-        st.style.color = badN ? '#ff9d5c' : 'var(--text-dim)';
+        st.className = 'source-check-status' + (badN ? ' is-warning' : '');
         lastDone = results.length;
       }
     } else {
       st.textContent = '✅ 完成：' + okN + '/' + (d.total || results.length) + ' 可用'
         + (badN ? '，' + badN + ' 个异常 ↓' : '');
-      st.style.color = badN ? '#ff9d5c' : '#34a853';
+      st.className = 'source-check-status ' + (badN ? 'is-warning' : 'is-success');
       if (!quiet) {
         if (badN) toast('⚠ ' + badN + ' 个书源异常，详见下方列表', 'error');
         else toast('✅ 全部 ' + results.length + ' 个书源可用', 'ok');
@@ -169,7 +168,7 @@ async function resumeSrcCheck() {
     _checkingAll = true;
     const btn = $('#btn-check-all');
     btn.disabled = true;
-    stEl.style.color = '';
+    stEl.className = 'source-check-status';
     stEl.textContent = '⏳ 正在恢复检验进度…';
     await pollSrcCheckAll(stEl, box, true);
     _checkingAll = false;
@@ -180,7 +179,7 @@ async function resumeSrcCheck() {
     const badN = (st.results || []).length - okN;
     stEl.textContent = '✅ 上次检验：' + okN + '/' + (st.total || (st.results || []).length)
       + ' 可用' + (badN ? '，' + badN + ' 个异常 ↓' : '');
-    stEl.style.color = badN ? '#ff9d5c' : '#34a853';
+    stEl.className = 'source-check-status ' + (badN ? 'is-warning' : 'is-success');
   }
 }
 resumeSrcCheck();
@@ -210,6 +209,7 @@ $('#btn-import').onclick = async () => {
 };
 
 let _srcLoadSeq = 0;   // 代际：迟到的旧响应不得覆盖新列表/新选择
+let _srcData = null;   // 最近一次成功加载的数据；名称/网址筛选只在本地执行
 // 业务失败判定：接口用 HTTP 200 + {ok:false} 表示业务失败，而 requestJSON 只对
 // HTTP/网络/非 JSON 抛错，不会 reject 业务失败。写操作（切换/删除）须显式检错。
 // 兼容：无 ok 字段视为成功（旧接口/无该约定），仅 ok===false 才抛。
@@ -232,14 +232,25 @@ async function loadSources() {
   } catch (e) {
     if (mySeq === _srcLoadSeq) {
       const box0 = $('#source-list');
-      if (box0) box0.innerHTML = '<div class="empty">书源加载失败：'
-        + esc((e && e.message) || e)
-        + '<br><button class="btn small" onclick="loadSources()" style="margin-top:10px;">重试</button></div>';
+      if (box0) {
+        box0.innerHTML = '<div class="empty">书源加载失败：'
+          + esc((e && e.message) || e)
+          + '<br><button class="btn small source-retry" type="button">重试</button></div>';
+        const retry = box0.querySelector('.source-retry');
+        if (retry) retry.onclick = () => loadSources();
+      }
       updateBatchUI();   // 列表已清空：同步复位批量条/“已选”计数，勾选数量不悬空
     }
     return;
   }
   if (mySeq !== _srcLoadSeq) return;   // 已被更新的请求取代
+  _srcData = sources;
+  renderSources();
+}
+
+function renderSources() {
+  const sources = _srcData;
+  if (!Array.isArray(sources)) return;  // 首次请求完成前不因输入而发起重复请求
   $('#src-count').textContent = sources.length;
   // 统计：可用 / 不可用 / 未校验 / 已停用
   const nValid = sources.filter(s => s.valid === true).length;
@@ -390,7 +401,7 @@ async function srcAutoRefresh() {
 }
 document.addEventListener('visibilitychange', () => { if (!document.hidden) srcAutoRefresh(); });
 scheduleSrcPoll();
-$('#src-filter-input').addEventListener('input', loadSources);
+$('#src-filter-input').addEventListener('input', renderSources);
 // R12 批量操作（自行实现）
 function updateBatchUI() {
   const checks = document.querySelectorAll('.sel-check');
@@ -460,7 +471,7 @@ if (bdel) bdel.onclick = async () => {
   else toast('已删除 ' + ok + ' 个', 'ok');
   loadSources();
 };
-$('#src-group-filter').addEventListener('change', loadSources);
+$('#src-group-filter').addEventListener('change', renderSources);
 </script>
 </body>
 </html>

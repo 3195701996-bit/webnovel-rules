@@ -3,27 +3,27 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>任务管理 · webnovel_rules</title>
+<title>下载进度 · webnovel_rules</title>
 <link rel="icon" href="data:,">
 <link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body>
 <header class="topbar">
-  <span class="logo">📚 webnovel_rules<small>书源驱动 · 小说爬虫</small></span>
+  <span class="logo">📚 webnovel_rules<small>发现 · 收藏 · 阅读</small></span>
   <nav>
-    <a href="/">🔍 搜索/书库</a>
-    <a href="/sources">书源管理</a>
-    <a href="/library">📖 我的书库</a>
-    <a href="/tasks_page" class="active">📋 任务管理</a>
+    <a href="/">🔍 发现</a>
+    <a href="/sources">来源管理</a>
+    <a href="/library">📖 书架</a>
+    <a href="/tasks_page" class="active">⬇ 下载</a>
     <a href="/manga">🎨 漫画</a>
   </nav>
   <div class="spacer"></div>
 </header>
 
 <div class="container">
-  <div class="section-title">📋 任务管理</div>
-  <p class="page-sub">爬取任务：暂停 / 恢复（启动） / 取消 / 删除；失败章节自动优先重试。</p>
-  <div style="display:flex;gap:8px;margin-bottom:12px;">
+  <div class="section-title">下载进度</div>
+  <p class="page-sub">小说与漫画的下载、暂停、恢复和失败重试，都可以在这里继续处理。</p>
+  <div class="task-toolbar" role="group" aria-label="漫画批量下载操作" style="display:flex;gap:8px;margin-bottom:12px;">
     <button class="btn" id="pause-all-btn" onclick="pauseAll()">⏸ 全部暂停（漫画）</button>
     <button class="btn primary" id="resume-all-btn" onclick="resumeAll()">▶ 全部开始（漫画）</button>
     <button class="btn" id="refresh-btn" title="手动刷新">🔄 刷新</button>
@@ -31,7 +31,7 @@
   </div>
   <!-- C02: aria-busy 表达加载态；tasks-live 为克制的 aria-live 播报区
        （仅已有任务的状态迁移播报一句，不整表播报） -->
-  <div id="tasks" aria-busy="true"><div class="empty"><div class="big">⏳</div>加载任务中…</div></div>
+  <div id="tasks" aria-label="下载任务列表" aria-busy="true"><div class="empty"><div class="big">⏳</div>正在整理下载进度…</div></div>
   <span id="tasks-live" aria-live="polite" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;"></span>
 </div>
 
@@ -68,7 +68,7 @@ function _taskRowParts(t) {
   if (isManga && t.status === 'running') {
     const spd = p.speed ? (p.speed >= 1 ? p.speed.toFixed(1) + ' 图/秒' : Math.round(p.speed * 60) + ' 图/分') : '';
     const eta = (p.eta === null || p.eta === undefined) ? '估算中' : fmtEta(p.eta);
-    if (spd) speedHtml = `<span style="color:var(--accent);font-size:.75rem;">⚡ ${spd}${eta ? ' · 剩余 ' + eta : ''}</span>`;
+    speedHtml = `<span style="color:var(--accent);font-size:.75rem;">⚡ ${spd || '速度估算中'}${eta ? ' · 剩余 ' + eta : ''}</span>`;
   }
   let ops = '';
   if (isManga) {
@@ -102,13 +102,17 @@ function _taskRowParts(t) {
     const eta = p.eta ? fmtEta(p.eta) : '';
     novelSpeedHtml = `<span style="color:var(--accent);font-size:.75rem;">⚡ ${p.speed} 章/秒${eta ? ' · 剩余 ' + eta : ''}</span>`;
   }
+  const failureDetail = t.status === 'error'
+    ? String(t.stop_reason || t.error || '').trim().slice(0, 240) : '';
+  const failureHtml = failureDetail
+    ? `<span class="task-error-detail" role="note">${esc(failureDetail)}</span>` : '';
   const progHtml = isManga
     ? (() => {
         const id = p.images_done || 0, it = p.images_total || 0;
         // C06: 进度分母（总图数/总话数）未知时不显示假百分比，改显"估算中"
         const denomKnown = it > 0 || total > 0;
         const ipct = it ? Math.round(id / it * 100) : (total ? Math.round(done / total * 100) : 0);
-        const failed = p.failed_chapters ? `<span style="color:#e8833a;font-size:.72rem;"> ⚠ ${p.failed_chapters} 章失败</span>` : '';
+        const failed = p.failed_chapters ? `<span style="color:var(--red);font-size:.72rem;"> ⚠ ${p.failed_chapters} 章失败</span>` : '';
         const progText = denomKnown
           ? `${it ? id + '/' + it + ' 图' : done + '/' + total + ' 话'} (${ipct}%)`
           : '总量估算中…';
@@ -116,13 +120,15 @@ function _taskRowParts(t) {
           <div style="display:flex;align-items:center;gap:8px;"><div class="mini-bar"><i style="width:${ipct}%"></i></div><span style="color:var(--text-dim);font-size:.78rem;">${progText}</span></div>
           <span style="color:var(--text-dim);font-size:.72rem;">📖 ${done}/${total || '?'} 话${failed}${p.current ? ' · ' + esc(String(p.current).slice(0,12)) : ''}</span>
           ${speedHtml}
+          ${failureHtml}
         </div>`;
       })()
     : (total ? `<div style="display:flex;flex-direction:column;gap:3px;">
         <div style="display:flex;align-items:center;gap:8px;"><div class="mini-bar"><i style="width:${pct}%"></i></div><span style="color:var(--text-dim);font-size:.78rem;">${done}/${total} (${pct}%)</span></div>
         ${novelSpeedHtml}
         ${p.current ? `<span style="color:var(--text-dim);font-size:.72rem;">${esc(String(p.current).slice(0,16))}</span>` : ''}
-      </div>` : '<span style="color:var(--text-dim);">' + esc(p.message || '准备中…') + '</span>');
+        ${failureHtml}
+      </div>` : '<span style="color:var(--text-dim);">' + esc(p.message || '准备中…') + '</span>' + failureHtml);
   const opsSig = (isManga ? 'm' : 'n') + ':' + t.status;
   const stKey = sc + '|' + sl;
   return {
@@ -338,7 +344,7 @@ async function loadTasks() {
   if (!tasks.length) {
     if (box.dataset.view !== 'empty') {   // 空态幂等：已为空态不重复写 DOM
       box.dataset.view = 'empty';
-      box.innerHTML = '<div class="empty"><div class="big">📋</div>暂无任务<br>在搜索页爬取一本书后，这里会显示任务</div>';
+      box.innerHTML = '<div class="empty task-empty"><div class="big">📚</div><strong>暂时没有下载任务</strong><p>找到想看的作品并开始下载，进度会出现在这里。</p><a class="btn primary" href="/manga">发现漫画</a><a class="btn" href="/">搜索小说</a></div>';
     }
     return tasks;
   }
@@ -370,8 +376,11 @@ async function resumeAll() {
     toast('⚠ 批量启动失败: ' + e.message, 'error');
     return;
   }
-  $('#batch-msg').textContent = d.resumed ? `已启动 ${d.resumed} 个漫画任务` : '没有可恢复的漫画任务';
-  toast(d.resumed ? `已启动 ${d.resumed} 个` : '没有可恢复的任务', d.resumed ? 'ok' : '');
+  const skipped = Number(d.skipped || 0);
+  $('#batch-msg').textContent = (d.resumed ? `已启动 ${d.resumed} 个漫画任务` : '没有可恢复的漫画任务')
+    + (skipped ? `；${skipped} 个任务状态已变化，未启动` : '');
+  toast(d.resumed ? `已启动 ${d.resumed} 个` + (skipped ? `，${skipped} 个跳过` : '')
+    : (skipped ? `${skipped} 个任务状态已变化，未启动` : '没有可恢复的任务'), d.resumed ? 'ok' : '');
   loadTasks();
 }
 // B03: 轮询治理——createPoller（common.js）：setTimeout 链（请求完成后才排

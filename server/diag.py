@@ -21,6 +21,10 @@ _MAX_EVENTS = 80
 _lock = threading.Lock()
 _failed = deque(maxlen=_MAX_EVENTS)      # (ts, method, path(无查询串), status, ms)
 _errors = deque(maxlen=_MAX_EVENTS)      # (ts, where, kind, msg(截断))
+_latency_lock = threading.Lock()
+_last_latency = None
+_last_latency_ts = 0.0
+_LATENCY_REPORT_TTL = 15 * 60
 
 # 这些前缀是高频图片/静态请求：失败也记，但单独截断，避免把报告淹掉
 _NOISY_SUFFIX = ("/proxy", "/cover")
@@ -319,7 +323,9 @@ def measure_latency(source="jm", comic_id="", timeout=10):
                 h = dict(ad.image_headers(_hits["img0"]) or {})
             except Exception:
                 h = {}
-            r = fetch_image_checked(_hits["img0"], h, timeout=timeout)
+            r = fetch_image_checked(
+                _hits["img0"], h, timeout=timeout, source=source,
+                priority="prefetch")
             return "%d 字节" % len(getattr(r, "content", b"") or b"")
         _step("first_image", _first_image)
     # 本机缓存/预热参数（都是只读常量，便于对照"为什么慢"）
@@ -337,6 +343,10 @@ def measure_latency(source="jm", comic_id="", timeout=10):
             out["process_version"] = int(_pv)
     except Exception:
         pass
+    global _last_latency, _last_latency_ts
+    with _latency_lock:
+        _last_latency = out.copy()
+        _last_latency_ts = _t.time()
     return out
 
 
@@ -361,6 +371,17 @@ def latency_lines(source="jm", comic_id="", data=None):
     if d.get("process_version"):
         lines.append("  图片处理版本=%s" % d.get("process_version"))
     return lines
+
+
+def _report_latency_lines():
+    """Use a recent explicit probe; exporting a report must not block on source IO."""
+    with _latency_lock:
+        data = (_last_latency.copy() if _last_latency is not None
+                and time.time() - _last_latency_ts <= _LATENCY_REPORT_TTL else None)
+    if data is None:
+        return ["  本次导出未触发实时源站测速（避免报告等待外网）；"
+                "请使用分段测速功能获取当前网络结果。"]
+    return latency_lines(data.get("source") or "jm", data=data)
 
 
 def _net_lines():
@@ -466,7 +487,7 @@ def build_report():
     lines.append("")
     lines.append("【8. 阅读链路分段测速（只读；每步超时 10s，失败如实记录）】")
     try:
-        for _ln in latency_lines("jm"):
+        for _ln in _report_latency_lines():
             lines.append(_ln)
     except Exception as e:
         record_error("diag.latency", e)

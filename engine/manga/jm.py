@@ -649,8 +649,9 @@ class Jm(MangaAdapter):
             t = time.time()
             try:
                 from .downloader import fetch_image_checked
-                r = fetch_image_checked(u, self.image_headers(u),
-                                        timeout=IMG_ATTEMPT_TIMEOUT)
+                r = fetch_image_checked(
+                    u, self.image_headers(u), timeout=IMG_ATTEMPT_TIMEOUT,
+                    source=self.key, priority="prefetch")
                 dt = time.time() - t
                 if getattr(r, "status_code", 0) == 200 and len(getattr(r, "content", b"")) > 500:
                     if best is None or dt < best[1]:

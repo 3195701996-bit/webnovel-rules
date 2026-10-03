@@ -18,6 +18,9 @@ data/auth.json
 # macOS 系统文件
 .DS_Store
 
+# Gradle Kotlin DSL/session cache generated inside the Android project
+android/.kotlin/
+
 # 用户运行数据（代理测速结果）
 data/proxy_good.txt
 

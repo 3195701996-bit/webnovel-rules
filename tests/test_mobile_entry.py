@@ -153,3 +153,26 @@ def test_mobile_entry_stop_releases_everything(mobile_run):
     assert d["stopped_state"] == "stopped"
     assert d["port_closed"] is True, "停止后端口必须关闭"
     assert d["session_file_gone"] is True, "停止后凭据文件必须清除"
+
+
+def test_mobile_runtime_does_not_report_stopped_when_server_thread_survives():
+    """A hung serving thread means restore must not overwrite live runtime data."""
+    from server.mobile_entry import MobileRuntime, STATE_FAILED
+
+    class AliveThread:
+        def join(self, timeout=None):
+            self.timeout = timeout
+
+        def is_alive(self):
+            return True
+
+    runtime = MobileRuntime()
+    runtime.state = "ready"
+    runtime.paths = {"config": "/unused"}
+    runtime._thread = AliveThread()
+    runtime._server = object()
+    result = runtime.stop("test-timeout")
+
+    assert result["state"] == STATE_FAILED
+    assert "thread did not exit" in result["error"]
+    assert runtime._thread is not None, "live thread handle must be retained for diagnosis"

@@ -40,6 +40,24 @@ jobs:
       - name: Syntax check
         run: python -m compileall -q app.py server engine tests
 
+      - name: Set up Node.js for web regression checks
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Run web regressions and cross-client API contracts
+        env:
+          WR_TEST: "1"
+          WR_DISABLE_BACKGROUND: "1"
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -eu
+          for test_file in tests/js/*.test.js; do
+            node "$test_file"
+          done
+          python tools/check_client_server_contract.py
+          python tools/check_request_contract.py
+
       # 注：APK 的 Python 引擎在 Gradle 构建期从本仓库桌面源码生成快照
       # （android/app/build.gradle 的 syncPythonSnapshot 任务），仓库内不再有
       # 需要保持一致的"安卓镜像副本"，因此无需镜像一致性检查。
@@ -65,6 +83,48 @@ jobs:
         run: |
           if [ -n "$(git status --porcelain)" ]; then
             echo "::error::测试运行污染了工作树："
+            git status --porcelain
+            exit 1
+          fi
+
+  android-compile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Set up Python 3.13 for Chaquopy
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK platform
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Configure Chaquopy build Python
+        run: echo "CHAQUOPY_BUILD_PYTHON=$(python -c 'import sys; print(sys.executable)')" >> "$GITHUB_ENV"
+
+      - name: Run Android JVM tests, compile UI tests, and build debug APK (not published)
+        working-directory: android
+        # JVM 单测验证 Kotlin 业务逻辑；assembleDebug 再覆盖 Chaquopy Python 快照、
+        # 依赖 wheel 安装、pyc 编译、资源合并与 APK 封装；单独编译仪器测试源码，
+        # 确保 UI 回归本身可构建（运行期手势仍由目标设备验收）。产物不上传/发布。
+        run: ./gradlew :app:testDebugUnitTest :app:compileDebugAndroidTestKotlin :app:assembleDebug --no-daemon
+
+      - name: Assert Android build left no repository residue
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "::error::Android 构建污染了工作树："
             git status --porcelain
             exit 1
           fi

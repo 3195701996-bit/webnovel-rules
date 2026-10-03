@@ -5,6 +5,7 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.hasText
@@ -53,6 +54,7 @@ class ReaderUiAcceptanceTest {
     fun setUp() {
         book = SelfTestBook()
         book.create()
+        rule.activityRule.scenario.recreate()
         ev("已造自检书 key=${book.bookKey}")
     }
 
@@ -67,6 +69,7 @@ class ReaderUiAcceptanceTest {
     @Test
     fun shelfToDetailToNativeReader() {
         // 1) 冷启动落到书架，并列出合成书
+        rule.openCachedShelf()
         waitText(SelfTestBook.BOOK_NAME)
         ev("书架已列出 ${SelfTestBook.BOOK_NAME}")
         rule.onAllNodesWithText(SelfTestBook.BOOK_NAME)[0].assertIsDisplayed()
@@ -96,7 +99,7 @@ class ReaderUiAcceptanceTest {
         // "下一章"在底部栏与正文末尾各有一个，取第一个即可
         rule.onAllNodesWithText("下一章")[0].assertIsDisplayed()
         rule.onNodeWithText("目录").assertIsDisplayed()
-        rule.onNodeWithText("Aa").assertIsDisplayed()
+        rule.onNodeWithContentDescription("阅读设置").assertIsDisplayed()
         rule.onNodeWithText("1 / 3", substring = true).assertIsDisplayed()
 
         // 5) 未下载章节：明确提示 + 手动获取入口，不自动联网、不显示空正文
@@ -119,7 +122,7 @@ class ReaderUiAcceptanceTest {
         clickText("关闭")
 
         // 7) 阅读设置：字号/行距/主题，且立即生效不崩溃
-        clickText("Aa")
+        rule.onNodeWithContentDescription("阅读设置").performClick()
         waitText("阅读设置")
         rule.onNodeWithText("字号", substring = true).assertIsDisplayed()
         rule.onNodeWithText("行距", substring = true).assertIsDisplayed()
@@ -130,7 +133,7 @@ class ReaderUiAcceptanceTest {
         waitText(SelfTestBook.CHAPTER1_BODY_1, substring = true)
 
         // 8) 返回详情：进度已写入引擎 → 按钮变为"继续阅读 第 1 章"
-        clickText("← 返回")
+        rule.onNodeWithContentDescription("返回").performClick()
         waitText("继续阅读 第 1 章", timeoutMs = 20_000)
         ev("返回详情：按钮已变为『继续阅读 第 1 章』（进度已落库）")
 

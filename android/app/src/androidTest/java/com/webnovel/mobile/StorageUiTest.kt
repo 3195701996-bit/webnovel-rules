@@ -1,10 +1,12 @@
 package com.webnovel.mobile
 
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToNode
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.LargeTest
 import androidx.test.platform.app.InstrumentationRegistry
@@ -167,6 +169,8 @@ class StorageUiTest {
         ev("界面总占用：$totalNode")
         assertTrue("总占用应显示可读大小（GB/MB/KB/字节）", totalNode.contains("MB") ||
             totalNode.contains("KB") || totalNode.contains("GB") || totalNode.contains("字节"))
+        rule.onAllNodesWithTag("storage_list")[0]
+            .performScrollToNode(hasText(BOOK_NAME, substring = true))
         rule.waitUntil(60_000) { texts(BOOK_NAME) > 0 }
         ev("逐书明细里出现《$BOOK_NAME》")
 

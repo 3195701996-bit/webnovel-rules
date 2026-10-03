@@ -4,6 +4,8 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -88,6 +90,7 @@ class StaleCacheHealTest {
         gateway = EngineGateway(ctx)
         val st = runBlocking { gateway.connect() }
         assertTrue("引擎未就绪：$st", st is EngineState.Ready)
+        rule.activityRule.scenario.recreate()
     }
 
     @After
@@ -148,6 +151,7 @@ class StaleCacheHealTest {
     @Test
     fun readerShowsServerReasonForMissingCache() {
         // 书架 → 合成书 → 详情：头部必须显示磁盘口径的"已下载 1 章"
+        rule.openCachedShelf()
         rule.waitUntil(150_000) { texts(BOOK_NAME) > 0 }
         rule.onAllNodesWithText(BOOK_NAME)[0].performScrollTo().performClick()
         rule.waitUntil(60_000) { texts("目录 3 章 · 已下载 1 章") > 0 }

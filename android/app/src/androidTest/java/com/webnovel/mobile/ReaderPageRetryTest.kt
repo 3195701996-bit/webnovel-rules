@@ -11,6 +11,7 @@ import androidx.compose.ui.test.swipeLeft
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.LargeTest
 import androidx.test.platform.app.InstrumentationRegistry
+import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -54,12 +55,19 @@ class ReaderPageRetryTest {
 
     @Before
     fun setUp() {
+        // 阅读方向是跨进程持久化偏好；让该测试显式固定为纵向，避免前一用例
+        // 留下横向翻页设置后，这里滚动 LazyColumn 时永远找不到失败页。
+        ReaderPrefs.save(ctx, ReaderPrefs.load(ctx).copy(horizontalPaging = false))
+        // 详情页会预取首屏并共用磁盘缓存；坏图测试必须先清掉历史 URL 缓存，
+        // 否则即便磁盘文件已损坏，Coil 仍可能命中此前成功解码的正常图片。
+        clearImageCache(ctx)
         // 用**每次运行都不同**的 comic id：Coil 的图片缓存是按 URL 键的，
         // 复用同一个 id 时会拿到上一轮成功解码的缓存图，"坏页"根本不失败
         // （实测踩到：坏字节写进去了，界面照旧显示老图，失败提示不出现）。
         val uniq = "__selftest_retry_%d__".format(System.currentTimeMillis() % 1_000_000)
         comic = SelfTestComic(comicId = uniq)
         comic.create()
+        rule.activityRule.scenario.recreate()
     }
 
     @After
@@ -75,15 +83,48 @@ class ReaderPageRetryTest {
             "manga/downloads/${comic.sourceKey}/${comic.comicIdValue}/${SelfTestComic.CH1_ID}/0001.jpg")
         assertTrue("夹具的第 2 页应存在：$page2", page2.isFile)
         val good = page2.readBytes()
-        page2.writeBytes(ByteArray(4096) { 0x41 })          // 全是 'A'，不是图片
+        // 保留 JPEG 魔数但破坏后续数据：文件仍应被目录索引识别为一页，
+        // 解码阶段再失败。若连魔数也破坏，服务端会正确过滤该文件，阅读器
+        // 得到的目录就只有 1 页，测试等待“第 2 页失败”自然永远不会成立。
+        val bad = ByteArray(4096) { 0x41 }
+        good.copyInto(bad, destinationOffset = 0, startIndex = 0, endIndex = 3)
+        page2.writeBytes(bad)
         ev("已把第 2 页写成坏字节（${page2.length()} 字节）")
 
+        // 先通过与 Coil 相同的专用图片端口验证夹具本身：必须确实返回坏字节，
+        // 且 Android 解码器拒绝它。这样 UI 超时就不会再把 API/目录夹具问题
+        // 错归因成 Compose 失败态或图片重试逻辑。
+        val gateway = EngineGateway(ctx)
+        val state = runBlocking { gateway.connect() }
+        assertTrue("本机漫画引擎未就绪：$state", state is EngineState.Ready)
+        val endpoint = (state as EngineState.Ready).endpoint
+        val imageUrl = java.net.URL(
+            "http://127.0.0.1:${endpoint.imagePort}" +
+                comic.imageUrl(SelfTestComic.CH1_ID, 1) + "?catalog=local")
+        val conn = imageUrl.openConnection() as java.net.HttpURLConnection
+        val badPage = try {
+            conn.setRequestProperty("X-Mobile-Token", endpoint.token)
+            assertTrue("坏页图片 API 应正常返回磁盘内容，HTTP ${conn.responseCode}",
+                conn.responseCode in 200..299)
+            conn.inputStream.use { it.readBytes() }
+        } finally { conn.disconnect() }
+        assertTrue("图片端点应返回写入的坏字节", badPage.contentEquals(bad))
+        assertTrue("坏字节必须无法被 Android 图片解码器解析",
+            android.graphics.BitmapFactory.decodeByteArray(badPage, 0, badPage.size) == null)
+        ev("图片端点已确认返回不可解码坏字节（${badPage.size} 字节）")
+
         // 2) 进书架 → 自检漫画 → 开始阅读
+        rule.openCachedShelf()
         waitText(SelfTestComic.TITLE, timeoutMs = 150_000)
         rule.onAllNodesWithText(SelfTestComic.TITLE)[0].performClick()
         waitText("开始阅读", timeoutMs = 60_000)
         rule.onAllNodesWithText("开始阅读")[0].performClick()
-        waitText("1 / 3", timeoutMs = 60_000, substring = true)
+        // 阅读器初始沉浸隐藏页数栏；先等内容出现，再点中心查看本地目录页数。
+        rule.waitUntil(30_000) {
+            nodes("manga_pages") > 0 || nodes("manga_pager") > 0
+        }
+        rule.tapReaderCenterAndShowControls()
+        waitText("1 / 2", timeoutMs = 60_000, substring = true)
         ev("进入原生阅读器")
 
         // 3) 第 2 页必须显示失败，并且**有重试入口**。

@@ -65,6 +65,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
 import org.json.JSONObject
 
 /**
@@ -505,7 +506,7 @@ private fun NovelGroupCard(g: NovelSearchGroup, enabled: Boolean, onAdd: (NovelS
  */
 @Composable
 internal fun MangaSearchScreen(
-    gateway: EngineGateway,
+    gateway: MangaSearchGateway,
     ep: EngineEndpoint,
     loader: coil.ImageLoader,
     onOpen: (Dest) -> Unit,
@@ -552,6 +553,9 @@ internal fun MangaSearchScreen(
     var selfCheckMsg by rememberSaveable { mutableStateOf("") }
 
     val scope = rememberCoroutineScope()
+    // 搜索请求使用单调代际：切词/换源/翻页后，迟到的旧 SSE 事件不能再写入新结果。
+    var searchGeneration by remember { mutableIntStateOf(0) }
+    var searchJob by remember { mutableStateOf<Job?>(null) }
 
     // 已加载页 + **流式实时累积** → 去重后的结果列表。
     // 关键：流式过程中就把它算进来，结果才能"随源到达陆续上屏"；
@@ -586,13 +590,13 @@ internal fun MangaSearchScreen(
      * 搜索参数（唯一来源）：首搜、流式、翻页、流式回退**全部**用它拼路径。
      * 任何一条路径漏带 source 都会串源（以前整页都没带，是用户报"分源搜索失效"的主因）。
      */
-    fun searchQuery(suffix: String): String = buildString {
+    fun searchQuery(suffix: String, requestSource: String, requestOrder: String): String = buildString {
         append(suffix)
-        if (sourceKey.isNotBlank()) append("&source=").append(Uri.encode(sourceKey))
+        if (requestSource.isNotBlank()) append("&source=").append(Uri.encode(requestSource))
         // 与网页端对齐：网页恒发 order=mr（它的"默认"就是 mr）。App 缺省也发 mr ——
         // 统一服务端搜索缓存命名空间，App 才能命中网页已预热好的搜索缓存（秒开）；
         // 非 jm 源服务端本就忽略 order，行为不变。
-        append("&order=").append(Uri.encode(orderKey.ifBlank { "mr" }))
+        append("&order=").append(Uri.encode(requestOrder.ifBlank { "mr" }))
     }
 
     // 换源/换排序必须**清掉上一轮结果**：否则会出现"选了 A 源，屏幕上还挂着 B 源的结果"，
@@ -606,7 +610,13 @@ internal fun MangaSearchScreen(
         val changed = sourceKey != lastSource || orderKey != lastOrder
         lastSource = sourceKey
         lastOrder = orderKey
-        if (changed && (searched || pageBody.isNotBlank() || streamBody.isNotBlank())) {
+        if (changed && (searched || searching || loadingMore ||
+                pageBody.isNotBlank() || streamBody.isNotBlank())) {
+            searchGeneration += 1
+            searchJob?.cancel()
+            searchJob = null
+            searching = false
+            loadingMore = false
             pageBody = ""
             page = 1
             streamBody = ""
@@ -633,28 +643,40 @@ internal fun MangaSearchScreen(
             msg = "请输入关键词"
             return
         }
+        // 在启动新协程前固定请求身份并取消前一轮，所有路径共用同一代际守卫。
+        searchGeneration += 1
+        val requestId = searchGeneration
+        searchJob?.cancel()
+        searchJob = null
+        val requestSource = sourceKey
+        val requestOrder = orderKey
+        val requestSelected = sourceCards.firstOrNull { it.key == requestSource }
+        errorsText = ""
+        streamCached = false
         // 禁漫码识别：6/7 位纯数字 = JM 漫画 id，直接打开对应详情页（不走搜索）
         if (nextPage <= 1 && q.matches(Regex("\\d{6,7}")) &&
-            (sourceKey.isBlank() || sourceKey == "jm")) {
+            (requestSource.isBlank() || requestSource == "jm")) {
             onOpen(Dest.MangaDetail("jm", q))
             return
         }
-        if (selected?.status == "unsupported" ||
-            selected?.categoryLabel?.contains("不支持") == true) {
+        if (requestSelected?.status == "unsupported" ||
+            requestSelected?.categoryLabel?.contains("不支持") == true) {
             // 依赖判定只是运行环境检查；移动可用性分类才是 APK 是否能实际运行的口径。
             // 不把“缺依赖”或“通道不支持”发给后端再伪装成空结果。
             msg = "该源在当前安装包内不可用：" +
-                (selected?.categoryReason.orEmpty().ifBlank {
-                    selected?.reason.orEmpty().ifBlank { "缺少运行依赖或运行通道" }
+                (requestSelected?.categoryReason.orEmpty().ifBlank {
+                    requestSelected?.reason.orEmpty().ifBlank { "缺少运行依赖或运行通道" }
                 })
             return
         }
-        scope.launch {
+        searchJob = scope.launch {
             if (nextPage <= 1) searching = true else loadingMore = true
             msg = ""
             if (nextPage > 1) {
                 val r = gateway.httpText(ep.port,
-                    searchQuery("/api/manga/search?q=${Uri.encode(q)}&page=$nextPage"))
+                    searchQuery("/api/manga/search?q=${Uri.encode(q)}&page=$nextPage",
+                        requestSource, requestOrder))
+                if (requestId != searchGeneration) return@launch
                 if (!r.ok) {
                     msg = "搜索失败：HTTP ${r.code}" +
                         if (r.body.isNotBlank()) " · ${r.body.take(120)}" else ""
@@ -670,8 +692,10 @@ internal fun MangaSearchScreen(
             // ── 第 1 页：流式 ──
             page = 1; pageBody = ""
             streamBody = ""; streamDone = 0; streamTotal = 0
-            val path = searchQuery("/api/manga/search/stream?q=${Uri.encode(q)}&page=1")
+            val path = searchQuery("/api/manga/search/stream?q=${Uri.encode(q)}&page=1",
+                requestSource, requestOrder)
             val code = gateway.streamEvents(ep.port, path) { ev ->
+                if (requestId != searchGeneration) return@streamEvents
                 if (ev.optBoolean("finished")) {
                     // **缓存命中**时服务端把全量结果放在 finished 事件的 groups 里
                     // （只发一条事件）。不并入就会把"缓存里有结果"显示成"没有结果"——
@@ -720,6 +744,7 @@ internal fun MangaSearchScreen(
                     streamDone = ev.optInt("done"); streamTotal = ev.optInt("total")
                 }
             }
+            if (requestId != searchGeneration) return@launch
             if (code in 200..299) {
                 // 流式累积体就是"第 1 页"的结果，保持它在 streamBody 里（实时上屏），
                 // 翻页时会被对应页的响应替换显示。
@@ -728,7 +753,9 @@ internal fun MangaSearchScreen(
                 // 流式不可用（代理缓冲/中间层不支持）→ 明确回落阻塞端点，不静默失败
                 msg = "流式搜索不可用（HTTP $code），已改用一次性搜索"
                 val r = gateway.httpText(ep.port,
-                    searchQuery("/api/manga/search?q=${Uri.encode(q)}&page=1"))
+                    searchQuery("/api/manga/search?q=${Uri.encode(q)}&page=1",
+                        requestSource, requestOrder))
+                if (requestId != searchGeneration) return@launch
                 if (!r.ok) {
                     msg = "搜索失败：HTTP ${r.code}" +
                         if (r.body.isNotBlank()) " · ${r.body.take(120)}" else ""
@@ -821,221 +848,241 @@ internal fun MangaSearchScreen(
         if (presetKeyword.isNotBlank() && !searched && !searching) doSearch(1)
     }
 
-    Scaffold(topBar = {
-        TopAppBar(
-            title = { Text("发现漫画", maxLines = 1) },
-            navigationIcon = { TextButton(onClick = onBack) { Text("← 返回") } },
-        )
-    }) { pad ->
-        Column(Modifier.padding(pad).fillMaxSize().padding(horizontal = WnSpace.md)) {
-            Text("找到下一本想看的漫画", style = MaterialTheme.typography.headlineMedium,
-                color = WnColors.ink, modifier = Modifier.padding(top = WnSpace.sm))
-            Text("跨源搜索，结果会随着源站响应逐步出现。",
-                style = MaterialTheme.typography.bodySmall, color = WnColors.inkDim,
-                modifier = Modifier.padding(top = WnSpace.xs, bottom = WnSpace.md))
-            WnHairlineCard {
-                Column(Modifier.padding(WnSpace.md)) {
-                    Row(verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(WnSpace.sm)) {
-                        OutlinedTextField(
-                            value = keyword,
-                            onValueChange = { keyword = it },
-                            label = { Text("输入漫画名") },
-                            placeholder = { Text("例如：海贼王、情书") },
-                            singleLine = true,
-                            shape = WnPillShape,
-                            colors = wnSearchFieldColors(),
-                            modifier = Modifier.weight(1f).testTag("manga_search_field"),
-                        )
-                        Button(onClick = { doSearch() }, enabled = !searching,
-                            shape = WnPillShape,
-                            modifier = Modifier.testTag("manga_search_btn")) {
-                            Text(if (searching) "搜索中…" else "搜索")
+    Scaffold { pad ->
+        LazyColumn(
+            modifier = Modifier.padding(pad).fillMaxSize()
+                .padding(horizontal = WnSpace.md)
+                .then(if (hits.isNotEmpty() || searched) Modifier.testTag("manga_search_results")
+                      else Modifier),
+            verticalArrangement = Arrangement.spacedBy(WnSpace.sm),
+            contentPadding = PaddingValues(bottom = 20.dp),
+        ) {
+            item {
+                Column {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        TextButton(onClick = onBack, modifier = Modifier.testTag("manga_search_back")) {
+                            Text("← 返回")
+                        }
+                        Text("发现漫画", style = MaterialTheme.typography.titleLarge,
+                            color = WnColors.ink, maxLines = 1)
+                    }
+                    Text("找到下一本想看的漫画", style = MaterialTheme.typography.headlineMedium,
+                        color = WnColors.ink, modifier = Modifier.padding(top = WnSpace.sm))
+                    Text("跨源搜索，结果会随着源站响应逐步出现。",
+                        style = MaterialTheme.typography.bodySmall, color = WnColors.inkDim,
+                        modifier = Modifier.padding(top = WnSpace.xs, bottom = WnSpace.md))
+                    WnHairlineCard {
+                        Column(Modifier.padding(WnSpace.md)) {
+                            Row(verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(WnSpace.sm)) {
+                                OutlinedTextField(
+                                    value = keyword,
+                                    onValueChange = { keyword = it },
+                                    label = { Text("输入漫画名") },
+                                    placeholder = { Text("例如：海贼王、情书") },
+                                    singleLine = true,
+                                    shape = WnPillShape,
+                                    colors = wnSearchFieldColors(),
+                                    modifier = Modifier.weight(1f).testTag("manga_search_field"),
+                                )
+                                Button(onClick = { doSearch() },
+                                    shape = WnPillShape,
+                                    modifier = Modifier.testTag("manga_search_btn")) {
+                                    Text(if (searching) "重新搜索" else "搜索")
+                                }
+                            }
+                            Text("支持源站实时搜索 · 已下载内容可离线阅读",
+                                style = MaterialTheme.typography.labelSmall, color = WnColors.inkDim,
+                                modifier = Modifier.padding(top = WnSpace.sm, start = WnSpace.xs))
                         }
                     }
-                    Text("支持源站实时搜索 · 已下载内容可离线阅读",
-                        style = MaterialTheme.typography.labelSmall, color = WnColors.inkDim,
-                        modifier = Modifier.padding(top = WnSpace.sm, start = WnSpace.xs))
-                }
-            }
-            Spacer(Modifier.height(WnSpace.md))
-            WnSectionHeader("搜索范围", trailing = {
-                WnStatusPill(if (sourceKey.isBlank()) "全部源" else "单源搜索", WnColors.info)
-            })
-            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.CenterVertically) {
-                WnFilterChip(selected = sourceKey.isBlank(),
-                    onClick = { sourceKey = ""; orderKey = "" }, label = "全部源",
-                    modifier = Modifier.testTag("manga_src_all"))
-                for (card in sourceCards) {
-                    val suffix = when {
-                        card.categoryLabel.contains("不支持") -> "不支持"
-                        card.categoryLabel.contains("降级") -> "降级"
-                        card.categoryLabel.contains("待验证") -> "待验证"
-                        card.categoryLabel.contains("已验证") -> "已验证"
-                        card.status == "unsupported" -> "缺依赖"
-                        else -> card.status
-                    }
-                    WnFilterChip(selected = sourceKey == card.key,
-                        onClick = { sourceKey = card.key; if (!card.supportsOrder) orderKey = "" },
-                        label = if (suffix.isBlank()) card.name else "${card.name} · $suffix",
-                        modifier = Modifier.testTag("manga_src_${card.key}"))
-                }
-            }
-            if (selected != null) {
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    buildString {
-                        append("当前源：").append(selected.name)
-                        append("（移动可用性：")
-                        append(selected.categoryLabel.ifBlank { selected.status })
-                        if (selected.reason.isNotBlank()) append(" · ").append(selected.reason)
-                        append("；实测：").append(selected.verifyLabel).append("）")
-                    },
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (selected.status == "unsupported") MaterialTheme.colorScheme.error
-                            else MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.testTag("manga_src_note"),
-                )
-                if (selected.supportsOrder) {
-                    Spacer(Modifier.height(4.dp))
+                    Spacer(Modifier.height(WnSpace.md))
+                    WnSectionHeader("搜索范围", trailing = {
+                        WnStatusPill(if (sourceKey.isBlank()) "全部源" else "单源搜索", WnColors.info)
+                    })
                     Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        val orders = listOf("" to "默认", "mr" to "最新", "mv" to "最多浏览",
-                            "mp" to "最多图片", "tf" to "今日最多", "tr" to "本周最多",
-                            "md" to "本月最多", "pa" to "最多喜欢")
-                        for ((k, label) in orders) {
-                            WnFilterChip(
-                                selected = orderKey == k,
-                                onClick = { orderKey = k },
-                                label = label,
-                                modifier = Modifier.testTag("manga_order_${k.ifBlank { "default" }}"),
-                            )
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically) {
+                        WnFilterChip(selected = sourceKey.isBlank(),
+                            onClick = { sourceKey = ""; orderKey = "" }, label = "全部源",
+                            modifier = Modifier.testTag("manga_src_all"))
+                        for (card in sourceCards) {
+                            val suffix = when {
+                                card.categoryLabel.contains("不支持") -> "不支持"
+                                card.categoryLabel.contains("降级") -> "降级"
+                                card.categoryLabel.contains("待验证") -> "待验证"
+                                card.categoryLabel.contains("已验证") -> "已验证"
+                                card.status == "unsupported" -> "缺依赖"
+                                else -> card.status
+                            }
+                            WnFilterChip(selected = sourceKey == card.key,
+                                onClick = { sourceKey = card.key; if (!card.supportsOrder) orderKey = "" },
+                                label = if (suffix.isBlank()) card.name else "${card.name} · $suffix",
+                                modifier = Modifier.testTag("manga_src_${card.key}"))
                         }
                     }
-                }
-            }
-            // 流式进度：让用户看到"结果正在陆续到达"，而不是盯着一个转圈
-            if (searching && streamTotal > 0) {
-                Spacer(Modifier.height(6.dp))
-                Text("已返回 $streamDone/$streamTotal 个源 · 已显示 ${hits.size} 条",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.testTag("manga_search_progress"))
-            }
-            if (searched) {
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    buildString {
-                        // 与网页端同款的状态行：「第 N 页 · X 部」（网页端就是这一句）
-                        append("第 $page 页 · ${hits.size} 部")
-                        if (sourceKey.isNotBlank()) append(" · 源：${selected?.name ?: sourceKey}")
-                        if (streamTotal > 0) append("（$streamDone/$streamTotal 个源已返回）")
-                        if (streamCached) append(" · 缓存")
-                        if (meta.errors.isNotEmpty()) append(" · ${meta.errors.size} 个源失败")
-                    },
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                meta.errors.entries.take(2).forEach { (k, v) ->
-                    Text("· $k：${v.take(60)}", style = MaterialTheme.typography.labelSmall,
-                         color = MaterialTheme.colorScheme.error)
-                }
-                if (errorsText.isNotBlank()) {
-                    // 详细错误只在空结果/诊断区域展开；结果页只保留一行状态，
-                    // 不让源站错误文本占掉漫画结果的垂直浏览空间。
-                    WnStatusPill("部分源未返回 · 点重试或运行自检查看原因",
-                        WnColors.danger, Modifier.testTag("manga_search_errors"))
-                }
-                if (hits.isNotEmpty()) {
-                    // **网页端同款分页**（0.67.0）：◀ 上一页 + 页码 + 下一页 ▶。
-                    // 页码窗口只往后延伸一页（源站不给 total，更远的页数无从得知），
-                    // 用「…」表示"还有/更早还有" —— 与网页端 `updatePager()` 同一套规则。
-                    // 放在列表上方：懒加载列表里的离屏项在测试里不可点。
-                    Spacer(Modifier.height(6.dp))
-                    val busy = loadingMore || searching
-                    val start = maxOf(1, page - 2)
-                    val end = if (meta.hasMore) page + 1 else page
-                    Row(verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        modifier = Modifier.horizontalScroll(rememberScrollState())
-                            .testTag("manga_search_pager")) {
-                        IconButton(
-                            onClick = { doSearch(nextPage = page - 1) },
-                            enabled = !busy && page > 1,
-                            modifier = Modifier.defaultMinSize(48.dp, 48.dp)
-                                .testTag("manga_search_prev"),
-                        ) {
-                            Icon(
-                                Icons.AutoMirrored.Filled.KeyboardArrowLeft,
-                                contentDescription = "上一页",
-                                tint = if (!busy && page > 1) WnColors.accent
-                                       else WnColors.inkDim,
-                            )
-                        }
-                        if (start > 1) {
-                            PagerNum(1, page, busy) { doSearch(nextPage = it) }
-                            Text("…", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        for (p in start..end) {
-                            PagerNum(p, page, busy) { doSearch(nextPage = it) }
-                        }
-                        if (meta.hasMore) {
-                            Text("…", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        IconButton(
-                            onClick = { doSearch(nextPage = page + 1) },
-                            enabled = !busy && meta.hasMore,
-                            modifier = Modifier.defaultMinSize(48.dp, 48.dp)
-                                .testTag("manga_search_next"),
-                        ) {
-                            if (loadingMore) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(18.dp),
-                                    strokeWidth = 2.dp,
-                                    color = WnColors.accent,
-                                )
-                            } else {
-                                Icon(
-                                    Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                                    contentDescription = "下一页",
-                                    tint = if (!busy && meta.hasMore) WnColors.accent
-                                           else WnColors.inkDim,
-                                )
+                    if (selected != null) {
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            buildString {
+                                append("当前源：").append(selected.name)
+                                append("（移动可用性：")
+                                append(selected.categoryLabel.ifBlank { selected.status })
+                                if (selected.reason.isNotBlank()) append(" · ").append(selected.reason)
+                                append("；实测：").append(selected.verifyLabel).append("）")
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (selected.status == "unsupported") MaterialTheme.colorScheme.error
+                                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.testTag("manga_src_note"),
+                        )
+                        if (selected.supportsOrder) {
+                            Spacer(Modifier.height(4.dp))
+                            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                val orders = listOf("" to "默认", "mr" to "最新", "mv" to "最多浏览",
+                                    "mp" to "最多图片", "tf" to "今日最多", "tr" to "本周最多",
+                                    "md" to "本月最多", "pa" to "最多喜欢")
+                                for ((k, label) in orders) {
+                                    WnFilterChip(
+                                        selected = orderKey == k,
+                                        onClick = { orderKey = k },
+                                        label = label,
+                                        modifier = Modifier.testTag("manga_order_${k.ifBlank { "default" }}"),
+                                    )
+                                }
                             }
                         }
-                        if (loadingMore) {
-                            Text("加载中…",
-                                 style = MaterialTheme.typography.labelSmall,
-                                 color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    // 流式进度：让用户看到"结果正在陆续到达"，而不是盯着一个转圈
+                    if (searching && streamTotal > 0) {
+                        Spacer(Modifier.height(6.dp))
+                        Text("已返回 $streamDone/$streamTotal 个源 · 已显示 ${hits.size} 条",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.testTag("manga_search_progress"))
+                    }
+                    if (searched) {
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            buildString {
+                                // 与网页端同款的状态行：「第 N 页 · X 部」（网页端就是这一句）
+                                append("第 $page 页 · ${hits.size} 部")
+                                if (sourceKey.isNotBlank()) append(" · 源：${selected?.name ?: sourceKey}")
+                                if (streamTotal > 0) append("（$streamDone/$streamTotal 个源已返回）")
+                                if (streamCached) append(" · 缓存")
+                                if (meta.errors.isNotEmpty()) append(" · ${meta.errors.size} 个源失败")
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.testTag("manga_search_summary"),
+                        )
+                        meta.errors.entries.take(2).forEach { (k, v) ->
+                            Text("· $k：${v.take(60)}", style = MaterialTheme.typography.labelSmall,
+                                 color = MaterialTheme.colorScheme.error)
                         }
-                        if (!meta.hasMore) {
-                            Text("已到最后一页",
-                                 style = MaterialTheme.typography.labelSmall,
-                                 color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        if (errorsText.isNotBlank()) {
+                            // 详细错误只在空结果/诊断区域展开；结果页只保留一行状态，
+                            // 不让源站错误文本占掉漫画结果的垂直浏览空间。
+                            WnStatusPill(
+                                if (meta.networkDown) "本机网络不可用 · 恢复网络后点重试"
+                                else "部分源未返回 · 点重试或运行自检查看原因",
+                                WnColors.danger, Modifier.testTag("manga_search_errors"))
+                        }
+                        if (hits.isNotEmpty()) {
+                            // **网页端同款分页**（0.67.0）：◀ 上一页 + 页码 + 下一页 ▶。
+                            // 页码窗口只往后延伸一页（源站不给 total，更远的页数无从得知），
+                            // 用「…」表示"还有/更早还有" —— 与网页端 `updatePager()` 同一套规则。
+                            // 放在列表上方：懒加载列表里的离屏项在测试里不可点。
+                            Spacer(Modifier.height(6.dp))
+                            val busy = loadingMore || searching
+                            val start = maxOf(1, page - 2)
+                            val end = if (meta.hasMore) page + 1 else page
+                            Row(verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                modifier = Modifier.horizontalScroll(rememberScrollState())
+                                    .testTag("manga_search_pager")) {
+                                IconButton(
+                                    onClick = { doSearch(nextPage = page - 1) },
+                                    enabled = !busy && page > 1,
+                                    modifier = Modifier.defaultMinSize(48.dp, 48.dp)
+                                        .testTag("manga_search_prev"),
+                                ) {
+                                    Icon(
+                                        Icons.AutoMirrored.Filled.KeyboardArrowLeft,
+                                        contentDescription = "上一页",
+                                        tint = if (!busy && page > 1) WnColors.accent
+                                               else WnColors.inkDim,
+                                    )
+                                }
+                                if (start > 1) {
+                                    PagerNum(1, page, busy) { doSearch(nextPage = it) }
+                                    Text("…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                                for (p in start..end) {
+                                    PagerNum(p, page, busy) { doSearch(nextPage = it) }
+                                }
+                                if (meta.hasMore) {
+                                    Text("…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                                IconButton(
+                                    onClick = { doSearch(nextPage = page + 1) },
+                                    enabled = !busy && meta.hasMore,
+                                    modifier = Modifier.defaultMinSize(48.dp, 48.dp)
+                                        .testTag("manga_search_next"),
+                                ) {
+                                    if (loadingMore) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(18.dp),
+                                            strokeWidth = 2.dp,
+                                            color = WnColors.accent,
+                                        )
+                                    } else {
+                                        Icon(
+                                            Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                            contentDescription = "下一页",
+                                            tint = if (!busy && meta.hasMore) WnColors.accent
+                                                   else WnColors.inkDim,
+                                        )
+                                    }
+                                }
+                                if (loadingMore) {
+                                    Text("加载中…",
+                                         style = MaterialTheme.typography.labelSmall,
+                                         color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                                if (!meta.hasMore) {
+                                    Text("已到最后一页",
+                                         style = MaterialTheme.typography.labelSmall,
+                                         color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
                         }
                     }
+                    // 搜索进行中也把逐源失败原因显示出来：真断网时源 1s 内就报错，
+                    // 让用户马上看到"本机网络"原因，而不是盯着进度等收尾（收尾还要等
+                    // 服务端提前结束或源站期限）
+                    if (!searched && errorsText.isNotBlank()) {
+                        Spacer(Modifier.height(4.dp))
+                        WnStatusPill("部分源仍在查询或失败",
+                            WnColors.danger, Modifier.testTag("manga_search_errors_live"))
+                    }
+                    if (msg.isNotBlank()) {
+                        Spacer(Modifier.height(6.dp))
+                        Text(msg, color = MaterialTheme.colorScheme.error,
+                             style = MaterialTheme.typography.bodySmall)
+                    }
+                    Spacer(Modifier.height(8.dp))
                 }
             }
-            // 搜索进行中也把逐源失败原因显示出来：真断网时源 1s 内就报错，
-            // 让用户马上看到"本机网络"原因，而不是盯着进度等收尾（收尾还要等
-            // 服务端提前结束或源站期限）
-            if (!searched && errorsText.isNotBlank()) {
-                Spacer(Modifier.height(4.dp))
-                WnStatusPill("部分源仍在查询或失败",
-                    WnColors.danger, Modifier.testTag("manga_search_errors_live"))
-            }
-            if (msg.isNotBlank()) {
-                Spacer(Modifier.height(6.dp))
-                Text(msg, color = MaterialTheme.colorScheme.error,
-                     style = MaterialTheme.typography.bodySmall)
-            }
-            Spacer(Modifier.height(8.dp))
             when {
                 searching && hits.isEmpty() ->
-                    Box(Modifier.fillMaxSize(), Alignment.Center) { CircularProgressIndicator() }
-                searched && hits.isEmpty() ->
+                    item {
+                        Box(Modifier.fillMaxWidth().height(180.dp), Alignment.Center) {
+                            CircularProgressIndicator()
+                        }
+                    }
+                searched && hits.isEmpty() -> item {
                     Column(Modifier.fillMaxWidth().padding(top = WnSpace.lg)) {
                         if (meta.networkDown) {
                             // 真断网（飞行模式/无信号）：说"没有结果"是错的归因——
@@ -1092,14 +1139,11 @@ internal fun MangaSearchScreen(
                             }
                         }
                     }
+                }
                 hits.isNotEmpty() -> {
                     // （预取已移除：结果一到就并发预取封面/详情，会把封面代理 3 路闸
                     //  打满出 503、并让 jm/拷贝这类有风控的源惩罚性降速——封面随
                     //  滚动加载 + WnCoverImage 的 503 退避重试即可，源站惩罚并发。）
-                    LazyColumn(Modifier.weight(1f).fillMaxWidth()
-                        .testTag("manga_search_results"),
-                    verticalArrangement = Arrangement.spacedBy(WnSpace.sm),
-                    contentPadding = PaddingValues(bottom = 16.dp)) {
                     items(hits, key = { it.source + ":" + it.comicId }) { h ->
                         WnHairlineCard(
                             modifier = Modifier.testTag("manga_result_card"),
@@ -1140,11 +1184,10 @@ internal fun MangaSearchScreen(
                             }
                         }
                     }
-                    }
                 }
                 // 既没在搜、也没结果：什么都不渲染（不摆一个空的结果容器，
                 // 否则"结果标签还在、里面 0 条"会让人以为结果没被清掉——实测被用例抓到）
-                else -> Spacer(Modifier.fillMaxSize())
+                else -> item { Spacer(Modifier.height(1.dp)) }
             }
         }
     }

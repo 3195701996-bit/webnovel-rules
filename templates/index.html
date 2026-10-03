@@ -3,18 +3,18 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>webnovel_rules · 书源小说爬虫</title>
+<title>发现作品 · webnovel_rules</title>
 <link rel="icon" href="data:,">
 <link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body>
 <header class="topbar">
-  <span class="logo">📚 webnovel_rules<small>书源驱动 · 小说爬虫</small></span>
+  <span class="logo">📚 webnovel_rules<small>发现 · 收藏 · 阅读</small></span>
   <nav>
-    <a href="/" class="active">🔍 搜索/书库</a>
-    <a href="/sources">书源管理</a>
-    <a href="/library">📖 我的书库</a>
-    <a href="/tasks_page">📋 任务管理</a>
+    <a href="/" class="active">🔍 发现</a>
+    <a href="/sources">来源管理</a>
+    <a href="/library">📖 书架</a>
+    <a href="/tasks_page">⬇ 下载</a>
     <a href="/manga">🎨 漫画</a>
     <a href="#" id="nav-clean" title="清理缓存（漫画图片/搜索/目录缓存）">🧹 清理缓存</a>
   </nav>
@@ -22,10 +22,10 @@
 </header>
 
 <div class="container">
-  <div id="netip-bar" style="display:none;margin-bottom:12px;padding:8px 12px;border-radius:8px;background:var(--bg-2,#1c2230);border:1px solid var(--border);font-size:.8rem;color:var(--text-dim);"></div>
+  <div id="netip-bar" style="display:none;margin-bottom:12px;padding:8px 12px;border-radius:8px;background:var(--bg-2,#fbf8f2);border:1px solid var(--border);font-size:.8rem;color:var(--text-dim);"></div>
   <div class="hero">
-    <h1>🔍 书源搜索</h1>
-    <div class="sub">基于已导入的 legado 书源，按书名或作者搜索并一键爬取</div>
+    <h1>发现作品</h1>
+    <div class="sub">搜索小说，选择合适的来源后即可加入下载；漫画可从上方入口查找。</div>
     <div class="search-bar">
       <div class="q-wrap">
         <input type="text" id="search-q" placeholder="书名或作者，如：龙族 / 江南 / 百变小樱"
@@ -35,16 +35,19 @@
       <select id="search-source">
         <option value="">全部书源</option>
       </select>
-      <select id="search-type" title="搜索类型（结果必须包含关键词）">
-        <option value="all">全部</option>
-        <option value="name">书名</option>
-        <option value="author">作者</option>
-      </select>
-      <select id="search-sort" title="排序方式">
-        <option value="default">默认（相关性）</option>
-        <option value="update">最近更新</option>
-        <option value="word">字数最多</option>
-      </select>
+      <details class="search-options" open>
+        <summary>筛选与排序</summary>
+        <select id="search-type" title="搜索类型（结果必须包含关键词）" aria-label="搜索类型">
+          <option value="all">全部类型</option>
+          <option value="name">按书名</option>
+          <option value="author">按作者</option>
+        </select>
+        <select id="search-sort" title="排序方式" aria-label="排序方式">
+          <option value="default">默认（相关性）</option>
+          <option value="update">最近更新</option>
+          <option value="word">字数最多</option>
+        </select>
+      </details>
       <button class="btn primary btn-search" id="btn-search">🔍 搜索</button>
     </div>
     <div class="quick">
@@ -53,7 +56,7 @@
       <a data-q="斗破苍穹">斗破苍穹</a>
       <a data-q="剑来">剑来</a>
       <a data-q="中律十二">作者·中律十二</a>
-      <span class="label" id="search-hint" style="margin-left:auto;"></span>
+    <span class="label" id="search-hint" style="margin-left:auto;"></span>
     </div>
     <div class="hist-row" id="hist-row" style="display:none;"></div>
   </div>
@@ -62,9 +65,9 @@
   <div id="search-results"></div>
 
   <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:8px;">
-    <a href="/library" class="btn primary" style="padding:14px 26px;font-size:1rem;">📖 进入我的书库</a>
-    <a href="/tasks_page" class="btn" style="padding:14px 26px;font-size:1rem;">📋 任务管理</a>
-    <a href="/sources" class="btn" style="padding:14px 26px;font-size:1rem;">书源管理</a>
+    <a href="/library" class="btn primary" style="padding:14px 26px;font-size:1rem;">📖 打开书架</a>
+    <a href="/tasks_page" class="btn" style="padding:14px 26px;font-size:1rem;">⬇ 下载进度</a>
+    <a href="/sources" class="btn" style="padding:14px 26px;font-size:1rem;">管理内容来源</a>
   </div>
 </div>
 
@@ -88,13 +91,29 @@ function fetchTimeout(url, opts, ms) {
 
 // 书源下拉
 async function loadSources() {
-  const r = await fetch('/api/sources');
-  const {sources} = await r.json();
   const sel = $('#search-source');
-  const enabled = sources.filter(s => s.enabled && s.searchUrl);
-  sel.innerHTML = '<option value="">全部书源（' + enabled.length + '）</option>' +
-    enabled.map(s => `<option value="${s.uid}">${esc(s.bookSourceName)}</option>`).join('');
-  $('#search-hint').textContent = '已启用可搜索书源 ' + enabled.length + ' 个｜书源管理见上方导航';
+  const previous = sel.value;
+  try {
+    const r = await fetchTimeout('/api/sources', {}, 10000);
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const data = await r.json();
+    if (!Array.isArray(data && data.sources)) throw new Error('书源列表响应无效');
+    const enabled = data.sources.filter(s => s.enabled && s.searchUrl);
+    const requested = new URLSearchParams(location.search).get('source') || previous;
+    sel.innerHTML = '<option value="">全部书源（' + enabled.length + '）</option>' +
+      enabled.map(s => `<option value="${esc(s.uid)}">${esc(s.bookSourceName)}</option>`).join('');
+    if (enabled.some(s => String(s.uid) === requested)) sel.value = requested;
+    $('#search-hint').textContent = enabled.length + ' 个可用内容来源';
+    sel.disabled = enabled.length === 0;
+    return true;
+  } catch (e) {
+    // 来源列表故障不应阻断缓存结果恢复或搜索页初始化；保留“全部来源”语义，
+    // 将具体故障放在筛选器附近，用户仍可使用可用来源进行搜索。
+    sel.disabled = false;
+    $('#search-hint').textContent = '内容来源暂不可用，搜索时可重试';
+    $('#search-hint').title = (e && e.message) || String(e);
+    return false;
+  }
 }
 
 // A03: 稳定 group key -> 卡片 DOM 的索引。新增/更新/收尾重排都经它定位卡片；
@@ -118,7 +137,7 @@ function groupRowHTML(g, selIdx) {
   if (mainSrc.update_time) detailBits.push('更新：' + esc(mainSrc.update_time));
   if (mainSrc.word_count) detailBits.push('字数：' + esc(mainSrc.word_count));
   const srcBadge = srcs.length > 1
-    ? `<span class="tag" style="color:var(--accent);border-color:rgba(232,179,75,.4);">🔀 ${srcs.length} 源</span>`
+    ? `<span class="tag" style="color:var(--accent);border-color:color-mix(in srgb,var(--accent) 40%,transparent);background:var(--accent-soft);">🔀 ${srcs.length} 源</span>`
     : `<span class="src-tag">${esc((mainSrc.source_name || '未知源').slice(0, 14))}</span>`;
   // 多源时附来源明细（源名+章数），一目了然
   const srcDetail = srcs.length > 1
@@ -585,7 +604,7 @@ function renderSearchEmpty(q) {
   _rowIndex.clear();  // A03: 整盒重绘，同步丢弃 DOM 索引
   box.innerHTML = '<div class="empty"><div class="big">📚</div>没有找到相关小说' +
     '<div style="color:var(--text-dim);font-size:.85rem;margin-top:6px;">试试其他关键词，或检查书源是否可用</div>' +
-    '<div style="margin-top:14px;"><a class="btn primary" href="/sources">去书源管理 →</a></div></div>';
+    '<div style="margin-top:14px;"><a class="btn primary" href="/sources">管理内容来源 →</a></div></div>';
 }
 // C06: 源失败态——与"真正无结果"严格区分，不得描述为"搜不到书"
 function renderSearchSourceFail(q, errCount, total) {
@@ -593,8 +612,8 @@ function renderSearchSourceFail(q, errCount, total) {
   _rowIndex.clear();  // A03: 整盒重绘，同步丢弃 DOM 索引
   box.innerHTML = '<div class="empty"><div class="big">🔌</div>书源连接失败，未能完成搜索' +
     '<div style="color:var(--text-dim);font-size:.85rem;margin-top:6px;">' +
-    errCount + (total ? '/' + total : '') + ' 个书源暂时无法访问（源站故障或网络问题），不代表没有这本书；请稍后重试或到书源管理校验</div>' +
-    '<div style="margin-top:14px;"><a class="btn primary" href="/sources">去书源管理 →</a></div></div>';
+    errCount + (total ? '/' + total : '') + ' 个内容来源暂时无法访问（站点故障或网络问题），不代表没有这本书；请稍后重试或检查来源状态</div>' +
+    '<div style="margin-top:14px;"><a class="btn primary" href="/sources">管理内容来源 →</a></div></div>';
 }
 document.querySelectorAll('.quick a[data-q]').forEach(a => a.onclick = () => {
   $('#search-q').value = a.dataset.q;
@@ -644,6 +663,23 @@ function initRestoreSearch() {
   doNovelSearch(targetQ, true);  // 静默刷新；空结果不会清空已显示内容
 }
 
+// Desktop keeps the advanced selects in the primary search row. A closed
+// <details> hides its children even when the parent uses display:contents,
+// so keep it open on desktop and use the visible disclosure only on mobile.
+const searchOptions = document.querySelector('.search-options');
+const searchOptionsViewport = window.matchMedia('(max-width: 768px)');
+function syncSearchOptionsViewport() {
+  searchOptions.open = !searchOptionsViewport.matches;
+}
+syncSearchOptionsViewport();
+if (searchOptionsViewport.addEventListener) {
+  searchOptionsViewport.addEventListener('change', syncSearchOptionsViewport);
+} else if (searchOptionsViewport.addListener) {
+  searchOptionsViewport.addListener(syncSearchOptionsViewport);
+}
+
+// loadSources 将网络失败收敛为 false 而非 reject；所以等待筛选器初始化不会
+// 因来源故障阻断缓存/URL 搜索状态恢复。
 loadSources().then(() => setTimeout(initRestoreSearch, 50));
 renderHistory();
 // 输入框聚焦/有内容时隐藏 "/" 快捷键提示

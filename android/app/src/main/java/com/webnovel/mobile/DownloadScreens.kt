@@ -86,10 +86,15 @@ internal fun DownloadsScreen(
     }
 
     val running = tasks.filter { it.running || it.status == "queued" }
-    val paused = tasks.filter { it.status == "paused" || it.status == "stopped" }
+    // Error tasks are resumable (notably local-storage failures after the user
+    // frees space); keep them in the actionable section so TaskCard receives the
+    // resume callback instead of rendering a dead-end "delete record" card.
+    val paused = tasks.filter {
+        it.status == "paused" || it.status == "stopped" || it.status == "error"
+    }
     val finished = tasks.filter {
         !it.running && it.status != "queued" &&
-            it.status != "paused" && it.status != "stopped"
+            it.status != "paused" && it.status != "stopped" && it.status != "error"
     }
 
     LazyColumn(
@@ -130,7 +135,12 @@ internal fun DownloadsScreen(
                             val n = runCatching {
                                 org.json.JSONObject(r.body).optInt("resumed")
                             }.getOrDefault(0)
-                            actionMsg = if (r.ok) "已恢复 $n 个漫画下载" else "全部继续失败：HTTP ${r.code}"
+                            val skipped = runCatching {
+                                org.json.JSONObject(r.body).optInt("skipped")
+                            }.getOrDefault(0)
+                            actionMsg = if (r.ok) "已恢复 $n 个漫画下载" +
+                                (if (skipped > 0) "，$skipped 个未启动（任务状态已变化）" else "")
+                            else "全部继续失败：HTTP ${r.code}"
                             refresh()
                         }
                     },
@@ -183,8 +193,14 @@ internal fun DownloadsScreen(
                             val n = runCatching {
                                 org.json.JSONObject(r.body).optInt("started")
                             }.getOrDefault(0)
-                            actionMsg = if (r.ok) "已创建更新下载任务：$n 部（见上方队列）"
-                                        else "下载更新失败：HTTP ${r.code} ${r.body.take(80)}"
+                            val favoriteFailures = runCatching {
+                                org.json.JSONObject(r.body).optInt("favorite_failures")
+                            }.getOrDefault(0)
+                            actionMsg = if (r.ok) {
+                                "已创建更新下载任务：$n 部（见上方队列）" +
+                                    if (favoriteFailures > 0)
+                                        "；$favoriteFailures 部自动收藏失败，请手动收藏" else ""
+                            } else "下载更新失败：HTTP ${r.code} ${r.body.take(80)}"
                             refresh()
                         }
                     },

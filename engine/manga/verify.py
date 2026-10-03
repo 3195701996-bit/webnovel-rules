@@ -266,7 +266,10 @@ def verify_one(key, keyword=None, budget=None, caps=None, now=_now):
         headers = adapter.image_headers(urls[0]) or {}
         # 注意：fetch_image_checked 返回的是**响应对象**（.status_code/.content），
         # 不是 bytes——早先按 bytes 处理导致 TypeError（实测踩到，MangaDex 因此被误判失败）。
-        resp = fetch_image_checked(u, headers, timeout=b["image_bytes"])
+        resp = fetch_image_checked(
+            u, headers, timeout=b["image_bytes"],
+            source=getattr(adapter, "key", key),
+            priority="prefetch")
         code = int(getattr(resp, "status_code", 200) or 0)
         data = getattr(resp, "content", None)
         if data is None:

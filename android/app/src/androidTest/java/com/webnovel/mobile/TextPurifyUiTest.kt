@@ -1,6 +1,7 @@
 package com.webnovel.mobile
 
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.performClick
@@ -150,8 +151,10 @@ class TextPurifyUiTest {
     fun ui_offersPurifyWithPreviewAndConfirm() {
         gateway = EngineGateway(ctx)
         runBlocking { gateway.connect() }
-        // 书架 → 合成书 → 详情
-        rule.waitUntil(150_000) { texts(BOOK_NAME) > 0 }
+        // 仪器测试之间会保留 MainActivity 当前 tab；显式回到缓存书架，
+        // 不依赖前一用例恰好停在默认页。
+        rule.openCachedShelf()
+        rule.waitUntil(60_000) { texts(BOOK_NAME) > 0 }
         rule.onAllNodesWithText(BOOK_NAME)[0].performScrollTo().performClick()
         rule.waitUntil(60_000) { nodes("reclean_button") > 0 }
         ev("详情页有「净化正文」入口")

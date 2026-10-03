@@ -1,7 +1,40 @@
 # -*- coding: utf-8 -*-
 """漫画板块测试"""
-import sys, os
+import json
+import os
+import sys
+from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+def test_shared_chapter_order_fixture_matches_server_canonical_catalog():
+    from engine.manga.download_manager import _is_volume_only, _sort_chapters
+
+    fixture = (
+        Path(__file__).resolve().parents[1]
+        / "android/app/src/test/resources/manga_chapter_order_parity.json"
+    )
+    cases = json.loads(fixture.read_text(encoding="utf-8"))["cases"]
+    for case in cases:
+        sorted_rows = _sort_chapters(case["chapters"])
+        volumes = [row for row in sorted_rows if _is_volume_only(row["name"])]
+        episodes = [row for row in sorted_rows if not _is_volume_only(row["name"])]
+        actual = [row["id"] for row in volumes + episodes]
+        assert actual == case["expected"], case["name"]
+
+
+def test_shared_manga_identity_fixture_matches_server_alias_contract():
+    from server.state import manga_identity_source, manga_source_aliases
+
+    fixture = (
+        Path(__file__).resolve().parents[1]
+        / "android/app/src/test/resources/manga_identity_parity.json"
+    )
+    cases = json.loads(fixture.read_text(encoding="utf-8"))["cases"]
+    for case in cases:
+        transport = case["transport"]
+        assert manga_identity_source(transport) == case["identity"], case["name"]
+        assert list(manga_source_aliases(transport)) == case["aliases"], case["name"]
 
 def test_sort_chapters():
     from engine.manga.download_manager import _sort_chapters
@@ -23,6 +56,18 @@ def test_sort_chapters_volume():
     # 话号主排序：第2话 < Vol.1第3话
     assert s[0]["name"] == "第2话"
     assert s[1]["name"] == "Vol.1 第3话"
+
+
+def test_sort_chapters_chinese_numeral_volumes_and_episodes():
+    from engine.manga.download_manager import _sort_chapters
+    chapters = [
+        {"id": "v12", "name": "第十二卷"},
+        {"id": "c2", "name": "第2話"},
+        {"id": "v3", "name": "第三卷"},
+        {"id": "c1", "name": "第1話"},
+    ]
+    ordered = _sort_chapters(chapters)
+    assert [item["id"] for item in ordered] == ["c1", "c2", "v3", "v12"]
 
 
 def test_sort_chapters_embedded_serial():

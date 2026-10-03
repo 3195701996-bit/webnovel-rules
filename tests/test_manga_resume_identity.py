@@ -134,6 +134,18 @@ def test_library_and_detail_use_same_resolution(mapi, tmp_path, monkeypatch):
     assert lib["index"] == res["index"] == 3
 
 
+def test_resume_catalog_places_volumes_before_single_chapters(mapi):
+    """卷式漫画的服务端 resume.index 必须与 Web/APK 阅读目录一致。"""
+    reading_catalog = [
+        {"id": "volume-1", "name": "第01卷", "group": ""},
+        {"id": "chapter-1", "name": "第01话", "group": ""},
+    ]
+    r = mapi._resolve_reading_position(
+        reading_catalog,
+        {"idx": 1, "chapter_id": "volume-1", "chapter_label": "第01卷"})
+    assert r["index"] == 0 and r["by"] == "chapter_id"
+
+
 def test_ratio_never_exceeds_100_percent(mapi):
     """旧实现用 (idx+1)/total 会算出 >100%（实测见过 104%）——解析后的下标不会。"""
     r = mapi._resolve_reading_position(CHAPTERS, {"idx": 55, "pos": "推特杂图 P1"})

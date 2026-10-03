@@ -112,6 +112,35 @@ def test_explicit_load_marks_and_is_idempotent(tmp_path):
     assert "mtime_same True" in out, out
 
 
+def test_manga_stats_are_loaded_only_by_runtime_initialization(tmp_path):
+    """书库快照与任务/搜索缓存共用显式初始化边界，不在模块 import 时读盘。"""
+    data_dir = str(tmp_path / "data")
+    stats_dir = os.path.join(data_dir, "manga")
+    os.makedirs(stats_dir, exist_ok=True)
+    stats_path = os.path.join(stats_dir, "_library_stats.json")
+    payload = {"rev": 17, "image_count_semantics": "unique-readable-pages-v1",
+               "entries": {
+        "copymanga\x00demo": {"images": 123, "chapters": 4, "ts": 10.0}
+    }}
+    with open(stats_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f)
+
+    out, code, err = _run(
+        """
+        from server import state
+        print("before", state._manga_lib_rev, len(state._manga_lib_stats))
+        state.load_persisted_state()
+        print("loaded", state._manga_lib_rev,
+              state._manga_lib_stats["copymanga\\x00demo"]["images"])
+        state.load_persisted_state()
+        print("again", state._manga_lib_rev, len(state._manga_lib_stats))
+        """, data_dir)
+    assert code == 0, err
+    assert "before 0 0" in out, out
+    assert "loaded 17 123" in out, out
+    assert "again 17 1" in out, out
+
+
 def test_app_import_does_not_touch_data(tmp_path):
     """导入 app（蓝图装配）也不许落盘：真正的写点只有 initialize 钩子"""
     data_dir = str(tmp_path / "data")

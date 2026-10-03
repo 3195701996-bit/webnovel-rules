@@ -190,3 +190,69 @@ def test_follower_returns_small_image_written_by_leader(dl, monkeypatch, tmp_pat
     out = _run_pair(lambda: d.get("https://cdn.example/a.jpg", "c1", "ch1", 0))
     assert isinstance(out["a"], tuple) and isinstance(out["b"], tuple), out
     assert out["b"][0] == small, "跟随者应直出 leader 写入的小图，而不是报错"
+
+
+def test_interactive_follower_promotes_queued_prefetch_leader(dl, monkeypatch):
+    """Visible same-image demand must promote a coalesced leader still queued upstream."""
+    from engine.manga.downloader import _SourceRequestGate, atomic_write_image
+
+    d = dl["dl"]
+    gate = _SourceRequestGate(capacity=1)
+    d._source_gate = gate
+    assert gate.acquire("download")  # Occupy the only upstream slot.
+    original_acquire = gate.acquire
+    admitted = []
+
+    def tracked_acquire(priority="interactive", cancel_check=None):
+        result = original_acquire(priority, cancel_check)
+        if result:
+            admitted.append(getattr(priority, "priority", priority))
+        return result
+
+    monkeypatch.setattr(gate, "acquire", tracked_acquire)
+    cp = d.cache_path("c1", "same", 7, ".jpg")
+
+    def write_image(_url, path, _timeout, _chapter, _orig):
+        atomic_write_image(path, JPEG)
+        return JPEG, path
+
+    monkeypatch.setattr(d, "_download", write_image)
+    results = {}
+
+    def request(tag, priority):
+        try:
+            results[tag] = d.get("https://cdn.example/shared.jpg", "c1", "same", 7,
+                                 priority=priority)
+        except Exception as exc:  # surfaced in the final assertions
+            results[tag] = exc
+
+    prefetch = threading.Thread(target=request, args=("prefetch", "prefetch"))
+    visible = threading.Thread(target=request, args=("visible", "interactive"))
+    prefetch.start()
+    deadline = time.monotonic() + 1
+    while time.monotonic() < deadline:
+        with gate._condition:
+            if gate._waiting["prefetch"]:
+                break
+        time.sleep(0.005)
+    with gate._condition:
+        assert gate._waiting["prefetch"] == 1, "prefetch leader never queued"
+
+    visible.start()
+    deadline = time.monotonic() + 1
+    while time.monotonic() < deadline:
+        with gate._condition:
+            if gate._waiting["interactive"]:
+                break
+        time.sleep(0.005)
+    with gate._condition:
+        assert gate._waiting["interactive"] == 1, "visible demand did not promote leader"
+        assert gate._waiting["prefetch"] == 0
+
+    gate.release()
+    prefetch.join(2)
+    visible.join(2)
+    assert not prefetch.is_alive() and not visible.is_alive()
+    assert admitted == ["interactive"]
+    assert results["prefetch"][0] == JPEG and results["visible"][0] == JPEG
+    assert d._flight == {}

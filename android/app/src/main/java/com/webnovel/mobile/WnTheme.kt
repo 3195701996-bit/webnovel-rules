@@ -31,7 +31,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Typography
-import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -60,26 +60,25 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
- * 暖墨色暗色设计体系：单色暖灰底 + 唯一琥珀 accent，扁平表面 + 发丝线分隔，
- * 不用投影、不用玻璃拟态、不用渐变装饰。
+ * 纸感浅色设计体系：暖纸底、墨色正文、陶土主色与鼠尾草辅助色；
+ * 和桌面 Web 共用同一组语义色，阅读图片仍按漫画原图呈现。
  */
 object WnColors {
-    // 深海墨色基底 + 琥珀主行动色 + 青绿成功色：减少大面积纯灰，提升层级和可读性。
-    val bg = Color(0xFF10151B)
-    val surface = Color(0xFF171E26)
-    val surfaceVar = Color(0xFF202A34)
-    val ink = Color(0xFFF2F5F4)
-    val inkDim = Color(0xFF9AA8AE)
-    val line = Color(0xFF2F3C47)
-    val accent = Color(0xFFF2AA4C)
-    val onAccent = Color(0xFF24170A)
-    val danger = Color(0xFFFF7F78)
-    val ok = Color(0xFF70D0B0)
-    val info = Color(0xFF79BFE8)
+    val bg = Color(0xFFF5F1E9)
+    val surface = Color(0xFFFBF8F2)
+    val surfaceVar = Color(0xFFFFFDF9)
+    val ink = Color(0xFF29251F)
+    val inkDim = Color(0xFF70665B)
+    val line = Color(0xFFE3D9CC)
+    val accent = Color(0xFFA84F35)
+    val onAccent = Color(0xFFFFFAF5)
+    val danger = Color(0xFFB4473F)
+    val ok = Color(0xFF47734D)
+    val info = Color(0xFF4F746C)
 }
 
 /** 全局换肤：现存 MaterialTheme.colorScheme.* 引用经此映射自动落到新色板 */
-fun wnColorScheme(): ColorScheme = darkColorScheme(
+fun wnColorScheme(): ColorScheme = lightColorScheme(
     primary = WnColors.accent,
     onPrimary = WnColors.onAccent,
     primaryContainer = WnColors.surfaceVar,
@@ -205,8 +204,8 @@ fun WnHairlineCard(
             modifier = m,
             shape = WnCardShape,
             colors = CardDefaults.cardColors(containerColor = WnColors.surface),
-            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-            border = BorderStroke(1.dp, WnColors.line),
+            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+            border = BorderStroke(1.dp, WnColors.line.copy(alpha = 0.72f)),
             content = content,
         )
     } else {
@@ -214,8 +213,8 @@ fun WnHairlineCard(
             modifier = m,
             shape = WnCardShape,
             colors = CardDefaults.cardColors(containerColor = WnColors.surface),
-            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-            border = BorderStroke(1.dp, WnColors.line),
+            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+            border = BorderStroke(1.dp, WnColors.line.copy(alpha = 0.72f)),
             content = content,
         )
     }

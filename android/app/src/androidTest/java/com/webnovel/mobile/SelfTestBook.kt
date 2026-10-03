@@ -143,6 +143,19 @@ class SelfTestBook(private val key: String = "自检_reader_path") {
             ?.forEach { it.deleteRecursively() }
     }
 
+    /** Remove only this fixture identity without restoring a stale whole-file snapshot. */
+    fun cleanupFixtureOnly() {
+        require(!progressFile.exists() || runCatching {
+            JSONObject(progressFile.readText(Charsets.UTF_8))
+        }.isSuccess) { "阅读进度 JSON 无法解析；为防止丢数据，取消自检夹具清理" }
+        bookDir.deleteRecursively()
+        File(booksDir, key).deleteRecursively()
+        removeProgressKey()
+        File(runtimeDir, "trash").listFiles()
+            ?.filter { it.name.startsWith(key) }
+            ?.forEach { it.deleteRecursively() }
+    }
+
     /** 断言用：把 base64 正文还原（日志里避免中文乱码） */
     fun b64(s: String): String =
         Base64.encodeToString(s.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)

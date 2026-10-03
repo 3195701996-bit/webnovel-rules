@@ -54,6 +54,30 @@ def test_manga_count_comic_skips_repair_old(media_tree):
     assert images == 1, "备份图片不得计入有效图片数"
 
 
+def test_manga_count_comic_merges_roots_and_source_aliases(tmp_path, monkeypatch):
+    """旧下载/cache/APP-Web 别名分散时按章节名合并，不漏章也不重复计数。"""
+    import json
+    import server.state as state
+    downloads, cache = tmp_path / "downloads", tmp_path / "cache"
+    monkeypatch.setattr(state, "MANGA_DOWNLOADS_DIR", str(downloads))
+    monkeypatch.setattr(state, "MANGA_CACHE_DIR", str(cache))
+    cases = [
+        (downloads, "copymanga", "old-id-1", "第1話", "0000.jpg"),
+        (cache, "copymanga", "id-2", "第2話", "0000.jpg"),
+        (cache, "copymanga_web", "web-id-1", "第1話", "0001.jpg"),
+    ]
+    for root, source, chapter_id, label, image in cases:
+        base = root / source / COMIC
+        chapter = base / chapter_id
+        chapter.mkdir(parents=True)
+        (chapter / image).write_bytes(_WEBP)
+        (base / "_info.json").write_text(json.dumps({"chapters": [
+            {"id": chapter_id, "name": label}]}), encoding="utf-8")
+    from server.state import _manga_count_comic
+    # 同一话两个不同页只算一话、两张图；第二话来自缓存根。
+    assert _manga_count_comic("copymanga", COMIC) == (3, 2)
+
+
 def test_bak_dir_moved_out_of_media_tree():
     """双保险①：覆盖修复的备份目录在 _repair_staging 下，不与章节同级"""
     import inspect

@@ -141,6 +141,16 @@ def test_unresolved_body_counts_as_failure():
     assert len(unresolved) == 1, unresolved
 
 
+def test_empty_body_trigger_endpoint_is_explicitly_accounted():
+    """无 body 的收藏更新触发接口是有意协议，不应被误报成解析漏洞。"""
+    calls = [("A.kt", 1, "httpPost", "/api/manga/favorites/check-updates",
+              '"/api/manga/favorites/check-updates"', set(), False, "")]
+    problems, unresolved, _ = T.compare(
+        {"/api/manga/favorites/check-updates": (set(), "/api/manga/favorites/check-updates")},
+        calls, optional={})
+    assert not problems and not unresolved, (problems, unresolved)
+
+
 # ── 服务端侧：转发（处理函数把 body 交给下层函数）也要跟进去 ──────────────
 
 def test_server_keys_follow_delegation_into_other_module():

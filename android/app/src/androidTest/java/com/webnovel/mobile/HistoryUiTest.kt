@@ -1,24 +1,21 @@
 package com.webnovel.mobile
 
-import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
-import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
-import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.LargeTest
+import androidx.test.platform.app.InstrumentationRegistry
+import kotlinx.coroutines.runBlocking
+import org.json.JSONObject
+import org.junit.After
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 
-/**
- * 阅读历史视图验收（对齐 Venera 的"历史"分页，从应用图标冷启动）。
- *
- * 断言的是诚实状态机：有历史时给出列表（可点回上次阅读处），
- * 没有历史时明确说明"还没有阅读历史"——不允许空白页。
- */
+/** 最近阅读已整合到书架页签；以本地自检条目验证历史会出现且可恢复刷新。 */
 @RunWith(AndroidJUnit4::class)
 @LargeTest
 class HistoryUiTest {
@@ -26,41 +23,55 @@ class HistoryUiTest {
     @get:Rule
     val rule = createAndroidComposeRule<MainActivity>()
 
-    private fun ev(line: String) = println("HISTORY_UI_EVIDENCE $line")
+    private lateinit var comic: SelfTestComic
+    private lateinit var gateway: EngineGateway
+    private val ctx get() = InstrumentationRegistry.getInstrumentation().targetContext
 
-    private fun waitText(text: String, timeoutMs: Long = 150_000, substring: Boolean = false) {
-        rule.waitUntil(timeoutMs) {
-            rule.onAllNodesWithText(text, substring = substring).fetchSemanticsNodes().isNotEmpty()
+    private fun texts(text: String) =
+        rule.onAllNodesWithText(text, substring = true).fetchSemanticsNodes().size
+
+    private fun waitText(text: String, timeoutMs: Long = 60_000) {
+        rule.waitUntil(timeoutMs) { texts(text) > 0 }
+    }
+
+    @Before
+    fun setUp() {
+        comic = SelfTestComic(comicId = "__history_ui__")
+        comic.create()
+        gateway = EngineGateway(ctx)
+        val endpoint = runBlocking {
+            val state = gateway.connect()
+            assertTrue("本机引擎应就绪：$state", state is EngineState.Ready)
+            gateway.currentEndpoint()
+        } ?: throw AssertionError("本机引擎未返回 endpoint")
+        val saved = runBlocking {
+            gateway.httpPost(endpoint.port, "/api/manga/history",
+                JSONObject().put("source", comic.sourceKey)
+                    .put("comic_id", comic.comicIdValue)
+                    .put("idx", 1).put("pos", SelfTestComic.CH2_NAME)
+                    .put("title", SelfTestComic.TITLE).toString())
         }
+        assertTrue("自检阅读历史写入失败：HTTP ${saved.code}", saved.ok)
+    }
+
+    @After
+    fun tearDown() {
+        comic.cleanup()
+        assertTrue("自检漫画未清理干净", !comic.exists())
+        assertTrue("自检阅读记录未清理干净", comic.historyEntryCount() == 0)
     }
 
     @Test
-    fun historyView_isReachableAndHonest() {
+    fun recentReadingShowsRecordedComicAfterReturningToShelf() {
         waitText("书架", timeoutMs = 150_000)
-        waitText("历史")
-        rule.onAllNodesWithText("历史")[0].performClick()
-
-        // 标题带条数；必须出现确定状态（列表 或 明确的空说明）
-        waitText("阅读历史（", substring = true)
-        rule.waitUntil(60_000) {
-            rule.onAllNodesWithText("还没有阅读历史").fetchSemanticsNodes().isNotEmpty() ||
-                rule.onAllNodesWithText("读取历史失败", substring = true).fetchSemanticsNodes().isNotEmpty() ||
-                rule.onAllNodesWithText("刷新").fetchSemanticsNodes().isNotEmpty()
-        }
-        val empty = rule.onAllNodesWithText("还没有阅读历史").fetchSemanticsNodes().isNotEmpty()
-        val failed = rule.onAllNodesWithText("读取历史失败", substring = true)
-            .fetchSemanticsNodes().isNotEmpty()
-        assertTrue("历史页必须给出确定状态（空说明或失败说明或列表）", empty || failed ||
-            rule.onAllNodesWithTag("history_list").fetchSemanticsNodes().isNotEmpty())
-        ev(if (empty) "历史为空：显示明确说明" else "历史页已渲染（列表或失败说明）")
-
-        // 从历史点回书籍：若列表非空则点第一条，应能进入详情（不崩溃）
-        if (rule.onAllNodesWithTag("history_list").fetchSemanticsNodes().isNotEmpty()) {
-            rule.onAllNodesWithText("刷新")[0].assertIsDisplayed()
-            ev("历史列表在位且可刷新")
-        }
-        rule.onAllNodesWithText("← 返回")[0].performClick()
-        waitText("书架")
-        ev("返回书架正常")
+        // 强制离开再回来，触发书架按服务端最新历史重新加载，避免依赖启动时序。
+        rule.onAllNodesWithText("浏览")[0].performClick()
+        waitText("漫画（优先）")
+        rule.onAllNodesWithText("书架")[0].performClick()
+        waitText("最近阅读")
+        rule.waitUntil(30_000) { texts(SelfTestComic.TITLE) > 0 }
+        rule.onAllNodesWithText("最近阅读")[0].performClick()
+        waitText(SelfTestComic.TITLE)
+        assertTrue("最近阅读页应显示历史记录中的作品", texts(SelfTestComic.TITLE) > 0)
     }
 }

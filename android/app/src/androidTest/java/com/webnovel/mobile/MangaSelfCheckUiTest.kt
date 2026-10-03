@@ -60,7 +60,7 @@ class MangaSelfCheckUiTest {
         rule.onAllNodesWithText("浏览")[0].performClick()
         waitText("漫画（优先）", timeoutMs = 60_000)
         rule.onAllNodesWithText("搜漫画")[0].performClick()
-        waitText("漫画搜索", timeoutMs = 30_000)
+        waitText("发现漫画", timeoutMs = 30_000)
 
         // 走到"没有结果/失败"这一块（自检入口就在那里）。
         // 为什么要断网：在线时总有源对任何关键词都能返回点东西，

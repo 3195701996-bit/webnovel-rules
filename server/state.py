@@ -9,6 +9,7 @@ import os
 import re
 import threading
 import time
+import unicodedata
 
 from flask import jsonify, g, request, abort
 
@@ -1006,36 +1007,46 @@ def _clean_caches(scope="cache"):
 
     # ── 1) 漫画缓存：只清理"未下载"的临时缓存，保护已下载漫画 ──
     if os.path.isdir(MANGA_CACHE_DIR):
-        # 已下载漫画：library 中 status=done 的 (source, comic_id) → 图片保留
+        # 书库索引是缓存清理保护名单的唯一可信来源之一。索引缺失/损坏/结构
+        # 异常时不能把“无法确认已下载”解释成“允许删除”，否则旧版 _cache
+        # 下载会被当作临时缓存清掉。其他可再生缓存仍可继续清理。
         protected = set()
+        library_safe = False
         try:
             with open(MANGA_LIBRARY_FILE, encoding='utf-8') as _f:
                 lib = json.load(_f)
+            if not isinstance(lib, list) or any(not isinstance(item, dict)
+                                                for item in lib):
+                raise ValueError("书库索引结构无效")
             for item in lib:
                 if item.get('status') == 'done' and item.get('source') and item.get('comic_id'):
                     protected.add((item['source'], item['comic_id']))
-        except Exception:
-            pass
-        # 遍历缓存目录，删除"不在保护名单"的漫画缓存
-        for src_name in os.listdir(MANGA_CACHE_DIR):
-            src_dir = os.path.join(MANGA_CACHE_DIR, src_name)
-            if not os.path.isdir(src_dir):
-                continue
-            for cid in os.listdir(src_dir):
-                comic_dir = os.path.join(src_dir, cid)
-                if not os.path.isdir(comic_dir):
+            library_safe = True
+        except Exception as exc:
+            print(f"[cache-clean] 书库索引不可读，跳过漫画缓存清理以保护旧数据："
+                  f"{type(exc).__name__}", flush=True)
+            cleaned.append(("漫画缓存（书库索引不可读，已安全跳过）", 0))
+        if library_safe:
+            # 遍历缓存目录，删除"不在保护名单"的漫画缓存
+            for src_name in os.listdir(MANGA_CACHE_DIR):
+                src_dir = os.path.join(MANGA_CACHE_DIR, src_name)
+                if not os.path.isdir(src_dir):
                     continue
-                if (src_name, cid) in protected:
-                    continue  # 已下载 → 保留
-                _rm(comic_dir)
-        # 清空后移除空源目录
-        for src_name in os.listdir(MANGA_CACHE_DIR):
-            sd = os.path.join(MANGA_CACHE_DIR, src_name)
-            if os.path.isdir(sd) and not os.listdir(sd):
-                try:
-                    os.rmdir(sd)
-                except OSError:
-                    pass
+                for cid in os.listdir(src_dir):
+                    comic_dir = os.path.join(src_dir, cid)
+                    if not os.path.isdir(comic_dir):
+                        continue
+                    if (src_name, cid) in protected:
+                        continue  # 已下载 → 保留
+                    _rm(comic_dir)
+            # 清空后移除空源目录
+            for src_name in os.listdir(MANGA_CACHE_DIR):
+                sd = os.path.join(MANGA_CACHE_DIR, src_name)
+                if os.path.isdir(sd) and not os.listdir(sd):
+                    try:
+                        os.rmdir(sd)
+                    except OSError:
+                        pass
     # 2) 搜索缓存（原地清空：novel_api 等模块 import 时固化了 dict 引用，
     #    重绑定 _search_cache = {} 会让它们继续读写旧 dict，清理无效）
     with _toc_lock:
@@ -1650,9 +1661,17 @@ def _sort_split_chapters(chapters):
         ch_sorted = [{"id": c.id, "name": c.name, "group": c.group}
                      for c in chapters]
     volumes, episodes = [], []
+    try:
+        from engine.manga.download_manager import _is_volume_only
+    except Exception:
+        _is_volume_only = lambda _name: False
     for _c in ch_sorted:
         _nm = _c.get("name") or ""
-        if re.search(r"(?:第\s*\d+\s*卷|Vol\.?\s*\d+|卷\s*\d+|\d+\s*卷)", _nm, re.I):
+        if (_is_volume_only(_nm) or
+                re.search(r"(?:第\s*[\d一二两兩三四五六七八九十百零〇廿卅]+\s*[卷巻]|"
+                          r"Vol\.?\s*\d+|[卷巻]\s*[\d一二两兩三四五六七八九十百零〇廿卅]+|"
+                          r"[\d一二两兩三四五六七八九十百零〇廿卅]+\s*[卷巻])",
+                          _nm, re.I)):
             volumes.append(_c)
         else:
             episodes.append(_c)
@@ -1832,8 +1851,7 @@ def _prefetch_next_chapter_images(source, comic_id, chapter_id):
         # 下一话已下载（本地直出，不经 _get_chapter_images）→ 无需预取
         _nd = _manga_media_root(source, comic_id, _next)
         if os.path.isdir(_nd) and any(
-                f.lower().endswith((".webp", ".jpg", ".jpeg", ".png",
-                                    ".gif", ".avif"))
+                _is_manga_image_file(os.path.join(_nd, f))
                 for f in os.listdir(_nd)):
             return
     except Exception:
@@ -1918,7 +1936,7 @@ def _cover_ext_of(data):
         return ".jpg"
     if data[:8] == b"\x89PNG\r\n\x1a\n":
         return ".png"
-    if data[:3] in (b"GIF87a", b"GIF89a"):
+    if data[:6] in (b"GIF87a", b"GIF89a"):
         return ".gif"
     if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
         return ".webp"
@@ -1951,8 +1969,38 @@ def _save_cover_bytes(source, comic_id, data):
         return None
 
 
-_manga_total_cache = {}          # (source, comic_id) -> (ts, total)
+def manga_identity_source(source):
+    """Canonical durable identity source; CopyManga transports share one work identity."""
+    source = str(source or "")
+    return "copymanga" if source in ("copymanga", "copymanga_web") else source
+
+
+def manga_source_aliases(source):
+    """Known transport aliases for a durable manga identity (never guess other sources)."""
+    canonical = manga_identity_source(source)
+    return ("copymanga", "copymanga_web") if canonical == "copymanga" else (canonical,)
+
+
 _MANGA_TOTAL_TTL = 300           # 详情缓存里的总话数，5 分钟记忆
+_manga_catalog_lock = threading.RLock()
+
+
+def _manga_catalog_publish(source, comic_id, chapters, timestamp=None):
+    """Publish a verified catalog generation to every in-process catalog view."""
+    key = (manga_identity_source(source), str(comic_id))
+    rows = [dict(row) for row in chapters if isinstance(row, dict) and row.get("id")]
+    # `timestamp` belongs to the durable source snapshot and may be an old
+    # fixture/cache clock; in-memory TTL must always use this process clock.
+    ts = time.time()
+    with _manga_catalog_lock:
+        _manga_chapters_cache[key] = (ts, rows)
+
+
+def _manga_catalog_invalidate(source, comic_id):
+    """Invalidate both views when a detail snapshot is refreshed or replaced."""
+    key = (manga_identity_source(source), str(comic_id))
+    with _manga_catalog_lock:
+        _manga_chapters_cache.pop(key, None)
 
 
 def _manga_cached_chapters(source, comic_id):
@@ -1963,26 +2011,60 @@ def _manga_cached_chapters(source, comic_id):
     **章节身份**（id → 标签 → 话号）在当前列表里定位。书库行要在零源站请求下
     给出"到底会打开哪一话"，所以这里提供一次性解析出的列表，并做短 TTL 记忆。
     """
+    source = manga_identity_source(source)
     key = (source, str(comic_id))
     now = time.time()
-    c = _manga_chapters_cache.get(key)
-    if c and now - c[0] < _MANGA_TOTAL_TTL:
-        return c[1]
-    chs = []
-    try:
-        p = os.path.join(MANGA_CACHE_DIR, source, str(comic_id),
-                         "_info_full.json")
-        with open(p, encoding="utf-8") as f:
-            chs = (json.load(f).get("data") or {}).get("chapters") or []
-        if not isinstance(chs, list):
-            chs = []
-    except Exception:
+    with _manga_catalog_lock:
+        c = _manga_chapters_cache.get(key)
+        if c and now - c[0] < _MANGA_TOTAL_TTL:
+            return c[1]
         chs = []
-    _manga_chapters_cache[key] = (now, chs)
-    if len(_manga_chapters_cache) > 200:      # 有界（列表比计数大，缓存更小）
-        for _k in sorted(_manga_chapters_cache,
-                         key=lambda k: _manga_chapters_cache[k][0])[:80]:
-            _manga_chapters_cache.pop(_k, None)
+        try:
+            snapshots = []
+            aliases = manga_source_aliases(source)
+            for alias_index, alias in enumerate(aliases):
+                alias_priority = len(aliases) - alias_index
+                base = os.path.join(MANGA_CACHE_DIR, alias, str(comic_id))
+                for filename in ("_info_full.json", "_favorites_catalog.json"):
+                    path = os.path.join(base, filename)
+                    try:
+                        with open(path, encoding="utf-8") as f:
+                            envelope = json.load(f)
+                        detail = envelope.get("data") or {}
+                        ts = float(envelope.get("ts") or os.path.getmtime(path))
+                        snapshots.append((ts, alias_priority, detail))
+                    except (OSError, ValueError, TypeError, AttributeError):
+                        continue
+            if snapshots:
+                # 收藏检查保存源站确认过的新目录；优先级按快照时间，而不是固定偏爱
+                # 详情缓存。否则稍后书架刷新会用旧 _info_full 覆盖检查后的未读数。
+                _detail = max(snapshots, key=lambda item: (item[0], item[1]))[2]
+                # 续读、书库进度和未读计数必须共用阅读器目录顺序：整卷优先。
+                _volumes = list(_detail.get("volumes") or [])
+                _episodes = list(_detail.get("chapters") or [])
+                if not _volumes and _episodes:
+                    try:
+                        from engine.manga.base import Chapter
+                        from server.manga_api import _sort_split_chapters
+                        _episodes, _volumes = _sort_split_chapters([
+                            Chapter(id=str(row.get("id") or ""),
+                                    name=str(row.get("name") or ""),
+                                    group=str(row.get("group") or ""))
+                            for row in _episodes if isinstance(row, dict)
+                        ])
+                    except Exception:
+                        # 兼容读取不可因分类辅助失败而丢失目录；数据仍按原顺序可见。
+                        _volumes = []
+                chs = _volumes + _episodes
+            if not isinstance(chs, list):
+                chs = []
+        except Exception:
+            chs = []
+        _manga_chapters_cache[key] = (time.time(), chs)
+        if len(_manga_chapters_cache) > 200:      # 有界（列表比计数大，缓存更小）
+            for _k in sorted(_manga_chapters_cache,
+                             key=lambda k: _manga_chapters_cache[k][0])[:80]:
+                _manga_chapters_cache.pop(_k, None)
     return chs
 
 
@@ -1995,30 +2077,28 @@ def _manga_total_chapters(source, comic_id):
     书库为每部漫画标注"读到第 N 话 / 共 M 话"的进度条需要 M。详情缓存是阅读
     器/详情页本来就会写的，这里零源站请求、只读磁盘；短 TTL 记忆避免书库轮询
     时反复解析同一个 JSON。"""
-    key = (source, str(comic_id))
-    now = time.time()
-    c = _manga_total_cache.get(key)
-    if c and now - c[0] < _MANGA_TOTAL_TTL:
-        return c[1]
-    total = 0
-    try:
-        p = os.path.join(MANGA_CACHE_DIR, source, str(comic_id),
-                         "_info_full.json")
-        with open(p, encoding="utf-8") as f:
-            chs = (json.load(f).get("data") or {}).get("chapters") or []
-        total = len(chs)
-    except Exception:
-        total = 0
-    _manga_total_cache[key] = (now, total)
-    if len(_manga_total_cache) > 500:      # 有界
-        for _k in sorted(_manga_total_cache,
-                         key=lambda k: _manga_total_cache[k][0])[:200]:
-            _manga_total_cache.pop(_k, None)
-    return total
+    return len(_manga_cached_chapters(source, comic_id))
+
+
+def _manga_page_sequence_complete(page_indices, expected=0):
+    """判定本地章节页序完整；旧清单没有期望页数时至少拒绝已知缺号。
+
+    旧版下载清单没有 download_page_count，无法离线判断尾页是否缺失；但
+    0..max(index) 中间有洞是可证明的不完整，不能仅凭“还有一张图”报已下载。
+    """
+    if expected > 0:
+        return (len(page_indices) == expected and
+                page_indices == set(range(expected)))
+    return bool(page_indices) and page_indices == set(range(max(page_indices) + 1))
 
 
 def _scan_downloaded_chapters(source, comic_id):
-    """扫描已下载章节 id 集合（目录内含图片文件 = 已下载）"""
+    """扫描有证据证明属于下载的数据章节。
+
+    downloads/ 中有图片即为已下载。_cache/ 是在线阅读临时缓存，不能仅凭图片
+    将章节误认成下载；为了兼容旧版把下载写入缓存根的情况，仅接受其 _info.json
+    下载清单明确列出的章节目录。
+    """
     out = []
     # copymanga 与 copymanga_web 共用站点/漫画 ID，但历史下载可能落在任一
     # source 目录；详情页必须和书库统计一样合并两边，否则显示“未下载”。
@@ -2030,11 +2110,19 @@ def _scan_downloaded_chapters(source, comic_id):
     for _src in _sources:
         # 不使用 _manga_media_root：它会在 downloads 根目录存在时屏蔽
         # _cache，历史任务可能把不同章节分别落在两个根目录。
-        _bases = [
-            os.path.join(MANGA_DOWNLOADS_DIR, _src, comic_id),
-            os.path.join(MANGA_CACHE_DIR, _src, comic_id),
-        ]
-        for base in _bases:
+        _download_base = os.path.join(MANGA_DOWNLOADS_DIR, _src, comic_id)
+        _cache_base = os.path.join(MANGA_CACHE_DIR, _src, comic_id)
+        _legacy_ids = set()
+        try:
+            with open(os.path.join(_cache_base, "_info.json"), encoding="utf-8") as f:
+                _legacy_ids = {str(c.get("id") or "")
+                               for c in (json.load(f).get("chapters") or [])
+                               if isinstance(c, dict) and c.get("id")}
+        except Exception:
+            pass
+        # downloads 是当前正式持久目录；cache 仅限可由旧下载清单证明的章节。
+        _bases = [(_download_base, None), (_cache_base, _legacy_ids)]
+        for base, allowed_ids in _bases:
             if not os.path.isdir(base):
                 continue
             for _n in os.listdir(base):
@@ -2044,16 +2132,116 @@ def _scan_downloaded_chapters(source, comic_id):
                 _p = os.path.join(base, _n)
                 if not os.path.isdir(_p):
                     continue
-                # 目录内有图片文件才算已下载（空目录/仅 URL 缓存不算）
+                if allowed_ids is not None and _n not in allowed_ids:
+                    continue
+                # 图片魔数与页序必须可读；目录名/扩展名本身不是下载证据。
                 try:
-                    _has_img = any(
-                        f.lower().endswith((".webp", ".jpg", ".jpeg", ".png",
-                                            ".gif", ".avif"))
-                        for f in os.listdir(_p))
+                    _files = os.listdir(_p)
+                    _pages = {}
+                    for _f in _files:
+                        _m = re.match(r"^(\d+)(?:\.[^.]+)?$", _f)
+                        if not _m:
+                            continue
+                        _fp = os.path.join(_p, _f)
+                        if _is_manga_image_file(_fp):
+                            _pages.setdefault(int(_m.group(1)), _fp)
+                    _has_img = bool(_pages)
+                    if _has_img:
+                        # 新清单要求期望数与 0-based 页序完全匹配；旧清单缺少
+                        # 期望数时，至少要求现存页号从 0 连续，已知缺页不可算完整。
+                        for _manifest in (
+                                os.path.join(_download_base, "_info.json"),
+                                os.path.join(_cache_base, "_info.json")):
+                            try:
+                                with open(_manifest, encoding="utf-8") as _mf:
+                                    _rows = json.load(_mf).get("chapters") or []
+                                _row = next((r for r in _rows if isinstance(r, dict)
+                                             and str(r.get("id") or "") == _n), None)
+                                _expected = int((_row or {}).get("download_page_count") or 0)
+                                if _expected > 0:
+                                    _has_img = _manga_page_sequence_complete(
+                                        set(_pages), _expected)
+                                    break
+                            except (OSError, ValueError, TypeError, AttributeError):
+                                continue
+                        # 即便没有任何可用页数清单，也必须拒绝可证实的中间缺号。
+                        _has_img = (_has_img and
+                                    _manga_page_sequence_complete(set(_pages)))
                 except Exception:
                     _has_img = False
                 if _has_img and _n not in out:
                     out.append(_n)
+    return out
+
+
+def _scan_partial_downloaded_chapters(source, comic_id):
+    """返回磁盘上有可读页、且能证明不完整的持久下载章节目录 ID。
+
+    仅报告有页序缺口或与清单期望页数不符的章节；旧清单没有期望页数、且
+    现存页序连续时，无法证明尾页缺失，因此不把它误归类为“部分下载”。
+    普通在线阅读缓存仍需由旧下载清单证明，避免混入用户可见的下载状态。
+    """
+    out = []
+    sources = [source]
+    if source == "copymanga":
+        sources.append("copymanga_web")
+    elif source == "copymanga_web":
+        sources.append("copymanga")
+    for src in sources:
+        download_base = os.path.join(MANGA_DOWNLOADS_DIR, src, comic_id)
+        cache_base = os.path.join(MANGA_CACHE_DIR, src, comic_id)
+        legacy_ids = set()
+        try:
+            with open(os.path.join(cache_base, "_info.json"), encoding="utf-8") as f:
+                legacy_ids = {str(c.get("id") or "")
+                              for c in (json.load(f).get("chapters") or [])
+                              if isinstance(c, dict) and c.get("id")}
+        except Exception:
+            pass
+        for base, allowed_ids in ((download_base, None),
+                                  (cache_base, legacy_ids)):
+            if not os.path.isdir(base):
+                continue
+            try:
+                names = os.listdir(base)
+            except OSError:
+                continue
+            for chapter_id in names:
+                if chapter_id.endswith(".repair_old") or (
+                        allowed_ids is not None and chapter_id not in allowed_ids):
+                    continue
+                chapter_dir = os.path.join(base, chapter_id)
+                if not os.path.isdir(chapter_dir):
+                    continue
+                pages = set()
+                try:
+                    for filename in os.listdir(chapter_dir):
+                        match = re.match(r"^(\d+)(?:\.[^.]+)?$", filename)
+                        path = os.path.join(chapter_dir, filename)
+                        if match and _is_manga_image_file(path):
+                            pages.add(int(match.group(1)))
+                except OSError:
+                    continue
+                if not pages:
+                    continue
+                expected = 0
+                for manifest in (os.path.join(download_base, "_info.json"),
+                                 os.path.join(cache_base, "_info.json")):
+                    try:
+                        with open(manifest, encoding="utf-8") as f:
+                            rows = json.load(f).get("chapters") or []
+                        row = next((item for item in rows
+                                    if isinstance(item, dict) and
+                                    str(item.get("id") or "") == chapter_id), None)
+                        expected = max(0, int((row or {}).get(
+                            "download_page_count") or 0))
+                        if expected:
+                            break
+                    except (OSError, ValueError, TypeError, AttributeError):
+                        continue
+                complete = _manga_page_sequence_complete(pages, expected)
+                if not complete and chapter_id not in out:
+                    out.append(chapter_id)
     return out
 
 
@@ -2074,16 +2262,74 @@ def _downloaded_ids_for_chapters(source, comic_id, chapters):
         for _root in (MANGA_DOWNLOADS_DIR, MANGA_CACHE_DIR):
             _p = os.path.join(_root, _src, comic_id, "_info.json")
             try:
-                _info = json.load(open(_p, encoding="utf-8"))
+                with open(_p, encoding="utf-8") as _f:
+                    _info = json.load(_f)
                 for _c in (_info.get("chapters") or []):
                     if str(_c.get("id")) in _ids:
-                        _names.add(str(_c.get("name") or "").strip())
+                        _name = _manga_chapter_name_key(_c.get("name"))
+                        if _name:
+                            _names.add(_name)
             except Exception:
                 pass
+    current_names = {}
+    for chapter in chapters or []:
+        name = _manga_chapter_name_key(chapter.get("name"))
+        chapter_id = str(chapter.get("id") or "")
+        if name and chapter_id:
+            current_names.setdefault(name, set()).add(chapter_id)
     for _c in chapters or []:
-        if str(_c.get("id")) in _ids or str(_c.get("name") or "").strip() in _names:
-            _ids.add(str(_c.get("id")))
+        _chapter_id = str(_c.get("id") or "")
+        _name = _manga_chapter_name_key(_c.get("name"))
+        _same_name_ids = current_names.get(_name, [])
+        if (_chapter_id in _ids
+                or (_name in _names and len(_same_name_ids) == 1)):
+            if _chapter_id:
+                _ids.add(_chapter_id)
     return _ids
+
+
+def _partial_downloaded_ids_for_chapters(source, comic_id, chapters):
+    """将可证实的部分下载目录映射到当前目录章节 ID（含 CopyManga 别名）。"""
+    disk_ids = set(_scan_partial_downloaded_chapters(source, comic_id))
+    sources = [source]
+    if source == "copymanga":
+        sources.append("copymanga_web")
+    elif source == "copymanga_web":
+        sources.append("copymanga")
+    names = set()
+    for src in sources:
+        for root in (MANGA_DOWNLOADS_DIR, MANGA_CACHE_DIR):
+            path = os.path.join(root, src, comic_id, "_info.json")
+            try:
+                with open(path, encoding="utf-8") as f:
+                    rows = json.load(f).get("chapters") or []
+                for row in rows:
+                    if (isinstance(row, dict) and
+                            str(row.get("id") or "") in disk_ids):
+                        key = _manga_chapter_name_key(row.get("name"))
+                        if key:
+                            names.add(key)
+            except Exception:
+                continue
+    current_names = {}
+    for chapter in chapters or []:
+        key = _manga_chapter_name_key(chapter.get("name"))
+        chapter_id = str(chapter.get("id") or "")
+        if key and chapter_id:
+            current_names.setdefault(key, set()).add(chapter_id)
+    for chapter in chapters or []:
+        chapter_id = str(chapter.get("id") or "")
+        key = _manga_chapter_name_key(chapter.get("name"))
+        if chapter_id and (chapter_id in disk_ids or (key in names and
+                                  len(current_names.get(key, ())) == 1)):
+            disk_ids.add(chapter_id)
+    return disk_ids.intersection(
+        str(chapter.get("id") or "") for chapter in chapters or [])
+
+
+def _manga_chapter_name_key(value):
+    """Stable chapter-label key for cross-source/legacy-ID matching; empty stays unmatched."""
+    return " ".join(unicodedata.normalize("NFKC", str(value or "")).split()).casefold()
 
 
 def _manga_media_root(source, comic_id, chapter_id=None):
@@ -2102,43 +2348,153 @@ def _manga_media_root(source, comic_id, chapter_id=None):
     return d_root
 
 
+def _manga_local_media_dirs(source, comic_id, chapter_id, downloaded_only=False):
+    """返回该章节所有可读的本地目录，按 downloads/当前源优先排序。
+
+    旧版下载可能分散在永久目录、阅读缓存、CopyManga APP/Web 别名中，且
+    同一章节在两个通道的 ID 可能变化。用保存的章节名把当前 ID 映射回旧 ID，
+    让书库的“已下载”判定与阅读器实际找图使用同一身份兼容策略。
+    """
+    source, comic_id, chapter_id = str(source), str(comic_id), str(chapter_id)
+    variants = [source]
+    if source == "copymanga":
+        variants.append("copymanga_web")
+    elif source == "copymanga_web":
+        variants.append("copymanga")
+    roots = (MANGA_DOWNLOADS_DIR, MANGA_CACHE_DIR)
+    names = set()
+    # 当前详情 ID -> 当前章节名。
+    detail_path = os.path.join(MANGA_CACHE_DIR, source, comic_id, "_info_full.json")
+    try:
+        with open(detail_path, encoding="utf-8") as f:
+            detail = json.load(f)
+        payload = detail.get("data") if isinstance(detail, dict) else {}
+        detail_rows = list((payload or {}).get("chapters") or []) + \
+            list((payload or {}).get("volumes") or [])
+        wanted = next((row for row in detail_rows
+                       if str(row.get("id") or "") == chapter_id), None)
+        name = _manga_chapter_name_key((wanted or {}).get("name"))
+        same_name_ids = {str(row.get("id") or "") for row in detail_rows
+                         if _manga_chapter_name_key(row.get("name")) == name}
+        if name and len(same_name_ids) == 1:
+            names.add(name)
+    except Exception:
+        pass
+    chapter_ids = {chapter_id}
+    metadata = []
+    for variant in variants:
+        for root in roots:
+            base = os.path.join(root, variant, comic_id)
+            try:
+                with open(os.path.join(base, "_info.json"), encoding="utf-8") as f:
+                    rows = json.load(f).get("chapters") or []
+            except Exception:
+                rows = []
+            metadata.append((base, rows))
+    if names:
+        for _base, rows in metadata:
+            matches = {}
+            for row in rows:
+                row_name = _manga_chapter_name_key(row.get("name"))
+                row_id = str(row.get("id") or "")
+                if row_name in names and row_id:
+                    matches.setdefault(row_name, set()).add(row_id)
+            for row_name, matching_ids in matches.items():
+                if len(matching_ids) != 1:
+                    continue  # 同名多个 ID 无法安全区分，不跨 ID 猜测
+                row_id = next(iter(matching_ids))
+                if (row_id not in (".", "..")
+                        and re.fullmatch(r"[A-Za-z0-9_.-]{1,240}", row_id)):
+                    chapter_ids.add(row_id)
+
+    result, seen = [], set()
+    # Preserve root and source priority, but include every matching historical ID.
+    for root in roots:
+        for variant in variants:
+            base = os.path.join(root, variant, comic_id)
+            for candidate_id in [chapter_id] + sorted(chapter_ids - {chapter_id}):
+                path = os.path.realpath(os.path.join(base, candidate_id))
+                if path in seen or not os.path.isdir(path):
+                    continue
+                seen.add(path)
+                result.append(path)
+    if downloaded_only:
+        # 不把普通的在线阅读缓存伪装成书库/本地目录内容。旧版缓存根下载则只有
+        # 经 _info.json 清单确认的章节 ID 才保留。
+        downloaded_ids = set(_scan_downloaded_chapters(source, comic_id))
+        downloads_root = os.path.realpath(MANGA_DOWNLOADS_DIR) + os.sep
+        cache_root = os.path.realpath(MANGA_CACHE_DIR) + os.sep
+        result = [path for path in result
+                  if (os.path.realpath(path) + os.sep).startswith(downloads_root)
+                  or ((os.path.realpath(path) + os.sep).startswith(cache_root)
+                      and os.path.basename(path) in downloaded_ids)]
+    return result
+
+
+def _manga_local_page_dir(source, comic_id, chapter_id, idx=None,
+                          downloaded_only=False):
+    """找含有本地图片/指定页的章节目录；图片编号跨旧目录互补。"""
+    for base in _manga_local_media_dirs(source, comic_id, chapter_id,
+                                        downloaded_only=downloaded_only):
+        if idx is None:
+            try:
+                if any(_is_manga_image_file(os.path.join(base, name))
+                       for name in os.listdir(base)):
+                    return base
+            except OSError:
+                continue
+        else:
+            # Legacy chapters use both four-digit and wider zero-padded page
+            # indexes. Match numeric identity rather than an assumed width.
+            try:
+                for name in os.listdir(base):
+                    match = re.match(r"^(\d+)", name)
+                    if (match and int(match.group(1)) == int(idx)
+                            and _is_manga_image_file(os.path.join(base, name))):
+                        return base
+            except OSError:
+                continue
+    return None
+
+
 def _local_chapter_images(source, comic_id, chapter_id):
     """已下载章节的图片 URL 列表（本地优先，避免请求源站拖慢阅读）
     - 图片 URL 顺序取自 _imgs.json 缓存（源站 words 重排后的顺序）
     - 返回 None 表示该章节无本地数据（需走源站）
     """
-    base = _manga_media_root(source, comic_id, chapter_id)
-    if not os.path.isdir(base) and source in ("copymanga", "copymanga_web"):
-        base = _manga_media_root(
-            "copymanga_web" if source == "copymanga" else "copymanga",
-            comic_id, chapter_id)
-    if not os.path.isdir(base):
+    bases = _manga_local_media_dirs(source, comic_id, chapter_id)
+    if not bases:
         return None
-    # 本地已下载文件（按序号排序）
-    files = sorted(f for f in os.listdir(base)
-                   if f.lower().endswith((".webp", ".jpg", ".jpeg", ".png", ".gif", ".avif")))
-    if not files:
+    # 合并各历史目录的图片编号；同页重叠时采用永久目录/当前源优先版本。
+    pages = {}
+    for base in bases:
+        try:
+            files = sorted(f for f in os.listdir(base)
+                           if _is_manga_image_file(os.path.join(base, f)))
+        except OSError:
+            continue
+        for position, filename in enumerate(files):
+            match = re.match(r"^(\d+)", filename)
+            page = int(match.group(1)) if match else position
+            pages.setdefault(page, (base, filename))
+    if not pages:
         return None
     # URL 顺序：_imgs.json 缓存（源站重排后顺序）；无则用本地文件推断
-    imgs_p = os.path.join(_manga_media_root(source, comic_id),
-                          f"{chapter_id}_imgs.json")
     urls = []
-    if os.path.exists(imgs_p):
+    for base in bases:
+        imgs_p = os.path.join(os.path.dirname(base), f"{os.path.basename(base)}_imgs.json")
         try:
-            _u = json.load(open(imgs_p, encoding="utf-8"))
+            with open(imgs_p, encoding="utf-8") as _f:
+                _u = json.load(_f)
             if isinstance(_u, dict) and _u.get("v") == 2:
-                # R70: 新版版本化缓存 {"v":2,"urls":[...]}
                 urls = _u.get("urls") or []
-            elif isinstance(_u, list):
-                # R70: 旧裸数组缓存(R60 半截列表)不可信 → 本地文件为准
-                urls = []
-            else:
-                urls = []
+                if urls:
+                    break
         except Exception:
-            urls = []
+            continue
     if not urls:
         # 无 URL 缓存：返回本地占位（前端直接走 /img/ 接口读磁盘）
-        return [""] * len(files)
+        return [""] * (max(pages) + 1)
     # 返回完整 URL 列表：已下载部分用原 URL（前端 /img/ 会命中磁盘缓存），
     # 缺失部分保留 URL 让前端按需补拉——直接全量返回 urls
     return urls
@@ -2184,8 +2540,18 @@ def _manga_adapter_name(source):
 
 MANGA_LIBRARY_STATS_FILE = os.path.join(MANGA_DIR, "_library_stats.json")
 
+_MANGA_IMAGE_COUNT_SEMANTICS = "unique-readable-pages-v1"
 
-_MANGA_IMG_EXTS = (".webp", ".jpg", ".png")
+
+_MANGA_IMG_EXTS = (".webp", ".jpg", ".jpeg", ".png", ".gif", ".avif")
+
+
+def _is_manga_image_file(path):
+    """统一的本地漫画页判定：格式白名单 + 下载器认可的图片头。"""
+    if not str(path).lower().endswith(_MANGA_IMG_EXTS) or not os.path.isfile(path):
+        return False
+    from engine.manga.downloader import _valid_image_header
+    return _valid_image_header(path)
 
 
 _manga_stats_lock = threading.Lock()
@@ -2211,15 +2577,25 @@ def _manga_stats_skey(source, comic_id):
 
 
 def _manga_stats_load():
-    """启动时恢复快照（图片数/章节数/条目 revision 跨重启保持）"""
+    """启动时恢复同口径快照；旧图片计数口径排队重扫，绝不冒充新值。"""
     global _manga_lib_rev
     try:
         with open(MANGA_LIBRARY_STATS_FILE, encoding="utf-8") as f:
             data = json.load(f)
-        for k, v in (data.get("entries") or {}).items():
+        entries = data.get("entries") or {}
+        _manga_lib_rev = int(data.get("rev") or 0)
+        if data.get("image_count_semantics") != _MANGA_IMAGE_COUNT_SEMANTICS:
+            # Older snapshots counted physical image files, not unique readable
+            # page indices. Keep the global revision but never serve those values
+            # as current; the normal bounded background verifier rebuilds them.
+            with _manga_stats_lock:
+                _manga_lib_stats.clear()
+                _manga_stats_pending.update(
+                    k for k, v in entries.items() if isinstance(v, dict))
+            return
+        for k, v in entries.items():
             if isinstance(v, dict):
                 _manga_lib_stats[k] = v
-        _manga_lib_rev = int(data.get("rev") or 0)
     except Exception:
         pass
 
@@ -2228,36 +2604,126 @@ def _manga_stats_save_locked():
     """持锁内调用：快照原子落盘（条目少、体积小，直接写）"""
     try:
         atomic_write(MANGA_LIBRARY_STATS_FILE,
-                     {"rev": _manga_lib_rev, "entries": _manga_lib_stats})
+                     {"rev": _manga_lib_rev,
+                      "image_count_semantics": _MANGA_IMAGE_COUNT_SEMANTICS,
+                      "entries": _manga_lib_stats})
     except Exception as _e:
         print(f"[manga-stats] 快照落盘失败: {type(_e).__name__}: {_e}",
               flush=True)
 
 
+def _manga_scan_comic(source, comic_id):
+    """合并媒体统计并计算可读下载章节 → (图片数, 目录数, 已验证章节数)。
+
+    旧实现经 _manga_media_root 只选一个根目录；一个 downloads 目录存在时，
+    其余 cache 章节即被忽略。CopyManga 两个通道的历史文件也可能分散存储。
+    用保存元数据里的章节名跨 ID 去重，下载目录优先，但同章分片图片仍合并。
+    “已验证章节”只统计正式下载目录，或有旧下载清单证明的缓存目录；若有
+    download_page_count，还必须具备连续完整页序。图片数不能代替这一判据：
+    局部失败留下的页面可计入占用，但不能把读者送进空的纯本地目录。
+    """
+    sources = [source]
+    if source in ("copymanga", "copymanga_web"):
+        sources.append("copymanga_web" if source == "copymanga" else "copymanga")
+    roots = (MANGA_DOWNLOADS_DIR, MANGA_CACHE_DIR)
+    from engine.manga.downloader import _valid_image_header
+
+    # User-facing image totals are readable pages, not physical files: formats
+    # with the same numeric index are one page (the APK reader makes the same
+    # choice). Storage usage is reported separately in bytes.
+    merged = {}  # stable chapter identity -> unique readable page indices
+    verified = set()
+    for src in sources:
+        manifests = {}
+        expected_by_id = {}
+        for root in roots:
+            rows = {}
+            manifest = os.path.join(root, src, str(comic_id), "_info.json")
+            try:
+                with open(manifest, encoding="utf-8") as f:
+                    value = json.load(f)
+                for row in (value.get("chapters") or []):
+                    if isinstance(row, dict) and row.get("id"):
+                        chapter_id = str(row["id"])
+                        rows[chapter_id] = row
+                        try:
+                            candidate_count = max(
+                                0, int(row.get("download_page_count") or 0))
+                            if candidate_count > 0 or chapter_id not in expected_by_id:
+                                expected_by_id[chapter_id] = candidate_count
+                        except (TypeError, ValueError):
+                            expected_by_id.setdefault(chapter_id, 0)
+            except (OSError, ValueError, TypeError, AttributeError):
+                pass
+            manifests[root] = rows
+        name_ids = {}
+        for rows in manifests.values():
+            for chapter_id, row in rows.items():
+                # Use the same Unicode-aware identity as detail/download mapping.
+                # Source aliases can return different chapter IDs and width forms
+                # (e.g. 第１话 vs 第1话); inconsistent normalization duplicated shelf
+                # counts and could make a complete legacy download look incomplete.
+                name = _manga_chapter_name_key(row.get("name"))
+                if name:
+                    name_ids.setdefault(name, set()).add(chapter_id)
+        ambiguous_names = {name for name, ids in name_ids.items() if len(ids) > 1}
+        for root in roots:
+            base = os.path.join(root, src, str(comic_id))
+            if not os.path.isdir(base):
+                continue
+            rows = manifests[root]
+            names = {chapter_id: _manga_chapter_name_key(row.get("name"))
+                     for chapter_id, row in rows.items() if row.get("name")}
+            try:
+                chapter_dirs = os.listdir(base)
+            except OSError:
+                continue
+            for chapter_id in chapter_dirs:
+                if chapter_id.endswith(".repair_old"):
+                    continue
+                chapter_dir = os.path.join(base, chapter_id)
+                if not os.path.isdir(chapter_dir):
+                    continue
+                chapter_name = names.get(chapter_id, "")
+                identity = (("id", src + ":" + chapter_id)
+                            if not chapter_name or chapter_name in ambiguous_names
+                            else ("name", chapter_name))
+                page_indices = set()
+                for walk_root, dirs, filenames in os.walk(chapter_dir):
+                    dirs[:] = [d for d in dirs if not d.endswith(".repair_old")]
+                    for filename in filenames:
+                        if not filename.lower().endswith(_MANGA_IMG_EXTS):
+                            continue
+                        stem = os.path.splitext(os.path.basename(filename))[0]
+                        if not stem.isdigit():
+                            continue
+                        path = os.path.join(walk_root, filename)
+                        if _valid_image_header(path):
+                            page_indices.add(int(stem))
+                if not page_indices:
+                    continue
+                merged.setdefault(identity, set()).update(page_indices)
+                allowed = root == MANGA_DOWNLOADS_DIR or chapter_id in manifests[
+                    MANGA_CACHE_DIR]
+                if allowed:
+                    expected = expected_by_id.get(chapter_id, 0)
+                    complete = _manga_page_sequence_complete(page_indices, expected)
+                    if complete:
+                        verified.add(identity)
+    return sum(len(pages) for pages in merged.values()), len(merged), len(verified)
+
+
 def _manga_count_comic(source, comic_id):
-    """实扫单部漫画 → (图片数, 章节数)。增量更新与后台核对共用的唯一扫描入口。
-    口径与旧请求路径一致：章节数 = 图片根下子目录数；图片数含所有后代目录。"""
-    base = _manga_media_root(source, comic_id)
-    images = 0
-    chapters = 0
-    if os.path.isdir(base):
-        try:
-            # 历史修复备份既不计章节，也不扫描其图片。
-            chapters = sum(1 for _n in os.listdir(base)
-                           if not _n.endswith(".repair_old")
-                           and os.path.isdir(os.path.join(base, _n)))
-        except OSError:
-            chapters = 0
-        for _r, _ds, _fs in os.walk(base):
-            _ds[:] = [name for name in _ds if not name.endswith(".repair_old")]
-            images += sum(1 for f in _fs if f.endswith(_MANGA_IMG_EXTS))
+    """向旧调用方提供 (唯一可读页数, 唯一章节数)；详情可用数见 stats 快照。"""
+    images, chapters, _verified = _manga_scan_comic(source, comic_id)
     return images, chapters
 
 
 def _manga_stats_compute_entry(source, comic_id):
     """重扫单部（copymanga/copymanga_web 备选源于扫描时一并统计，供源自动纠正）"""
-    images, chapters = _manga_count_comic(source, comic_id)
-    ent = {"images": images, "chapters": chapters, "ts": time.time()}
+    images, chapters, verified_chapters = _manga_scan_comic(source, comic_id)
+    ent = {"images": images, "chapters": chapters,
+           "verified_chapters": verified_chapters, "ts": time.time()}
     if source in ("copymanga", "copymanga_web"):
         alt = "copymanga_web" if source == "copymanga" else "copymanga"
         ent["alt_source"] = alt
@@ -2283,11 +2749,13 @@ def _manga_stats_note_change(source, comic_id, removed=False):
     # 下载进入书库即默认收藏：收藏是“跟踪作品”的集合，不能因为作品已下载
     # 就丢失后续更新检查。这里只补齐收藏元数据，不覆盖用户已有的收藏时间。
     try:
-        _lib = json.load(open(MANGA_LIBRARY_FILE, encoding="utf-8"))
+        with open(MANGA_LIBRARY_FILE, encoding="utf-8") as _f:
+            _lib = json.load(_f)
         _item = next((x for x in _lib if x.get("source") == source and
                       str(x.get("comic_id")) == str(comic_id)), None)
         if _item:
-            _fav = json.load(open(MANGA_FAV_FILE, encoding="utf-8"))
+            with open(MANGA_FAV_FILE, encoding="utf-8") as _f:
+                _fav = json.load(_f)
             _fav = _fav if isinstance(_fav, dict) else {}
             _fk = f"{source}:{comic_id}"
             _old = _fav.get(_fk) or {}
@@ -2330,11 +2798,28 @@ def _manga_stats_verify_once():
     返回校正条数。后台线程与测试均可直接调用。"""
     global _manga_lib_rev
     try:
-        lib = json.load(open(MANGA_LIBRARY_FILE, encoding="utf-8"))
+        with open(MANGA_LIBRARY_FILE, encoding="utf-8") as _f:
+            lib = json.load(_f)
     except Exception:
         lib = []
-    entries = [(x.get("source", ""), x.get("comic_id", "")) for x in lib
-               if x.get("source") and x.get("comic_id")]
+    entries = {(x.get("source", ""), str(x.get("comic_id", ""))) for x in lib
+               if isinstance(x, dict) and x.get("source") and x.get("comic_id")}
+    # Favorites and the local shelf are independent user collections: removing
+    # a book from the shelf must not erase its downloaded media or make the
+    # favorites screen forget that strict local reading is available.
+    try:
+        with open(MANGA_FAV_FILE, encoding="utf-8") as _f:
+            favorites = json.load(_f)
+        if isinstance(favorites, dict):
+            for key in favorites:
+                if not isinstance(key, str) or ":" not in key:
+                    continue
+                source, comic_id = key.split(":", 1)
+                if source and comic_id:
+                    entries.add((source, comic_id))
+    except (OSError, ValueError, TypeError):
+        pass
+    entries = list(entries)
     with _manga_stats_lock:
         prio = set(_manga_stats_pending)
     entries.sort(key=lambda sc: 0 if _manga_stats_skey(*sc) in prio else 1)
@@ -2344,16 +2829,31 @@ def _manga_stats_verify_once():
         k = _manga_stats_skey(source, comic_id)
         with _manga_stats_lock:
             old = _manga_lib_stats.get(k)
+            # Capture this entry's publication generation before scanning. The
+            # disk walk below is deliberately outside the global lock, so a
+            # download-complete hook may publish a newer snapshot meanwhile.
+            old_generation = ((int(old.get("rev") or 0),
+                               float(old.get("ts") or 0))
+                              if old is not None else None)
             _manga_stats_pending.discard(k)
         # 本周期内刚被增量更新（下载/修复钩子本身即真实扫描）→ 跳过
-        if old is not None and k not in prio and \
+        if old is not None and old.get("verified_chapters") is not None and k not in prio and \
                 time.time() - (old.get("ts") or 0) < _MANGA_VERIFY_INTERVAL:
             continue
         ent = _manga_stats_compute_entry(source, comic_id)
         with _manga_stats_lock:
             cur = _manga_lib_stats.get(k)
+            cur_generation = ((int(cur.get("rev") or 0),
+                               float(cur.get("ts") or 0))
+                              if cur is not None else None)
+            if cur_generation != old_generation:
+                # A download/repair/delete hook published after this verifier
+                # began. Its scan is newer than ours; never roll it back with
+                # a stale filesystem snapshot captured before that change.
+                continue
             if cur is None or cur.get("images") != ent["images"] \
                     or cur.get("chapters") != ent["chapters"] \
+                    or cur.get("verified_chapters") != ent["verified_chapters"] \
                     or cur.get("alt_images") != ent.get("alt_images"):
                 ent["rev"] = int((cur or {}).get("rev") or 0) + 1
                 _manga_lib_stats[k] = ent
@@ -2401,8 +2901,6 @@ def _manga_stats_verify_loop(stop_event=None):
         time.sleep(_MANGA_VERIFY_INTERVAL)
 
 
-_manga_stats_load()
-
 # B03: 下载完成 → 书库统计增量更新（engine 不反向依赖 server，钩子注入）
 _dm_mod.library_change_hook = _manga_stats_note_change
 
@@ -2423,7 +2921,8 @@ def _integrity_summary(source, comic_id):
     """读最近一次完整性校验结果概要(无结果返回 None)"""
     p = _integrity_path(source, comic_id)
     try:
-        d = json.load(open(p, encoding="utf-8"))
+        with open(p, encoding="utf-8") as _f:
+            d = json.load(_f)
         return {
             "status": d.get("status"),
             "scanned_at": d.get("scanned_at"),
@@ -2451,9 +2950,8 @@ def _manga_integrity_scan(source, comic_id):
             for _n in os.listdir(base):
                 _p = os.path.join(base, _n)
                 if os.path.isdir(_p) and _n not in seen:
-                    ok = any(f.lower().endswith(
-                        (".webp", ".jpg", ".jpeg", ".png"))
-                        for f in os.listdir(_p))
+                    ok = any(_is_manga_image_file(os.path.join(_p, f))
+                             for f in os.listdir(_p))
                     if ok:
                         seen.add(_n)
                         chids.append(_n)
@@ -2470,9 +2968,9 @@ def _manga_integrity_scan(source, comic_id):
         _names = {}
         for _s in ("copymanga", "copymanga_web"):
             try:
-                _li = json.load(open(os.path.join(
-                    MANGA_DOWNLOADS_DIR, _s, comic_id, "_info.json"),
-                    encoding="utf-8"))
+                with open(os.path.join(MANGA_DOWNLOADS_DIR, _s, comic_id,
+                                       "_info.json"), encoding="utf-8") as _f:
+                    _li = json.load(_f)
                 for c in (_li.get("chapters") or []):
                     _names[c.get("id", "")] = c.get("name", "")
             except Exception:
@@ -2494,8 +2992,7 @@ def _manga_integrity_scan(source, comic_id):
                 have = 0
                 if os.path.isdir(_dir):
                     have = sum(1 for f in os.listdir(_dir)
-                               if f.lower().endswith(
-                                   (".webp", ".jpg", ".jpeg", ".png")))
+                               if _is_manga_image_file(os.path.join(_dir, f)))
                 total = None
                 err = ""
                 try:
@@ -2575,12 +3072,15 @@ def _manga_check_one(source, comic_id, force_refresh=False):
         # 同一来源，保证 check-update 的 missing id 与 download-new 时
         # worker 拉取的章节 id 一致（旧详情缓存可能导致 id 不匹配 → 误报）
         cur_chapters = None
+        _update_time = ""
         # force_refresh：跳过快照缓存，直接源站（批量一键检查用）
         _dl_info = (os.path.join(MANGA_DOWNLOADS_DIR, source, comic_id,
                                  "_info.json") if not force_refresh else "")
         if _dl_info and os.path.exists(_dl_info):
             try:
-                _ci = json.load(open(_dl_info, encoding="utf-8"))
+                with open(_dl_info, encoding="utf-8") as _f:
+                    _ci = json.load(_f)
+                _update_time = str(_ci.get("update_time") or "")
                 if _ci.get("chapters"):
                     cur_chapters = [{"id": c["id"], "name": c["name"]}
                                     for c in _ci["chapters"]]
@@ -2591,19 +3091,33 @@ def _manga_check_one(source, comic_id, force_refresh=False):
                                        "_info_full.json") if not force_refresh else "")
             if _info_full and os.path.exists(_info_full):
                 try:
-                    _c = json.load(open(_info_full, encoding="utf-8"))
+                    with open(_info_full, encoding="utf-8") as _f:
+                        _c = json.load(_f)
                     _cd = _c.get("data") or {}
+                    _update_time = str(_cd.get("update_time") or "")
                     if _cd.get("chapters"):
                         cur_chapters = [{"id": c["id"], "name": c["name"]}
                                         for c in _cd["chapters"]]
                 except Exception:
                     pass
+        elif not _update_time:
+            # 本地下载章节快照也可能附带作品更新时间；确保检查更新使用现成元数据，
+            # 不因章节目录来自下载缓存就把收藏排序字段清空。
+            try:
+                _detail_path = os.path.join(MANGA_CACHE_DIR, source, comic_id,
+                                            "_info_full.json")
+                with open(_detail_path, encoding="utf-8") as _f:
+                    _update_time = str(((json.load(_f).get("data") or {})
+                                        .get("update_time")) or "")
+            except Exception:
+                pass
         if cur_chapters is None:
             _info_p = (os.path.join(MANGA_CACHE_DIR, source, comic_id,
                                     "_info.json") if not force_refresh else "")
             if _info_p and os.path.exists(_info_p):
                 try:
-                    _ci = json.load(open(_info_p, encoding="utf-8"))
+                    with open(_info_p, encoding="utf-8") as _f:
+                        _ci = json.load(_f)
                     if _ci.get("chapters"):
                         cur_chapters = [{"id": c["id"], "name": c["name"]}
                                         for c in _ci["chapters"]]
@@ -2616,15 +3130,12 @@ def _manga_check_one(source, comic_id, force_refresh=False):
         if cur_chapters is None:
             # R57: 统一网页渲染(copy4000 域, 稳定); copymanga 与 web 同库
             d = ad.comic_info(comic_id)
+            _update_time = str(getattr(d, "update_time", "") or "")
             cur_chapters = [{"id": c.id, "name": c.name} for c in d.chapters]
             if source in ("copymanga", "copymanga_web"):
                 _web_chlist_set("copymanga_web", comic_id, cur_chapters)
-        # 只排除**纯整卷合集**（"第X卷"整名，不可下载）；"01卷番外/02卷宣傳圖"
-        # 等卷附加内容是实际可下载章节，必须保留——与下载 worker 过滤一致
+        # 卷是有效阅读单元，更新比较也必须保留；未读数按真实目录身份差集计算。
         _all_chapters_for_favorites = list(cur_chapters)
-        from engine.manga.download_manager import _is_volume_only as _vol_only
-        cur_chapters = [c for c in cur_chapters
-                        if not _vol_only(c.get("name") or "")]
         # **统一按话号排序**：_info.json 存的是源站原始乱序（如"第44話"在首位），
         # 不排序则 latest 会取到"第01卷/第08卷"等错误章节
         from engine.manga.download_manager import _sort_chapters as _sort_ch
@@ -2666,8 +3177,15 @@ def _manga_check_one(source, comic_id, force_refresh=False):
             "missing_count": len(missing),
             "missing": missing[:200],
             # 收藏更新需要按“实际已读章节集合”计算未读，不能只返回本地缺失数。
+            # 公共响应保留有界列表；内部追更 worker 必须获得完整目录，不能让
+            # 长篇在 5000 话处静默截断收藏快照和未读计数。
             "all_chapters": _all_chapters_for_favorites[:5000],
+            "_catalog_chapters": _all_chapters_for_favorites,
             "latest": latest,
+            "latest_chapter_id": str(next((c.get("id") for c in reversed(cur_chapters)
+                                             if _ep_re.search(c.get("name") or "")),
+                                            cur_chapters[-1].get("id") if cur_chapters else "") or ""),
+            "update_time": _update_time,
             "integrity": _integrity,
         }
     except Exception as e:

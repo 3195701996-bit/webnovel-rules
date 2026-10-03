@@ -13,6 +13,11 @@ def hasReleaseSigning = keystorePropsFile.exists()
 if (hasReleaseSigning) {
     keystorePropsFile.withInputStream { keystoreProps.load(it) }
 }
+def requiredReleaseSigningKeys = ['storeFile', 'storePassword', 'keyAlias', 'keyPassword']
+def missingReleaseSigningKeys = requiredReleaseSigningKeys.findAll { key ->
+    !keystoreProps.getProperty(key, '').trim()
+}
+def hasCompleteReleaseSigning = hasReleaseSigning && missingReleaseSigningKeys.isEmpty()
 
 android {
     namespace 'com.webnovel.mobile'
@@ -21,26 +26,35 @@ android {
     // 产物基线（方向基线 P0-A）：把 revision 与构建时间编进包，
     // 用户截图里能对得上"到底是哪个包"，不用靠"最新版"这种说法。
     def gitRev = "unknown"
+    def gitRevFull = "unknown"
     def gitDirty = "unknown"
     try {
         def repoRoot = rootProject.file('..')
         gitRev = ['git', 'rev-parse', '--short', 'HEAD']
             .execute(null, repoRoot).text.trim()
-        // 只统计**会被打进包的那部分源码**是否与本提交一致。
+        gitRevFull = ['git', 'rev-parse', 'HEAD']
+            .execute(null, repoRoot).text.trim()
+        // 统计 APK 与其 instrumentation 验收代码所依赖的源码是否与本提交一致。
         //   · 排除 `data/`（运行时数据）、`android/app/build/`（构建产物）；
-        //   · 排除未跟踪文件（文档/脚本不进包，不该让标记变噪）；
+        //   · 按下方实际打包输入路径过滤，因此其中的未跟踪源码/资源也必须计入；
         //   · git 对非 ASCII 路径会加引号，必须去掉引号再比对（否则 runtime 数据
         //     会被误判成源码改动——实测把 3 个真实改动报成了 14 个）。
         // 这样 GIT_DIRTY=clean 就等价于"包的源码就是 GIT_REVISION 这个提交"。
         def dirtyFiles = ['git', 'status', '--porcelain', '--',
-                          'engine', 'server', 'app.py', 'static', 'templates',
+                          'app.py', 'engine', 'server', 'static', 'templates',
+                          'sources', 'requirements-android.txt',
                           'android/app/src', 'android/app/build.gradle',
-                          'android/app/src/main', 'requirements-android.txt']
+                          'android/build.gradle', 'android/settings.gradle',
+                          'android/gradle.properties', 'android/gradle',
+                          'android/mobile-seed-policy.json', 'android/seed-history.json']
             .execute(null, repoRoot).text.readLines().findAll { line ->
-                !line.startsWith('??') && line.trim().length() > 3
+                line.trim().length() > 3
             }
         gitDirty = dirtyFiles.isEmpty() ? "clean" : "${dirtyFiles.size()} files"
     } catch (Exception ignored) { }
+    rootProject.ext.buildGitRevision = gitRev
+    rootProject.ext.buildGitRevisionFull = gitRevFull
+    rootProject.ext.buildGitDirty = gitDirty
 
     defaultConfig {
         applicationId "com.webnovel.mobile"
@@ -62,7 +76,7 @@ android {
     }
     signingConfigs {
         release {
-            if (hasReleaseSigning) {
+            if (hasCompleteReleaseSigning) {
                 storeFile file(keystoreProps['storeFile'])
                 storePassword keystoreProps['storePassword']
                 keyAlias keystoreProps['keyAlias']
@@ -78,7 +92,7 @@ android {
         release {
             minifyEnabled false
             // 阶段 E：有签名材料才签名；没有材料就让构建失败，不产出"看起来能发布"的未签名包
-            if (hasReleaseSigning) {
+            if (hasCompleteReleaseSigning) {
                 signingConfig signingConfigs.release
             }
         }
@@ -94,14 +108,44 @@ android {
     }
 }
 
+// APK 内可独立读取的构建身份：发布验收器据此拒绝 dirty/未知源码包。
+def buildIdentityDir = layout.buildDirectory.dir('generated/build-identity')
+tasks.register('writeBuildIdentity') {
+    def revisionValue = rootProject.ext.buildGitRevisionFull
+    def dirtyValue = rootProject.ext.buildGitDirty
+    def versionNameValue = android.defaultConfig.versionName
+    def versionCodeValue = android.defaultConfig.versionCode
+    inputs.property('sourceRevision', revisionValue)
+    inputs.property('sourceDirtyState', dirtyValue)
+    inputs.property('versionName', versionNameValue.toString())
+    inputs.property('versionCode', versionCodeValue.toString())
+    outputs.file(buildIdentityDir.map { it.file('build-identity.properties') })
+    doLast {
+        def output = buildIdentityDir.get().file('build-identity.properties').asFile
+        output.parentFile.mkdirs()
+        output.text = "revision=${revisionValue}\ndirty=${dirtyValue}\nversionName=${versionNameValue}\nversionCode=${versionCodeValue}\n"
+    }
+}
+android.sourceSets.main.assets.srcDir(buildIdentityDir)
+android.sourceSets.androidTest.assets.srcDir(buildIdentityDir)
+tasks.matching {
+    it.name == 'mergeDebugAssets' || it.name == 'mergeReleaseAssets' ||
+        it.name == 'mergeDebugAndroidTestAssets'
+}
+    .configureEach { dependsOn 'writeBuildIdentity' }
+
 // Chaquopy 17 的 DSL 已从 python{} 改为按变体的 chaquopy{defaultConfig{}}（实测确认）
+// CI/开发机可以显式指定；否则让 Chaquopy 自行发现兼容 Python，避免依赖某台机器的绝对路径。
+def chaquopyBuildPython = System.getenv("CHAQUOPY_BUILD_PYTHON")
 chaquopy {
     defaultConfig {
         // Chaquopy 17 + CPython 3.13（设计 §4 候选工具链）
         version = "3.13"
         // 构建机需要同主次版本的 Python 来跑 pip（设计 §4：构建机器 Python
-        // 主次版本与目标一致）。本机用 Homebrew python@3.13。
-        buildPython = ["/opt/homebrew/opt/python@3.13/bin/python3.13"]
+        // 主次版本与目标一致）。由 Chaquopy 自动发现，或用环境变量显式指定。
+        if (chaquopyBuildPython) {
+            buildPython = [chaquopyBuildPython]
+        }
         pip {
             // 阶段 A 要验证的关键依赖：原生四件套 + WSGI + Web 框架
             install "flask==3.1.2"
@@ -169,6 +213,13 @@ dependencies {
     // 冷启动验收（诊断第七节：必须从点击 App 图标开始，而不是只测服务路径）
     androidTestImplementation 'androidx.compose.ui:ui-test-junit4'
     debugImplementation 'androidx.compose.ui:ui-test-manifest'
+}
+
+// Compose 1.7 / AndroidX Test 1.6 的 tracing 调用 forceEnableAppTracing()；
+// 由 activity 旧传递约束选出的 tracing 1.0.0 不含该 API，会在设备测试启动时
+// 令整个 instrumentation 进程崩溃。统一提升所有 Android 变体的解析版本。
+configurations.configureEach {
+    resolutionStrategy.force 'androidx.tracing:tracing:1.1.0'
 }
 
 // 白名单快照：唯一维护源 → 构建输出目录（阶段 C 起是**真实业务**）
@@ -361,9 +412,21 @@ gradle.taskGraph.whenReady { graph ->
     def wantsRelease = graph.allTasks.any { it.name.toLowerCase().contains('release') &&
         (it.name.startsWith('assemble') || it.name.startsWith('bundle') ||
          it.name.startsWith('package') || it.name.startsWith('install')) }
-    if (wantsRelease && !hasReleaseSigning) {
-        throw new GradleException(
-            "缺少发布签名材料：android/keystore.properties 不存在。" +
-            "请先生成 keystore（keytool）并写入该文件；不要用未签名包对外发布。")
+    if (wantsRelease) {
+        if (!hasReleaseSigning) {
+            throw new GradleException(
+                "缺少发布签名材料：android/keystore.properties 不存在；拒绝生成未签名 release。")
+        }
+        if (!missingReleaseSigningKeys.isEmpty()) {
+            throw new GradleException(
+                "发布签名配置缺少必需字段：${missingReleaseSigningKeys.join(', ')}；" +
+                "为保护凭据，不会输出配置值。")
+        }
+        def releaseStorePath = keystoreProps.getProperty('storeFile').trim()
+        def releaseStoreFile = rootProject.file(releaseStorePath)
+        if (!releaseStoreFile.isFile()) {
+            throw new GradleException(
+                "发布 keystore 文件不存在或不是普通文件：${releaseStoreFile}; 拒绝生成 release。")
+        }
     }
 }

@@ -8,6 +8,8 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -150,6 +152,8 @@ class NetworkLossTest {
     fun setUp() {
         comic = SelfTestComic()
         comic.create()
+        // Compose 规则会先启动 Activity、之后才运行 @Before；重建让首页重新读取夹具。
+        rule.activityRule.scenario.recreate()
         gateway = EngineGateway(ctx)
         ev("已造自检漫画（本地文件，不依赖网络）")
     }
@@ -173,6 +177,7 @@ class NetworkLossTest {
         rule.waitUntil(180_000) {
             texts("继续阅读") > 0 || texts("书架还是空的") > 0 ||
                 texts("漫画（", true) > 0 || texts("小说（", true) > 0 ||
+                texts("最近阅读") > 0 || texts("已缓存") > 0 || texts("收藏") > 0 ||
                 texts("本机引擎未就绪") > 0
         }
         assertTrue("断网冷启动不得以「引擎未就绪」收场：引擎是本机回环服务，与外网无关",
@@ -191,17 +196,27 @@ class NetworkLossTest {
     @OfflineAtStart
     fun offlineReadsDownloadedComic_fromLocalFiles() {
         assertTrue("用例前提：必须真的断网", !Airplane.outboundOk())
+        rule.openCachedShelf()
         waitText(SelfTestComic.TITLE, timeoutMs = 180_000)
         ev("断网状态下书架仍列出已下载漫画 ${SelfTestComic.TITLE}")
 
         clickText(SelfTestComic.TITLE)
+        // 外网断开时本机引擎仍然可用：书架详情必须用 catalog=local，只列本地两话，
+        // 再从该目录进入原生阅读器，不能把“离线”误当成“引擎不可用”并走在线目录。
         waitText("开始阅读", timeoutMs = 60_000)
+        rule.onNodeWithTag("manga_detail_counts").assertExists()
+        assertTrue("离线书架详情应只显示本地 2 话目录",
+            rule.onAllNodesWithText("共 2 单元", substring = true)
+                .fetchSemanticsNodes().isNotEmpty())
         clickText("开始阅读")
-        waitText("1 / 3 · 1/2页", timeoutMs = 60_000)
-        rule.onNodeWithTag("manga_pages").assertExists()
+        rule.waitUntil(60_000) {
+            nodes("manga_pager") > 0 || nodes("manga_pages") > 0
+        }
+        rule.tapReaderCenterAndShowControls()
+        waitText("1 / 2", timeoutMs = 60_000, substring = true)
         assertTrue("断网阅读不得出现图片加载失败占位",
             texts("页加载失败", true) == 0)
-        ev("断网阅读：第 1 话 2 页来自本地文件，无失败占位")
+        ev("断网阅读：本地目录 2 话；第 1 话 2 页，无失败占位")
     }
 
     // ── 3) 断网搜索：如实说"本机没网"，且恢复网络后不用重启即可继续 ─────────
@@ -212,11 +227,12 @@ class NetworkLossTest {
         rule.onAllNodesWithText("浏览")[0].performClick()
         waitText("漫画（优先）", timeoutMs = 60_000)
         rule.onAllNodesWithText("搜漫画")[0].performClick()
-        waitText("漫画搜索", timeoutMs = 30_000)
+        waitText("发现漫画", timeoutMs = 30_000)
         ev("已进入原生漫画搜索页（此时有网）")
 
         assertTrue("切换断网失败（设备仍有网），用例无法继续", Airplane.set(true))
-        ev("已断网：出网探测=${Airplane.outboundOk()}")
+        ev("已断网：出网探测=${Airplane.outboundOk()}，应用网络信号=${NetState.header(ctx)}")
+        assertEquals("飞行模式时 App 必须向本机引擎报告离线", "offline", NetState.header(ctx))
 
         // 关键词刻意选"不可能有结果"的：服务端只缓存非空结果，所以这条搜索
         // **不会命中缓存**——否则离线时看到的是上次缓存的结果，就测不到"断网归因"

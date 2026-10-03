@@ -168,6 +168,8 @@ def test_save_cover_bytes_uses_magic_extension(env):
     os.remove(p)
     p2 = st._save_cover_bytes(SRC, CID, JPEG)
     assert p2 and p2.endswith("cover.jpg"), p2
+    p3 = st._save_cover_bytes(SRC, CID, b"GIF89a" + b"x" * 1200)
+    assert p3 and p3.endswith("cover.gif"), p3
 
 
 # ── 4. 书库响应：cover_view + 原 cover 保留 ──────────────────

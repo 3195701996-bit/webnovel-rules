@@ -3,6 +3,7 @@ package com.webnovel.mobile
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
+import android.provider.Settings
 
 /**
  * 本机联网状态 —— 交给本机引擎当**设备级辅助证据**（见 engine/neterr.py 与
@@ -24,6 +25,16 @@ object NetState {
 
     /** "offline" / "online" / ""（未知，不发这个头） */
     fun header(ctx: Context): String {
+        // 飞行模式切换期间 ConnectivityManager 可能仍报告刚失效的 validated 网络；
+        // 系统标志本身是明确的设备级断网证据。
+        if (runCatching {
+                Settings.Global.getInt(
+                    ctx.contentResolver,
+                    Settings.Global.AIRPLANE_MODE_ON,
+                    0,
+                ) == 1
+            }.getOrDefault(false)
+        ) return "offline"
         val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE)
                 as? ConnectivityManager ?: return ""
         val net = cm.activeNetwork ?: return "offline"

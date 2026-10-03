@@ -1,5 +1,11 @@
 package com.webnovel.mobile
 
+import android.os.Bundle
+import android.os.StatFs
+import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.LargeTest
 import androidx.test.platform.app.InstrumentationRegistry
@@ -9,10 +15,14 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
 import org.junit.Before
+import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
+import java.io.FileOutputStream
+import java.util.UUID
 
 /**
  * P1-C 下载韧性验收（真机、真实源站）：方向基线 §7.2 要求
@@ -32,15 +42,25 @@ import java.io.File
 @LargeTest
 class DownloadResilienceTest {
 
+    @get:Rule
+    val rule = createAndroidComposeRule<MainActivity>()
+
     private lateinit var gateway: EngineGateway
-    private val source = "mangadex"
+    private var source = "mangadex"
     private var comicId: String = ""
     private var chapterId: String = ""
     private var title: String = ""
     private var cover: String = ""
     private var created = false
+    private var pressureFile: File? = null
+    private var preserveFixtureForColdStart = false
 
     private fun ev(line: String) = println("DL_RESILIENCE_EVIDENCE $line")
+    private fun reportEvidence(key: String, value: String) {
+        ev(value)
+        InstrumentationRegistry.getInstrumentation().sendStatus(
+            0, Bundle().apply { putString(key, value) })
+    }
     private val ctx get() = InstrumentationRegistry.getInstrumentation().targetContext
 
     @Before
@@ -52,14 +72,52 @@ class DownloadResilienceTest {
 
     @After
     fun tearDown() {
+        // Free pressure before asking the engine to stop or clean up test records.
+        pressureFile?.let { file ->
+            runCatching { file.delete(); file.parentFile?.delete() }
+        }
         runCatching {
             runBlocking {
+                if (preserveFixtureForColdStart) {
+                    gateway.stopEngine()
+                    return@runBlocking
+                }
                 var ep = gateway.currentEndpoint()
                 if (ep == null) ep = (gateway.connect() as? EngineState.Ready)?.endpoint
-                if (created && ep != null && comicId.isNotBlank()) {
-                    gateway.httpDelete(ep.port, "/api/manga/library/$source/$comicId?files=1")
+                var workerQuiesced = !created
+                if (comicId.isNotBlank()) {
+                    if (created && ep != null) {
+                        gateway.httpPost(ep.port,
+                            "/api/manga/download/pause?source=$source&cid=$comicId")
+                        var status = taskStatus(ep.port).optString("status")
+                        for (attempt in 0 until 30) {
+                            if (status !in listOf("running", "queued")) break
+                            delay(500)
+                            status = taskStatus(ep.port).optString("status")
+                        }
+                        check(status !in listOf("running", "queued")) {
+                            "隔离下载 worker 未停止，拒绝删除测试内容（status=$status）"
+                        }
+                        workerQuiesced = true
+                        val media = gateway.httpDelete(ep.port,
+                            "/api/manga/$source/$comicId/downloads")
+                        check(media.ok) { "隔离下载清理失败：HTTP ${media.code}" }
+                        val favorite = gateway.httpDelete(ep.port,
+                            "/api/manga/favorites/$source/$comicId")
+                        check(favorite.ok) { "隔离收藏清理失败：HTTP ${favorite.code}" }
+                        val shelf = gateway.httpDelete(ep.port,
+                            "/api/manga/library/$source/$comicId")
+                        check(shelf.ok) { "隔离书架清理失败：HTTP ${shelf.code}" }
+                    }
                 }
                 gateway.stopEngine()
+                if (workerQuiesced && comicId.startsWith("__download_resilience_")) {
+                    // Remove only this suite's UUID-scoped directory after the engine stops.
+                    File(OfflineStore.runtimeDir(ctx),
+                        "manga/downloads/$source/$comicId").deleteRecursively()
+                    File(OfflineStore.runtimeDir(ctx),
+                        "manga/_cache/$source/$comicId").deleteRecursively()
+                }
             }
         }
     }
@@ -82,19 +140,192 @@ class DownloadResilienceTest {
     }
 
     /** 找一部真实作品，准备一话下载（返回 taskKey） */
-    private suspend fun prepareTask(ep: EngineEndpoint): String {
+    private suspend fun prepareTask(ep: EngineEndpoint,
+                                    makeTargetUnwritable: Boolean = false,
+                                    startImmediately: Boolean = true): String {
         // 夹具解析：优先缓存、失败才搜索（源站限流不再让本用例成片失败）
         val fx = MangaFixture.pick(gateway, ep.port, source) { ev(it) }
-        comicId = fx.comicId
+        assumeTrue("写入恢复测试要求 MangaDex 章节 API", fx.source == "mangadex")
+        source = fx.source
+        val realComicId = fx.comicId
+        comicId = "__download_resilience_${UUID.randomUUID().toString().replace("-", "")}__"
         chapterId = fx.chapterId
         title = fx.title
         cover = fx.cover
-        val body = JSONObject().put("title", fx.title).put("cover", fx.cover)
-            .put("chapters", JSONArray().put(fx.chapterId)).toString()
-        val ok = gateway.httpPost(ep.port, "/api/manga/$source/$comicId/download", body)
-        assertTrue("创建下载任务应 2xx：HTTP ${ok.code}", ok.code in 200..299)
+        val detailResponse = gateway.httpText(ep.port, "/api/manga/$source/$realComicId")
+        assertTrue("读取真实章节目录应成功：HTTP ${detailResponse.code}", detailResponse.ok)
+        val detail = EngineData.mangaDetail(detailResponse.body)
+            ?: throw AssertionError("真实章节目录无法解析")
+        val chapter = detail.readingChapters.firstOrNull { it.id == chapterId }
+            ?: throw AssertionError("夹具章节不在作品目录：$chapterId")
+        val syntheticDir = File(OfflineStore.runtimeDir(ctx),
+            "manga/downloads/$source/$comicId")
+        assertTrue("随机隔离作品目录不得已存在", !syntheticDir.exists())
+        assertTrue("创建随机隔离作品目录失败", syntheticDir.mkdirs())
+        File(syntheticDir, "_info.json").writeText(
+            JSONObject().put("title", title).put("cover", cover)
+                .put("chapters", JSONArray().put(JSONObject()
+                    .put("id", chapter.id).put("name", chapter.name)
+                    .put("group", chapter.group)))
+                .toString(), Charsets.UTF_8)
+        if (makeTargetUnwritable) {
+            assertTrue("预建不可写测试目录", chapterDir().mkdirs() || chapterDir().isDirectory)
+            assertTrue("下载启动前设置目标目录不可写",
+                chapterDir().setWritable(false, false))
+        }
         created = true
+        if (startImmediately) startTask(ep)
         return "$source:$comicId"
+    }
+
+    private suspend fun startTask(ep: EngineEndpoint) {
+        val body = JSONObject().put("title", title).put("cover", cover)
+            .put("chapters", JSONArray().put(chapterId)).toString()
+        val r = gateway.httpPost(ep.port, "/api/manga/$source/$comicId/download", body)
+        assertTrue("创建随机隔离下载任务应 2xx：HTTP ${r.code}", r.code in 200..299)
+    }
+
+    @Test
+    fun fullStorageFailurePersistsForColdRestart() = runBlocking {
+        assumeTrue("真实填满存储只允许由 android_enospc_cold_start.sh 在专用 AVD 编排",
+            InstrumentationRegistry.getArguments().getString("enospcHarness") == "1")
+        val ep = gateway.currentEndpoint()!!
+        prepareTask(ep, startImmediately = false)
+
+        // Persist the task first: DownloadManager.save() must allocate the emergency
+        // reserve before image writes begin, so later ENOSPC can still save error state.
+        startTask(ep)
+        val runtime = OfflineStore.runtimeDir(ctx)
+        val reserve = File(runtime, "manga/_tasks.json.reserve")
+        assertTrue("任务进入下载前应先为快照建立应急预留",
+            reserve.isFile && reserve.length() >= 512L * 1024)
+        gateway.httpPost(ep.port,
+            "/api/manga/download/pause?source=$source&cid=$comicId")
+        var paused = ""
+        for (attempt in 0 until 60) {
+            paused = taskStatus(ep.port).optString("status")
+            if (paused == "paused") break
+            assertTrue("填满存储前任务不能先完成（status=$paused）", paused != "done")
+            delay(500)
+        }
+        assertTrue("填满存储前先暂停测试下载，防止竞态", paused == "paused")
+
+        // Keep a few MiB for Android/runtime bookkeeping; real chapter image writes
+        // then push the same /data partition to ENOSPC during the active download.
+        pressureFile = File(runtime, "manga/downloads/$source/__storage_pressure__/filler.bin")
+        assertTrue("创建隔离压力目录", pressureFile!!.parentFile!!.mkdirs())
+        val block = ByteArray(1024 * 1024)
+        FileOutputStream(pressureFile!!).use { stream ->
+            var stats = StatFs(ctx.filesDir.path)
+            while (stats.availableBytes > 4L * 1024 * 1024) {
+                stream.write(block)
+                stats = StatFs(ctx.filesDir.path)
+            }
+            stream.fd.sync()
+        }
+        val remaining = StatFs(ctx.filesDir.path).availableBytes
+        reportEvidence("enospcLowSpace", "READY 可用 ${remaining / 1024} KiB")
+
+        val resume = gateway.httpPost(ep.port,
+            "/api/manga/download/resume?source=$source&cid=$comicId")
+        assertTrue("低空间时继续任务应被接受：HTTP ${resume.code}", resume.ok)
+        var status = JSONObject()
+        for (attempt in 0 until 90) {
+            status = taskStatus(ep.port)
+            if (status.optString("status") in listOf("error", "done")) break
+            delay(1000)
+        }
+        assertTrue("真实写盘失败后任务应在限定时间进入 error（${status.optString("status")}）",
+            status.optString("status") == "error")
+        assertTrue("错误应明确归因到磁盘空间",
+            status.optString("error").contains("存储空间不足"))
+        val taskFile = File(runtime, "manga/_tasks.json")
+        val persisted = JSONObject(taskFile.readText(Charsets.UTF_8))
+            .optJSONObject("$source:$comicId")
+        assertTrue("ENOSPC 后 error 状态必须已落盘",
+            persisted?.optString("status") == "error")
+        reportEvidence("enospcPersisted", "PASS ${status.optString("error")}")
+
+        // User frees storage. The host harness force-stops this app process only
+        // after instrumentation exits; tests cannot kill their own target process.
+        assertTrue("释放模拟器压力文件", pressureFile!!.delete())
+        pressureFile!!.parentFile?.delete()
+        pressureFile = null
+        assertTrue("停止下载引擎", gateway.stopEngine())
+        preserveFixtureForColdStart = true
+        reportEvidence("enospcPhase1", "READY 测试漫画留给宿主机强杀/冷启动阶段验证")
+    }
+
+    @Test
+    fun persistedFullStorageFailureResumesAfterColdAppStart() = runBlocking {
+        assumeTrue("跨进程恢复阶段只允许由 android_enospc_cold_start.sh 编排",
+            InstrumentationRegistry.getArguments().getString("enospcHarness") == "1")
+        val taskFile = File(OfflineStore.runtimeDir(ctx), "manga/_tasks.json")
+        assertTrue("冷启动后任务快照仍存在", taskFile.isFile)
+        val tasks = JSONObject(taskFile.readText(Charsets.UTF_8))
+        val key = tasks.keys().asSequence().firstOrNull { candidate ->
+            candidate.startsWith("mangadex:__download_resilience_") &&
+                tasks.optJSONObject(candidate)?.optString("status") == "error" &&
+                tasks.optJSONObject(candidate)?.optString("error")?.contains("存储空间不足") == true
+        } ?: throw AssertionError("冷启动后应找到前一阶段持久化的真实 ENOSPC 错误任务")
+        val record = tasks.getJSONObject(key)
+        source = key.substringBefore(':')
+        comicId = key.substringAfter(':')
+        chapterId = record.optJSONArray("chapters")?.let { chapters ->
+            val item = chapters.opt(0)
+            if (item is JSONObject) item.optString("id") else item?.toString().orEmpty()
+        }.orEmpty()
+        assertTrue("恢复夹具章节 ID 已保存", chapterId.isNotBlank())
+        title = record.optString("title")
+        cover = record.optString("cover")
+        created = true // teardown removes only this persisted __download_resilience_* fixture
+
+        val ep = gateway.currentEndpoint()!! // @Before started a fresh app/service process
+        val recovered = taskStatus(ep.port)
+        assertTrue("新进程应从磁盘读取 error 状态",
+            recovered.optString("status") == "error")
+        assertTrue("新进程应保留可操作的磁盘空间提示",
+            recovered.optString("error").contains("存储空间不足"))
+        reportEvidence("enospcRecovered", "PASS ${recovered.optString("status")}，" +
+            recovered.optString("error").take(90))
+
+        // Verify the recovery path as a user sees it, not only through the API:
+        // the persisted storage failure must be visible in Downloads and its
+        // Continue button must invoke the real manga resume endpoint.
+        rule.waitUntil(60_000) {
+            rule.onAllNodesWithTag("nav_download").fetchSemanticsNodes().isNotEmpty()
+        }
+        rule.onAllNodesWithTag("nav_download")[0].performClick()
+        rule.waitUntil(60_000) {
+            rule.onAllNodesWithTag("task_stop_reason").fetchSemanticsNodes().any {
+                it.config.toString().contains("存储空间不足")
+            } && rule.onAllNodesWithTag("task_resume").fetchSemanticsNodes().isNotEmpty()
+        }
+        val visibleReason = rule.onAllNodesWithTag("task_stop_reason").fetchSemanticsNodes()
+            .first { it.config.toString().contains("存储空间不足") }.config.toString()
+        assertTrue("下载中心必须显示具体的磁盘空间恢复提示：$visibleReason",
+            visibleReason.contains("存储空间不足") && visibleReason.contains("继续下载"))
+        reportEvidence("enospcUiReason", "PASS 下载中心显示真实存储错误和继续指引")
+
+        val before = images().size
+        rule.onAllNodesWithTag("task_resume").let { buttons ->
+            buttons[buttons.fetchSemanticsNodes().lastIndex].performClick()
+        }
+        reportEvidence("enospcUiResume", "PASS 已从下载中心点击继续")
+        var progressed = false
+        var latest = JSONObject()
+        for (attempt in 0 until 90) {
+            if (images().size > before) { progressed = true; break }
+            latest = taskStatus(ep.port)
+            if (latest.optString("status") == "error") {
+                assumeTrue("冷启动后恢复失败属于外部源/网络问题：" +
+                    latest.optString("error").take(100), false)
+            }
+            delay(1000)
+        }
+        assertTrue("重新启动后的同一任务应继续下载（状态 ${latest.optString("status")}）",
+            progressed)
+        reportEvidence("enospcResumed", "PASS ${images().size} 张有效图片")
     }
 
     private suspend fun taskStatus(port: Int): JSONObject {
@@ -111,6 +342,10 @@ class DownloadResilienceTest {
         var st = taskStatus(ep.port)
         for (i in 0 until 20) {
             if (st.optString("status") in listOf("running", "queued")) break
+            if (st.optString("status") == "error" && images().isEmpty()) {
+                assumeTrue("当前漫画源不可达，无法运行真实下载韧性断言：" +
+                    st.optString("error").take(100), false)
+            }
             delay(1000); st = taskStatus(ep.port)
         }
         ev("任务已启动：status=${st.optString("status")}")
@@ -124,6 +359,10 @@ class DownloadResilienceTest {
             paused = taskStatus(ep.port).optString("status")
             if (paused in listOf("paused", "stopped")) break
             if (paused == "done") break          // 跑完了就测不了暂停，如实失败
+            if (paused == "error" && images().isEmpty()) {
+                assumeTrue("当前漫画源请求失败，跳过暂停恢复链路：" +
+                    taskStatus(ep.port).optString("error").take(100), false)
+            }
         }
         assertTrue("暂停应生效为 paused/stopped（实际 $paused）——若为 done 说明该章太快，需换更长的章节",
             paused in listOf("paused", "stopped"))
@@ -191,7 +430,14 @@ class DownloadResilienceTest {
         // 阈值只要 ≥1 张：这里验证的是"落盘的东西不会坏"，不是"下得有多快"——
         // 卡 3 张曾在源站抖动时假失败（实测：等了 60s 只有 2 张，MangaDex 首图就慢）。
         var waited = 0
-        while (images().size < 1 && waited < 90) { delay(1000); waited++ }
+        while (images().size < 1 && waited < 90) {
+            val state = taskStatus(ep.port)
+            if (state.optString("status") == "error") {
+                assumeTrue("当前漫画源下载失败，跳过中断续传断言：" +
+                    state.optString("error").take(100), false)
+            }
+            delay(1000); waited++
+        }
         assertTrue("应先有图片落盘（实际 ${images().size}，等了 ${waited}s）",
             images().size >= 1)
         val nAtKill = images().size
@@ -238,19 +484,24 @@ class DownloadResilienceTest {
         val ep = gateway.currentEndpoint()!!
         // 关键：**在下载开始前**把目标目录造好并设为不可写，否则章可能在 chmod 之前就下完了
         // （实测：先等 3 张再 chmod，任务早已跑完，断言拿不到任何失败信号）
-        prepareTask(ep)
-        assertTrue("预建章节目录", chapterDir().mkdirs() || chapterDir().isDirectory)
-        assertTrue("chmod 500", chapterDir().setWritable(false, false))
+        prepareTask(ep, makeTargetUnwritable = true)
         try {
             gateway.httpPost(ep.port,
                 "/api/manga/download/resume?source=$source&cid=$comicId")
             var bad = ""
             for (i in 0 until 45) {
                 delay(2000)
-                val s = taskStatus(ep.port)
-                val status = s.optString("status")
-                val failed = s.optInt("failed_chapters", 0)
-                if (status == "error" || status == "done" || failed > 0) {
+            val s = taskStatus(ep.port)
+            val status = s.optString("status")
+            val failed = s.optInt("failed_chapters", 0)
+            if (status == "error") {
+                val reason = s.optString("error")
+                val diskFailure = listOf("permission", "denied", "read-only", "只读",
+                    "权限", "写入", "存储").any { reason.contains(it, ignoreCase = true) }
+                assumeTrue("失败原因不是目标目录权限问题，无法验证不可写语义：" +
+                    reason.take(100), diskFailure)
+            }
+            if (status == "error" || status == "done" || failed > 0) {
                     bad = "status=$status failed_chapters=$failed reason=" +
                         s.optString("error").take(40)
                     break
@@ -269,6 +520,11 @@ class DownloadResilienceTest {
         for (i in 0 until 60) {
             delay(2000)
             if (images().isNotEmpty()) { progressed = true; break }
+            val state = taskStatus(ep.port)
+            if (state.optString("status") == "error") {
+                assumeTrue("恢复后失败由漫画源不可达导致：" +
+                    state.optString("error").take(100), false)
+            }
         }
         assertTrue("恢复权限后应能继续下载", progressed)
         ev("恢复权限后继续下载：${images().size} 张")

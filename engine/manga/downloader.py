@@ -156,6 +156,144 @@ class StorageWriteError(MangaError):
     """
 
 
+class _SourceRequestGate:
+    """Process-wide per-source request cap with foreground-first admission.
+
+    Separate ImageDownloader instances are created per comic so their caches
+    remain isolated, but their sockets still hit the same upstream site. This
+    gate prevents those instance-local pools and prefetch workers from adding
+    up without bound. Waiting order is interactive reader > explicit download
+    task > speculative prefetch; queued prefetch also supports cancellation.
+    """
+
+    _PRIORITIES = ("interactive", "download", "prefetch")
+
+    def __init__(self, capacity=8, min_interval=0.0):
+        self.capacity = max(1, int(capacity))
+        self.min_interval = max(0.0, float(min_interval))
+        self._next_start = 0.0
+        self._condition = threading.Condition()
+        self._active = 0
+        self._waiting = {name: 0 for name in self._PRIORITIES}
+
+    def acquire(self, priority="interactive", cancel_check=None):
+        ticket = priority if isinstance(priority, _SourceRequestTicket) else None
+        with self._condition:
+            if ticket is None:
+                ticket = _SourceRequestTicket(self, priority)
+            elif ticket.gate is not self:
+                raise ValueError("request ticket belongs to another source gate")
+            current_priority = ticket.priority
+            ticket.waiting = True
+            self._waiting[current_priority] += 1
+            try:
+                while True:
+                    if cancel_check is not None and cancel_check():
+                        return False
+                    # Same-image interactive callers can promote a coalesced
+                    # leader while it is still waiting for upstream admission.
+                    if current_priority != ticket.priority:
+                        current_priority = ticket.priority
+                    higher_waiting = any(
+                        self._waiting[name] for name in
+                        self._PRIORITIES[:self._PRIORITIES.index(current_priority)])
+                    now = time.monotonic()
+                    interval_ready = now >= self._next_start
+                    if (self._active < self.capacity and not higher_waiting
+                            and interval_ready):
+                        self._active += 1
+                        self._next_start = now + self.min_interval
+                        self._waiting[current_priority] -= 1
+                        ticket.waiting = False
+                        ticket.acquired = True
+                        return True
+                    wait_for = 0.1
+                    if self._active < self.capacity and not higher_waiting:
+                        wait_for = min(wait_for, max(0.001, self._next_start - now))
+                    self._condition.wait(wait_for)
+            finally:
+                if ticket.waiting:
+                    self._waiting[ticket.priority] -= 1
+                    ticket.waiting = False
+                self._condition.notify_all()
+
+    def release(self):
+        with self._condition:
+            if self._active <= 0:
+                raise RuntimeError("source request gate released without acquire")
+            self._active -= 1
+            self._condition.notify_all()
+
+
+class _SourceRequestTicket:
+    """Mutable source-gate admission request shared by coalesced image calls."""
+
+    def __init__(self, gate, priority):
+        self.gate = gate
+        self.priority = priority if priority in gate._waiting else "interactive"
+        self.waiting = False
+        self.acquired = False
+
+    def promote(self, priority):
+        if priority not in self.gate._waiting:
+            priority = "interactive"
+        with self.gate._condition:
+            if self.acquired:
+                return
+            if self.gate._PRIORITIES.index(priority) < self.gate._PRIORITIES.index(self.priority):
+                if self.waiting:
+                    self.gate._waiting[self.priority] -= 1
+                self.priority = priority
+                if self.waiting:
+                    self.gate._waiting[self.priority] += 1
+                self.gate._condition.notify_all()
+
+
+class _ImageFlight:
+    """Single-flight completion event with a promotable gate ticket."""
+
+    def __init__(self, gate, priority):
+        self.event = threading.Event()
+        self.ticket = _SourceRequestTicket(gate, priority)
+
+    def promote(self, priority):
+        self.ticket.promote(priority)
+
+    def wait(self, timeout=None):
+        return self.event.wait(timeout)
+
+    def is_set(self):
+        return self.event.is_set()
+
+    def set(self):
+        self.event.set()
+
+
+_SOURCE_REQUEST_GATES = {}
+_SOURCE_REQUEST_GATES_LOCK = threading.Lock()
+
+
+def _source_request_gate(adapter):
+    raw_key = (adapter if isinstance(adapter, str)
+               else getattr(adapter, "key", "unknown"))
+    key = str(raw_key or "unknown").strip().lower()
+    if key in ("copymanga", "copymanga_web"):
+        key = "copymanga"
+    with _SOURCE_REQUEST_GATES_LOCK:
+        gate = _SOURCE_REQUEST_GATES.get(key)
+        if gate is None:
+            interval = 0.25 if key == "copymanga" else 0.0
+            raw_interval = os.environ.get("WR_MANGA_DL_INTERVAL", "").strip()
+            if raw_interval and key == "copymanga":
+                try:
+                    interval = max(0.0, min(10.0, float(raw_interval)))
+                except ValueError:
+                    pass
+            gate = _SourceRequestGate(capacity=8, min_interval=interval)
+            _SOURCE_REQUEST_GATES[key] = gate
+        return gate
+
+
 def _valid_image_header(path):
     """校验图片文件头（JPEG/PNG/GIF/WEBP/AVIF），防缓存损坏文件"""
     try:
@@ -169,7 +307,7 @@ def _valid_image_header(path):
         return True
     if h[:8] == b'\x89PNG\r\n\x1a\n':
         return True
-    if h[:3] in (b'GIF87a', b'GIF89a'):
+    if h[:6] in (b'GIF87a', b'GIF89a'):
         return True
     if h[:4] == b'RIFF' and h[8:12] == b'WEBP':
         return True
@@ -179,6 +317,31 @@ def _valid_image_header(path):
     if h[4:8] == b'ftyp' and h[8:12] in (b'avif', b'avis'):
         return True
     return False
+
+
+def _downloaded_page_indices(chapter_dir):
+    """Return unique, readable zero-based page indices in a download folder.
+
+    A count of files is not a count of pages: interrupted/retried downloads can
+    leave two extensions for one index, and every supported image format must
+    participate in resume/integrity checks.
+    """
+    import re
+
+    indices = set()
+    try:
+        names = os.listdir(chapter_dir)
+    except OSError:
+        return indices
+    for name in names:
+        match = re.fullmatch(r"(\d+)(?:\.[^.]+)?", name)
+        if not match or os.path.splitext(name)[1].lower() not in (
+                ".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif"):
+            continue
+        path = os.path.join(chapter_dir, name)
+        if os.path.isfile(path) and _valid_image_header(path):
+            indices.add(int(match.group(1)))
+    return indices
 
 
 def _cached_bytes(cp, min_size=4096):
@@ -206,20 +369,68 @@ def _curl_engine_available():
         return False
 
 
-# 降级路径的会话：thread-local，避免 Session 跨线程共享（requests.Session 非线程安全）。
-# 同主机同 IP 时 `_mount_pinned` 会复用既有受控挂载，因此同一 worker 线程内
-# 连续取图仍保持 keep-alive；换主机才会重新挂载。
-_REQ_TLS = threading.local()
+# requests 降级路径的有界连接池。Web/API 每个请求可能落在新线程上，thread-local
+# Session 无法跨请求复用 TLS keep-alive；独占借出避免并发共享 Session 的 mutable
+# adapter/pin 状态，同时保留同 Session 的连接池。
+_REQ_SESSION_POOL_SIZE = 8
+_req_session_pool = []
+_req_session_locks = []
+_req_pool_init_lock = threading.Lock()
+_req_pool_avail = threading.Condition()
 
 
-def _requests_session():
-    sess = getattr(_REQ_TLS, "sess", None)
-    if sess is None:
+def _ensure_requests_pool():
+    global _req_session_pool, _req_session_locks
+    if _req_session_pool:
+        return
+    with _req_pool_init_lock:
+        if _req_session_pool:
+            return
         import requests
-        sess = requests.Session()
-        sess.trust_env = False      # 不走环境/系统代理：绑定语义要求直连（经代理时 pin 会明确拒绝）
-        _REQ_TLS.sess = sess
-    return sess
+        from requests.adapters import HTTPAdapter
+        sessions, locks = [], []
+        for _ in range(_REQ_SESSION_POOL_SIZE):
+            sess = requests.Session()
+            sess.trust_env = False
+            adapter = HTTPAdapter(pool_connections=8, pool_maxsize=8,
+                                  max_retries=0)
+            sess.mount("https://", adapter)
+            sess.mount("http://", adapter)
+            sessions.append(sess)
+            locks.append(threading.Lock())
+        _req_session_pool, _req_session_locks = sessions, locks
+
+
+def _acquire_requests_session(timeout=None):
+    _ensure_requests_pool()
+    deadline = None if timeout is None else time.monotonic() + timeout
+    while True:
+        sessions, locks = _req_session_pool, _req_session_locks
+        for sess, lock in zip(sessions, locks):
+            if lock.acquire(blocking=False):
+                return sess, lock
+        with _req_pool_avail:
+            for sess, lock in zip(sessions, locks):
+                if lock.acquire(blocking=False):
+                    return sess, lock
+            if deadline is None:
+                _req_pool_avail.wait()
+            else:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or not _req_pool_avail.wait(remaining):
+                    raise MangaError("requests 图片会话池借出超时")
+
+
+def _release_requests_session(lock):
+    # Requests may store Set-Cookie values on Session; never carry upstream
+    # identity across unrelated comic/API requests in the shared pool.
+    for sess, candidate in zip(_req_session_pool, _req_session_locks):
+        if candidate is lock:
+            sess.cookies.clear()
+            break
+    with _req_pool_avail:
+        lock.release()
+        _req_pool_avail.notify_all()
 
 
 def _fetch_image_checked_requests(url, headers, timeout=20):
@@ -240,7 +451,7 @@ def _fetch_image_checked_requests(url, headers, timeout=20):
     返回 requests.Response：其 `.status_code/.headers/.content` 与 curl_cffi
     响应对调用方完全同构，故上层（下载器、代理路由、修复补页）无需改动。
     """
-    sess = _requests_session()
+    sess, sess_lock = _acquire_requests_session(timeout=timeout)
     cur = url
     # 移动端（WR_PROFILE=mobile）：VPN/代理 App 的 fake-ip（198.18/15 被标准库
     # 判为私网）与 DNS 污染会让"解析校验 + IP 钉绑"误杀正常目标——而系统网络栈
@@ -249,59 +460,57 @@ def _fetch_image_checked_requests(url, headers, timeout=20):
     # 服务"，钉绑/解析失败时退回主机名直连（证书校验与逐跳重定向限制保留），
     # 并如实记日志；桌面严格语义一字不动。
     _mobile = (os.environ.get("WR_PROFILE") or "").strip().lower() == "mobile"
-    for hop in range(MAX_REDIRECTS + 1):
-        ok, why = url_is_public_resolved(cur)
-        if not ok:
-            if not _mobile:
-                where = "请求目标" if hop == 0 else f"第{hop}跳重定向"
-                raise SSRFBlocked(f"{where}被拒绝: {why} ({cur[:120]})")
-            print(f"[img-fetch] 解析校验不适用（{why}），移动端退回系统网络栈: "
-                  f"{cur[:100]}", flush=True)
-        _proxy = _netproxy.current_proxy()
-        if _mobile:
-            # 钉绑尽力而为：失败不阻断（系统网络栈会正确处理）
+    try:
+        for hop in range(MAX_REDIRECTS + 1):
+            ok, why = url_is_public_resolved(cur)
+            if not ok:
+                if not _mobile:
+                    where = "请求目标" if hop == 0 else f"第{hop}跳重定向"
+                    raise SSRFBlocked(f"{where}被拒绝: {why} ({cur[:120]})")
+                print(f"[img-fetch] 解析校验不适用（{why}），移动端退回系统网络栈: "
+                      f"{cur[:100]}", flush=True)
+            proxy = _netproxy.current_proxy()
+            if _mobile:
+                try:
+                    pinned = pin_requests_session(sess, cur, proxy=proxy or None)
+                except Exception as exc:
+                    print(f"[img-fetch] IP 绑定不可用，退回主机名直连: "
+                          f"{type(exc).__name__} ({cur[:80]})", flush=True)
+                    pinned = False
+            else:
+                pinned = pin_requests_session(sess, cur, proxy=proxy or None)
+                if not pinned and not proxy:
+                    raise PinUnavailable(
+                        f"requests 降级路径无法对该地址建立受控 IP 绑定: {cur[:120]}")
             try:
-                pinned = pin_requests_session(sess, cur, proxy=_proxy or None)
-            except Exception as _pe:
-                print(f"[img-fetch] IP 绑定不可用，退回主机名直连: "
-                      f"{type(_pe).__name__} ({cur[:80]})", flush=True)
-                pinned = False
-        else:
-            pinned = pin_requests_session(sess, cur, proxy=_proxy or None)
-            if not pinned and not _proxy:
-                # 直连时"未能绑定"原则上判不可用（与 curl 路径语义对齐，不假装已绑定）。
-                # **但配了代理就是另一回事**：连接终点是代理，目标 IP 绑定本就不适用
-                # （见 engine/netproxy 的边界说明）——旧实现在这里直接抛 PinUnavailable，
-                # 结果是"一配代理，图片全部取不到"（用户要的就是代理解决可达性）。
-                raise PinUnavailable(
-                    f"requests 降级路径无法对该地址建立受控 IP 绑定: {cur[:120]}")
-        try:
-            resp = sess.get(cur, headers=headers, timeout=timeout,
-                            proxies=_netproxy.proxy_dict(),
-                            allow_redirects=False, verify=True)
-        except Exception:
-            if _mobile and pinned:
-                # 钉到的 IP 可能已失效/被污染：解除钉绑，按主机名让系统栈重试一次
-                print(f"[img-fetch] 钉绑连接失败，解除钉绑按主机名重试: {cur[:80]}",
-                      flush=True)
-                from ..urlsec import _unmount_pinned
-                _unmount_pinned(sess)
-                pinned = False
                 resp = sess.get(cur, headers=headers, timeout=timeout,
                                 proxies=_netproxy.proxy_dict(),
                                 allow_redirects=False, verify=True)
-            else:
-                raise
-        if resp.status_code not in (301, 302, 303, 307, 308):
-            return resp
-        loc = (resp.headers or {}).get("Location") or (resp.headers or {}).get("location")
-        if not loc:
-            return resp
-        cur = urljoin(cur, loc)
-    raise SSRFBlocked(f"重定向次数超过上限({MAX_REDIRECTS}): {url[:120]}")
+            except Exception:
+                if _mobile and pinned:
+                    print(f"[img-fetch] 钉绑连接失败，解除钉绑按主机名重试: {cur[:80]}",
+                          flush=True)
+                    from ..urlsec import _unmount_pinned
+                    _unmount_pinned(sess)
+                    resp = sess.get(cur, headers=headers, timeout=timeout,
+                                    proxies=_netproxy.proxy_dict(),
+                                    allow_redirects=False, verify=True)
+                else:
+                    raise
+            if resp.status_code not in (301, 302, 303, 307, 308):
+                return resp
+            location = (resp.headers or {}).get("Location") \
+                or (resp.headers or {}).get("location")
+            if not location:
+                return resp
+            cur = urljoin(cur, location)
+        raise SSRFBlocked(f"重定向次数超过上限({MAX_REDIRECTS}): {url[:120]}")
+    finally:
+        _release_requests_session(sess_lock)
 
 
-def fetch_image_checked(url, headers, timeout=20, acquire_timeout=None):
+def fetch_image_checked(url, headers, timeout=20, acquire_timeout=None, *,
+                        source=None, priority="interactive", cancel_check=None):
     """SSRF 校验 + 禁自动重定向逐跳校验的图片 GET（漫画图片通道共用）。
 
     模式对齐 engine/fetcher.py `_send_checked`（R35b）：每跳（含首跳）都过
@@ -321,6 +530,21 @@ def fetch_image_checked(url, headers, timeout=20, acquire_timeout=None):
     为 B01 全链路 deadline 传递预留：调用方把剩余预算换算后传入，
     超时抛 MangaError（本项不实现全链路 deadline）。
     """
+    # 若调用方提供 source（server 的源专属流程），在唯一统一网络入口限流。
+    # ImageDownloader 自己持有此 gate 时传 _gate_held，避免双重 acquire。
+    _gate = _source_request_gate(source) if source else None
+    if _gate is not None and not _gate.acquire(priority, cancel_check):
+        raise MangaError("图片请求已取消")
+    try:
+        return _fetch_image_checked_unlimited(
+            url, headers, timeout=timeout, acquire_timeout=acquire_timeout)
+    finally:
+        if _gate is not None:
+            _gate.release()
+
+
+def _fetch_image_checked_unlimited(url, headers, timeout=20,
+                                   acquire_timeout=None):
     # 引擎选择：优先 curl_cffi（TLS 指纹 + 连接池）；不可用时走 requests 受控降级
     # （Android 无 curl_cffi wheel）。两条路径安全契约一致，见各自 docstring。
     if not _curl_engine_available():
@@ -502,9 +726,19 @@ class ImageDownloader:
         self.cache_root = cache_root
         # 并发：显式 concurrency 优先（阅读通道可放开源限制）；
         # 默认 源 concurrent*2（下载任务节流防风控）
-        _conc = concurrency if concurrency else \
-            getattr(adapter, 'concurrent', 2) * 2
-        self._sem = threading.Semaphore(max(2, _conc))
+        if concurrency is None:
+            _conc = getattr(adapter, 'concurrent', 2) * 2
+        else:
+            # An explicit value is a source-level safety/performance setting.
+            # In particular, 1 must remain serial for sources under rate limits;
+            # forcing a minimum of 2 silently ignored the caller's setting.
+            _conc = concurrency
+        try:
+            _conc = max(1, int(_conc))
+        except (TypeError, ValueError):
+            _conc = 1
+        self._sem = threading.Semaphore(_conc)
+        self._source_gate = _source_request_gate(adapter)
         self._lock = threading.Lock()
         self._min_interval = min_interval  # 同实例每图最小间隔秒
         self._last_dl_ts = [0.0]
@@ -513,7 +747,7 @@ class ImageDownloader:
         # 不合并就是**同一张图抓两遍**——jm 这类 CDN 每 IP 带宽/风控受限，
         # 重复抓取直接拖慢用户可见页，也让风控计数翻倍。
         self._flight_lock = threading.Lock()
-        self._flight = {}          # cache_path -> Event（leader 完成即 set）
+        self._flight = {}          # cache_path -> _ImageFlight（旧 Event 快照仍兼容）
 
     def _throttle(self):
         """图片下载节流：同源串行间隔，防止高频请求触发 IP 风控标记"""
@@ -536,7 +770,8 @@ class ImageDownloader:
         os.makedirs(d, exist_ok=True)
         return os.path.join(d, f"{idx:04d}{ext}")
 
-    def get(self, image_url, comic_id, chapter_id, idx, timeout=20):
+    def get(self, image_url, comic_id, chapter_id, idx, timeout=20, *,
+            priority="interactive", cancel_check=None):
         """获取图片字节（缓存优先；R11 加固：有效头校验 + 损坏重下）"""
         ext = os.path.splitext(image_url.split('?')[0])[1] or '.webp'
         if ext.lower() not in ('.jpg', '.jpeg', '.png', '.webp', '.gif', '.avif'):
@@ -553,12 +788,15 @@ class ImageDownloader:
         # ── 同图单飞：同 cache_path 只允许一个回源者，其余等它的结果 ──
         # 语义与 /img 的 P1-4 单飞一致：跟随者不做第二个同图生产者——
         # 命中即直出，未命中即明确失败，由上层冷却/重试处理。
-        _mine = threading.Event()      # 本次登记进 flight 表的事件（leader 用）
+        _mine = _ImageFlight(self._source_gate, priority)
         with self._flight_lock:
             _wait_ev = self._flight.get(cp)
             _leader = _wait_ev is None
             if _leader:
                 self._flight[cp] = _mine
+            elif isinstance(_wait_ev, _ImageFlight):
+                # Promote a queued leader only; an active HTTP request is shared as-is.
+                _wait_ev.promote(priority)
         _pre = None
         if _leader:
             # 清理"损坏/过小文件"只能 leader 做：跟随者此时动手会把 leader
@@ -582,7 +820,7 @@ class ImageDownloader:
                     raise MangaError("图片下载失败: 同图请求未成功")
                 # leader 远超正常时长仍无结果（挂死）→ 接管：登记**新**事件，
                 # 否则之后来的跟随者还在等那个永远不会 set 的旧事件
-                _mine = threading.Event()
+                _mine = _ImageFlight(self._source_gate, priority)
                 with self._flight_lock:
                     self._flight[cp] = _mine
                 _leader = True
@@ -590,11 +828,17 @@ class ImageDownloader:
             if _pre is not None:
                 return _pre, cp          # 复用别人刚落盘的结果，零重复回源
             with self._sem:
-                self._throttle()
-                # R29(技术评审5.4): 章节/URL 作为显式参数传入——不再写实例属性
-                # _cur_ep/_cur_url（多线程并发下载时互相覆盖，导致按章节还原的
-                # 图片用错上下文）
-                return self._download(image_url, cp, timeout, chapter_id, image_url)
+                gate_request = _mine.ticket if _leader else priority
+                if not self._source_gate.acquire(gate_request, cancel_check):
+                    raise MangaError("图片请求已取消")
+                try:
+                    self._throttle()
+                    # R29(技术评审5.4): 章节/URL 作为显式参数传入——不再写实例属性
+                    # _cur_ep/_cur_url（多线程并发下载时互相覆盖，导致按章节还原的
+                    # 图片用错上下文）
+                    return self._download(image_url, cp, timeout, chapter_id, image_url)
+                finally:
+                    self._source_gate.release()
         finally:
             if _leader:
                 # 仅当登记的还是本次的事件才摘除（被接管的场景交给接管者）

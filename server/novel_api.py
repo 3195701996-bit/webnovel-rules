@@ -930,8 +930,12 @@ def api_search():
         except Exception as _e:
             print(f"[search-enhance] {_cache_key[0]}: 后台增强失败: "
                   f"{type(_e).__name__}: {_e}", flush=True)
-    threading.Thread(target=_enhance_bg, args=(glist, _cache_key),
-                     daemon=True).start()
+    # 跟随服务统一后台开关：契约检查/移动受控环境禁用后台工作时，
+    # 不应留下仍在输出日志的守护线程，导致 Python 解释器退出崩溃。
+    from server.runtime import worker_enabled
+    if worker_enabled("search-warm"):
+        threading.Thread(target=_enhance_bg, args=(glist, _cache_key),
+                         daemon=True).start()
 
     # 写入搜索缓存（限制容量，落盘；含未增强快照，后台增强完成后覆写）
     # R52: 空结果不写缓存——一次全源失败/抽风的空结果不应让后续搜索
@@ -2167,5 +2171,4 @@ def api_book_progress_save(book_key):
         print(f"[error] 进度保存失败: {type(e).__name__}: {e}", flush=True)
         return jsonify({"ok": False, "error": "进度保存失败，请稍后重试"}), 500
     return jsonify({"ok": True})
-
 

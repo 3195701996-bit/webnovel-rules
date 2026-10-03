@@ -9,10 +9,10 @@
 </head>
 <body>
 <header class="topbar">
-  <span class="logo">📚 webnovel_rules<small>小说爬虫与阅读中心</small></span>
+  <span class="logo">📚 webnovel_rules<small>发现 · 收藏 · 阅读</small></span>
   <nav>
-    <a href="/">书库</a>
-    <a href="/">新建任务</a>
+    <a href="/">🔍 发现</a>
+    <a href="/library">📖 书架</a>
     <a href="/manga">🎨 漫画</a>
   </nav>
   <div class="spacer"></div>
@@ -24,18 +24,22 @@
   <p class="page-sub" id="task-meta"></p>
 
   <div class="form-card">
-    <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
+    <div class="task-action-row">
       <span class="dot" id="status-dot"></span>
       <strong id="status-text">—</strong>
-      <span style="flex:1"></span>
+      <span class="task-action-spacer"></span>
       <button class="btn small" id="btn-pause" style="display:none;">⏸ 暂停</button>
       <button class="btn small" id="btn-resume" style="display:none;">▶ 恢复</button>
       <button class="btn danger small" id="btn-stop" style="display:none;">⏹ 停止</button>
       <button class="btn danger small" id="btn-del" style="display:none;">🗑 删除任务</button>
       <button class="btn small" id="btn-refresh" title="手动刷新">🔄</button>
     </div>
+    <div id="task-feedback" class="task-feedback" role="status" aria-live="polite" hidden></div>
+    <div id="task-failure" class="task-error-detail" role="alert" hidden></div>
+    <div id="task-load-feedback" class="task-feedback task-feedback-error" role="status" aria-live="polite" hidden></div>
     <div class="progress-wrap">
-      <div class="progress"><i id="bar" style="width:0%"></i></div>
+      <div class="progress" id="task-progress" role="progressbar" aria-label="任务进度"
+           aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i id="bar" style="width:0%"></i></div>
       <span class="progress-num" id="pct">0%</span>
     </div>
     <p id="progress-detail" style="margin-top:12px;font-size:.9rem;color:var(--text-dim);"></p>
@@ -54,8 +58,19 @@ const TASK_ID = {{ task_id | tojson }};
 async function load() {
   try {
     const r = await fetch('/api/tasks/' + TASK_ID);
+    if (r.status === 404) {
+      $('#task-title').textContent = '任务不存在';
+      const feedback = $('#task-load-feedback');
+      feedback.textContent = '该任务记录已被删除或不存在。';
+      feedback.hidden = false;
+      feedback.classList.add('task-feedback-error');
+      taskPoller.stop();
+      return 'missing';
+    }
+    if (!r.ok) throw new Error('HTTP ' + r.status);
     const t = await r.json();
     if (!t.id) { $('#task-title').textContent = '任务不存在'; return null; }
+    $('#task-load-feedback').hidden = true;
     const p = t.progress || {};
     $('#task-title').textContent = ('书源爬取')
       + ' · ' + (p.book_name || t.book_key || t.book_url);
@@ -63,6 +78,10 @@ async function load() {
       + (t.finished_at ? ' ｜ 结束于 ' + t.finished_at.replace('T', ' ').slice(0, 19) : '');
 
     const st = t.status;
+    const failure = st === 'error' ? String(t.stop_reason || t.error || '').trim().slice(0, 240) : '';
+    const failureNode = $('#task-failure');
+    failureNode.textContent = failure;
+    failureNode.hidden = !failure;
     const dot = $('#status-dot');
     dot.className = 'dot ' + (st === 'running' ? 'running' : st === 'done' ? 'done' : st === 'error' ? 'error' : 'stopped');
     const labels = {running: '爬取中…', done: '✅ 已完成', error: '❌ 出错', stopped: '已停止', paused: '⏸ 已暂停（可恢复）'};
@@ -78,6 +97,7 @@ async function load() {
       const pct = Math.round(p.completed / p.total * 100);
       $('#bar').style.width = pct + '%';
       $('#pct').textContent = pct + '%';
+      $('#task-progress').setAttribute('aria-valuenow', String(Math.max(0, Math.min(100, pct))));
       $('#progress-detail').textContent =
         `已完成 ${p.completed || 0} / ${p.total} 章` +
         (p.failed ? ` ｜ 失败 ${p.failed} 章` : '') +
@@ -88,6 +108,7 @@ async function load() {
       $('#bar').style.width = '100%';
       $('#bar').style.opacity = '0.35';
       $('#pct').textContent = '…';
+      $('#task-progress').removeAttribute('aria-valuenow');
       $('#progress-detail').textContent = p.message || '准备中…';
     }
 
@@ -105,32 +126,46 @@ async function load() {
     }
     return st;   // B03: 返回任务状态供轮询器调速
   } catch (e) {
-    $('#task-title').textContent = '加载失败';
+    const feedback = $('#task-load-feedback');
+    feedback.textContent = '任务状态暂时加载失败，页面会自动重试；也可以点“刷新”立即重试。';
+    feedback.hidden = false;
     return null;   // B03: 失败供轮询器指数退避
   }
 }
 
-$('#btn-stop').addEventListener('click', async () => {
-  await fetch('/api/tasks/' + TASK_ID + '/stop', {method: 'POST'});
-  $('#btn-stop').disabled = true;
-  $('#btn-stop').textContent = '停止中…';
-});
+async function taskAction(button, action, pendingText, successText) {
+  if (button.disabled) return;
+  const oldText = button.textContent;
+  button.disabled = true;
+  button.textContent = pendingText;
+  const feedback = $('#task-feedback');
+  try {
+    const response = await fetch('/api/tasks/' + TASK_ID + '/' + action, {method:'POST'});
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data.ok === false) throw new Error(data.error || ('HTTP ' + response.status));
+    feedback.classList.remove('task-feedback-error');
+    feedback.textContent = successText;
+    feedback.hidden = false;
+    toast(successText, 'ok');
+    taskPoller.kick();
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = oldText;
+    feedback.textContent = `${pendingText.replace(/[.…]+$/g, '')}失败：${String(error.message || error).slice(0, 100)}`;
+    feedback.hidden = false;
+    feedback.classList.add('task-feedback-error');
+    toast(feedback.textContent, 'error');
+  }
+}
 
-$('#btn-pause').addEventListener('click', async () => {
-  const r = await fetch('/api/tasks/' + TASK_ID + '/pause', {method: 'POST'});
-  if (!r.ok) { toast('暂停失败', 'error'); return; }
-  toast('已请求暂停…', 'ok');
-  $('#btn-pause').disabled = true;
-  $('#btn-pause').textContent = '暂停中…';
-});
+$('#btn-stop').addEventListener('click', () =>
+  taskAction($('#btn-stop'), 'stop', '停止中…', '已请求停止，当前章节结束后生效'));
 
-$('#btn-resume').addEventListener('click', async () => {
-  const r = await fetch('/api/tasks/' + TASK_ID + '/resume', {method: 'POST'});
-  const d = await r.json().catch(() => ({}));
-  if (!r.ok) { alert(d.error || '恢复失败'); return; }
-  $('#btn-resume').disabled = true;
-  $('#btn-resume').textContent = '恢复中…';
-});
+$('#btn-pause').addEventListener('click', () =>
+  taskAction($('#btn-pause'), 'pause', '暂停中…', '已请求暂停，当前章节结束后生效'));
+
+$('#btn-resume').addEventListener('click', () =>
+  taskAction($('#btn-resume'), 'resume', '恢复中…', '恢复任务请求已接受'));
 
 $('#btn-del').addEventListener('click', async () => {
   if (!confirm('确定删除该任务记录？（不会删除已下载的书籍数据）')) return;

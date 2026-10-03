@@ -3,6 +3,7 @@
 package com.webnovel.mobile
 
 import android.net.Uri
+import android.view.KeyEvent as AndroidKeyEvent
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.compose.foundation.gestures.transformable
@@ -11,9 +12,11 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -46,6 +49,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -60,13 +64,19 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
@@ -80,14 +90,69 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 import org.json.JSONObject
 
 /** 漫画相关路径：source / comic_id / chapter_id 都可能是非 ASCII，必须转义 */
 private fun mangaPath(source: String, comicId: String, suffix: String = ""): String =
     "/api/manga/${Uri.encode(source)}/${Uri.encode(comicId)}$suffix"
 
+private fun downloadStartMessage(response: HttpText, success: String): String {
+    if (!response.ok) return "创建失败：HTTP ${response.code} ${response.body.take(80)}"
+    val favorited = runCatching {
+        JSONObject(response.body).optBoolean("favorited", true)
+    }.getOrDefault(true)
+    return if (favorited) success
+    else "$success；但自动收藏失败，请稍后手动收藏"
+}
+
+internal data class MangaFavoriteMutationResult(
+    val success: Boolean,
+    val favorited: Boolean,
+    val message: String,
+)
+
+/** Require both a successful HTTP response and the API's explicit business success. */
+internal fun mangaFavoriteMutationResult(
+    response: HttpText,
+    adding: Boolean,
+    wasFavorited: Boolean,
+): MangaFavoriteMutationResult {
+    val body = runCatching { JSONObject(response.body) }.getOrNull()
+    val success = response.ok && body?.optBoolean("ok", false) == true
+    if (success) {
+        val favorited = if (adding) body?.optBoolean("favorited", true) != false else false
+        return MangaFavoriteMutationResult(
+            success = true,
+            favorited = favorited,
+            message = if (favorited) "已加入收藏" else "已取消收藏",
+        )
+    }
+    val detail = body?.optString("error")?.takeIf { it.isNotBlank() }
+        ?: body?.optString("message")?.takeIf { it.isNotBlank() }
+        ?: if (response.code > 0) "HTTP ${response.code}" else "连接失败"
+    return MangaFavoriteMutationResult(
+        success = false,
+        favorited = wasFavorited,
+        message = "收藏操作失败：$detail",
+    )
+}
+
 private fun coverUrl(port: Int, source: String, comicId: String): String =
     "http://127.0.0.1:$port" + mangaPath(source, comicId, "/cover")
+
+/** 把服务端返回的本机 API 图片路径收敛到严格本地目录，保留其它查询参数。 */
+internal fun enforceLocalCatalog(url: String): String {
+    val path = url.substringBefore('?')
+    val params = url.substringAfter('?', "").split('&')
+        .filter { it.isNotBlank() && !it.startsWith("catalog=") }
+        .toMutableList()
+    params += "catalog=local"
+    return "$path?${params.joinToString("&")}"
+}
+
+internal fun appendImageRetry(url: String, tick: Int): String =
+    if (tick <= 0) url else url + (if ('?' in url) "&" else "?") + "r=$tick"
 
 /**
  * 单页图片地址解析（/urls 条目 + 重试代次 → 最终加载地址）：
@@ -96,14 +161,22 @@ private fun coverUrl(port: Int, source: String, comicId: String): String =
  */
 internal fun resolveMangaPageUrl(port: Int, source: String, comicId: String,
                                  chapterId: String, entry: MangaPageEntry?,
-                                 index: Int, tick: Int): String = when {
+                                 index: Int, tick: Int,
+                                 localCatalog: Boolean = false): String = when {
     entry == null ->
         "http://127.0.0.1:$port" +
             mangaPath(source, comicId, "/chapter/${Uri.encode(chapterId)}/img/$index") +
-            if (tick > 0) "?r=$tick" else ""
-    entry.url.startsWith("/api/") ->
-        "http://127.0.0.1:$port" + entry.url +
-            if (tick > 0) (if (entry.url.contains("?")) "&" else "?") + "r=$tick" else ""
+            (if (localCatalog) "?catalog=local" else "") +
+            (if (tick > 0) (if (localCatalog) "&" else "?") + "r=$tick" else "")
+    entry.url.startsWith("/api/") -> {
+        val apiUrl = if (localCatalog) enforceLocalCatalog(entry.url) else entry.url
+        appendImageRetry("http://127.0.0.1:$port$apiUrl", tick)
+    }
+    // 本地目录是严格离线入口：即使旧服务端/异常缓存返了 CDN，也只向本机
+    // catalog=local 图片端点请求；缺页时由引擎返回明确 404，而非 Coil 直连公网。
+    localCatalog -> appendImageRetry(
+        "http://127.0.0.1:$port" + mangaPath(source, comicId,
+            "/chapter/${Uri.encode(chapterId)}/img/$index?catalog=local"), tick)
     tick == 0 -> entry.url
     else ->
         "http://127.0.0.1:$port" + mangaPath(source, comicId,
@@ -139,17 +212,31 @@ internal object MangaReadCache {
         }
     }
 
-    private fun dk(source: String, comicId: String) = "$source|$comicId"
-    private fun uk(source: String, comicId: String, chapterId: String) =
-        "$source|$comicId|$chapterId"
+    private fun dk(source: String, comicId: String, localCatalog: Boolean) =
+        "$source|$comicId|local=$localCatalog"
+    private fun uk(source: String, comicId: String, chapterId: String,
+                   localCatalog: Boolean) = "$source|$comicId|$chapterId|local=$localCatalog"
 
-    fun getDetail(source: String, comicId: String): MangaDetail? = get(details, dk(source, comicId))
-    fun putDetail(source: String, comicId: String, d: MangaDetail) =
-        put(details, dk(source, comicId), d)
-    fun getUrls(source: String, comicId: String, chapterId: String): MangaChapterPages? =
-        get(urls, uk(source, comicId, chapterId))
-    fun putUrls(source: String, comicId: String, chapterId: String, p: MangaChapterPages) =
-        put(urls, uk(source, comicId, chapterId), p)
+    fun getDetail(source: String, comicId: String,
+                  localCatalog: Boolean = false): MangaDetail? =
+        get(details, dk(source, comicId, localCatalog))
+    fun putDetail(source: String, comicId: String, d: MangaDetail,
+                  localCatalog: Boolean = false) =
+        put(details, dk(source, comicId, localCatalog), d)
+    fun getUrls(source: String, comicId: String, chapterId: String,
+                localCatalog: Boolean = false): MangaChapterPages? =
+        get(urls, uk(source, comicId, chapterId, localCatalog))
+    fun putUrls(source: String, comicId: String, chapterId: String, p: MangaChapterPages,
+                localCatalog: Boolean = false) =
+        put(urls, uk(source, comicId, chapterId, localCatalog), p)
+
+    /** Download completion/deletion changes local-vs-network image routing. */
+    fun invalidate(source: String, comicId: String) = synchronized(lock) {
+        details.remove(dk(source, comicId, false))
+        details.remove(dk(source, comicId, true))
+        val prefix = "$source|$comicId|"
+        urls.keys.removeAll { it.startsWith(prefix) }
+    }
 }
 
 /**
@@ -177,6 +264,8 @@ fun MangaDetailScreen(
     onRead: (Int, Int, Boolean, String, String, String) -> Unit,
     /** 点击作者/标签：跳到本源的搜索（关键词即作者名或标签名） */
     onSearchTag: (String) -> Unit,
+    /** 书架入口只显示本地实盘目录；搜索/历史/收藏使用完整源站目录。 */
+    localCatalog: Boolean = false,
 ) {
     var detail by remember { mutableStateOf<MangaDetail?>(null) }
     var readIdx by remember { mutableIntStateOf(-1) }
@@ -192,6 +281,8 @@ fun MangaDetailScreen(
     var deleting by remember { mutableStateOf(false) }
     var checking by remember { mutableStateOf(false) }
     var update by remember { mutableStateOf<MangaUpdateCheck?>(null) }
+    var favoritedState by remember(source, comicId) { mutableStateOf<Boolean?>(null) }
+    var favoriteBusy by remember(source, comicId) { mutableStateOf(false) }
     var exporting by remember { mutableStateOf(false) }
     var confirmRemove by remember { mutableStateOf(false) }
     val ctx = androidx.compose.ui.platform.LocalContext.current
@@ -222,15 +313,16 @@ fun MangaDetailScreen(
 
     /** 秒开预载：续读话的 /urls 与首屏页提前拉进缓存（点开始阅读零等待） */
     fun prestage(d: MangaDetail, idx: Int) {
-        MangaReadCache.putDetail(source, comicId, d)
+        MangaReadCache.putDetail(source, comicId, d, localCatalog)
         val ch = d.readingChapters.getOrNull(if (idx >= 0) idx else 0) ?: return
-        if (MangaReadCache.getUrls(source, comicId, ch.id) != null) return
+        if (MangaReadCache.getUrls(source, comicId, ch.id, localCatalog) != null) return
         scope.launch {
             val r = gateway.httpText(ep.port,
-                mangaPath(source, comicId, "/chapter/${Uri.encode(ch.id)}/urls"))
+                mangaPath(source, comicId, "/chapter/${Uri.encode(ch.id)}/urls") +
+                    if (localCatalog) "?catalog=local" else "")
             val p = if (r.ok) EngineData.mangaChapterUrls(r.body) else null
             if (p != null && p.count > 0) {
-                MangaReadCache.putUrls(source, comicId, ch.id, p)
+                MangaReadCache.putUrls(source, comicId, ch.id, p, localCatalog)
                 // 首屏 3 页预载（缓存键与阅读器 pageRequest 一致 → 打开即命中）
                 for (i in 0..minOf(2, p.count - 1)) {
                     val u = resolveMangaPageUrl(ep.imagePort, d.source, d.comicId, ch.id,
@@ -251,19 +343,31 @@ fun MangaDetailScreen(
             // 瞬时失败大多能自愈）；首次已等满 ~30s 超时说明链路不通，再重试
             // 只会让"打不开"翻倍成"一分钟打不开"（实测教训）
             val hD = async { gateway.httpText(ep.port, "/api/manga/history") }
+            val favD = async { gateway.httpText(ep.port, "/api/manga/favorites") }
             val t0 = System.currentTimeMillis()
-            var r = gateway.httpText(ep.port, mangaPath(source, comicId))
+            val catalogSuffix = if (localCatalog) "?catalog=local" else ""
+            var r = gateway.httpText(ep.port, mangaPath(source, comicId, catalogSuffix))
             var d = if (r.ok) EngineData.mangaDetail(r.body) else null
             if (d == null && System.currentTimeMillis() - t0 < 12_000) {
                 kotlinx.coroutines.delay(1500)
-                r = gateway.httpText(ep.port, mangaPath(source, comicId))
+                r = gateway.httpText(ep.port, mangaPath(source, comicId, catalogSuffix))
                 d = if (r.ok) EngineData.mangaDetail(r.body) else null
             }
             if (d == null) {
                 error = "读取漫画详情失败：HTTP ${r.code}" +
-                    if (r.body.isNotBlank()) " · ${r.body.take(120)}" else ""
+                    if (r.body.isNotBlank()) " · ${EngineData.httpErrorMessage(r.body)}" else ""
             } else {
                 detail = d
+                val fav = favD.await()
+                if (fav.ok) {
+                    favoritedState = EngineData.mangaFavorites(fav.body).any {
+                        sameMangaIdentitySource(it.identitySource, d.identitySource.ifBlank { source }) &&
+                            it.comicId == d.comicId.ifBlank { comicId }
+                    }
+                } else {
+                    actionMsg = "收藏状态读取失败：" + EngineData.httpErrorMessage(fav.body,
+                        fallback = "HTTP ${fav.code}")
+                }
                 // 阅读位置取自历史（与网页端同一份 _history.json）。
                 // 用**本页请求用的** source/comicId 匹配，而不是响应里回显的那两个字段：
                 // 服务端历史详情有四条返回路径，历史上 quick 路径只给 "id" 不给 "comic_id"，
@@ -271,17 +375,26 @@ fun MangaDetailScreen(
                 // （用户 2026-09-16 反馈"明明记了进度却从第一话开始"）。
                 // 服务端已补齐字段，这里再做一层"不依赖回显"的防御。
                 val h = hD.await()
-                readIdx = EngineData.mangaHistory(h.body).firstOrNull {
-                    it.source == (d.source.ifBlank { source }) &&
-                        it.comicId == (d.comicId.ifBlank { comicId })
-                }?.idx ?: -1
+                if (!h.ok) {
+                    readIdx = -1
+                    detail = d.copy(resume = null)
+                    actionMsg = "阅读历史暂不可读，已暂停自动续读定位：" +
+                        EngineData.httpErrorMessage(h.body, fallback = "HTTP ${h.code}")
+                } else {
+                    readIdx = EngineData.mangaHistory(h.body).firstOrNull {
+                        sameMangaIdentitySource(it.identitySource, d.identitySource.ifBlank { source }) &&
+                            it.comicId == (d.comicId.ifBlank { comicId })
+                    }?.idx ?: -1
+                }
                 // 秒开预载：续读话 /urls + 首屏页提前进缓存
-                prestage(d, readIdx)
+                if (!localCatalog) prestage(d, readIdx)
             }
             loading = false
         }
     }
-    LaunchedEffect(source, comicId) { reload() }
+    // 目录模式属于详情请求身份的一部分：同作品从完整目录切到本地书架目录时，
+    // 必须取消旧请求并重载，不能只靠按模式分开的缓存而继续显示旧目录。
+    LaunchedEffect(source, comicId, localCatalog) { reload() }
 
     // ── 下载任务状态（轮询）：章节「下载中/排队中」标注 + 实时进度 + 暂停/继续 ──
     var dl by remember { mutableStateOf<EngineData.MangaDlStatus?>(null) }
@@ -303,7 +416,10 @@ fun MangaDetailScreen(
             val st = fetchDl()
             dl = st
             if (!st.active) {
-                if (wasActive || st.status == "done") reload()
+                if (wasActive || st.status == "done") {
+                    MangaReadCache.invalidate(source, comicId)
+                    reload()
+                }
                 break
             }
             kotlinx.coroutines.delay(2000)
@@ -334,7 +450,8 @@ fun MangaDetailScreen(
                     Spacer(Modifier.height(WnSpace.md))
                     Button(onClick = { reload() }) { Text("重试") }
                 }
-                else -> LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp)) {
+                else -> LazyColumn(Modifier.fillMaxSize().testTag("manga_detail_list"),
+                    contentPadding = PaddingValues(bottom = 24.dp)) {
                     item {
                         Row(Modifier.fillMaxWidth().padding(horizontal = WnSpace.md,
                             vertical = WnSpace.lg).clip(WnCardShape)
@@ -405,6 +522,7 @@ fun MangaDetailScreen(
                                     },
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.testTag("manga_detail_counts"),
                                 )
                                 if (d.tags.isNotEmpty()) {
                                     Spacer(Modifier.height(WnSpace.xs))
@@ -432,20 +550,37 @@ fun MangaDetailScreen(
                         val resume = d.resumeIndex(readIdx)
                         val readingChapters = d.readingChapters
                         val res = d.resume
-                        var favorited by remember(d.source, d.comicId) { mutableStateOf(false) }
                         Row(Modifier.fillMaxWidth().padding(horizontal = WnSpace.lg),
                             horizontalArrangement = Arrangement.End) {
                             TextButton(onClick = {
                                 scope.launch {
-                                    val r = if (favorited) gateway.httpDelete(ep.port,
-                                        mangaPath(d.source, d.comicId, "/favorites"))
-                                    else gateway.httpPost(ep.port, "/api/manga/favorites",
-                                        JSONObject().put("source", d.source)
-                                            .put("comic_id", d.comicId).put("title", d.title)
-                                            .put("cover", d.cover).toString())
-                                    if (r.ok) favorited = !favorited
+                                    val before = favoritedState == true
+                                    favoriteBusy = true
+                                    actionMsg = if (before) "正在取消收藏…" else "正在加入收藏…"
+                                    try {
+                                        val r = if (before) gateway.httpDelete(ep.port,
+                                            mangaPath(d.source, d.comicId, "/favorites"))
+                                        else gateway.httpPost(ep.port, "/api/manga/favorites",
+                                            JSONObject().put("source", d.source)
+                                                .put("comic_id", d.comicId).put("title", d.title)
+                                                .put("cover", d.cover).toString())
+                                        val result = mangaFavoriteMutationResult(r, !before, before)
+                                        favoritedState = result.favorited
+                                        actionMsg = result.message
+                                    } catch (t: Throwable) {
+                                        favoritedState = before
+                                        actionMsg = "收藏操作失败：${t.message ?: "连接失败"}"
+                                    } finally {
+                                        favoriteBusy = false
+                                    }
                                 }
-                            }) { Text(if (favorited) "取消收藏" else "收藏") }
+                            }, enabled = favoritedState != null && !favoriteBusy) {
+                                Text(when {
+                                    favoriteBusy -> "处理中…"
+                                    favoritedState == true -> "取消收藏"
+                                    else -> "收藏"
+                                })
+                            }
                         }
                         // 三种状态必须分清楚（0.64.0）：
                         //   · 完全没有阅读记录 → "开始阅读"（新漫画就该这么说）
@@ -530,17 +665,14 @@ fun MangaDetailScreen(
                                             val r = gateway.httpPost(ep.port,
                                                 mangaPath(d.source, d.comicId, "/download"), body)
                                             if (r.ok) pollTick++
-                                            actionMsg = if (r.ok) {
-                                                "已创建下载任务：${missing.size} 个单元（见下载页）"
-                                            } else {
-                                                "创建失败：HTTP ${r.code} ${r.body.take(80)}"
-                                            }
+                                            actionMsg = downloadStartMessage(
+                                                r, "已创建下载任务：${missing.size} 个单元（见下载页）")
                                         }
                                     }
                                 },
                                 enabled = d.readingChapters.any { !d.downloaded.contains(it.id) },
                                 modifier = Modifier.weight(1f),
-                            ) { Text("下载未下载内容") }
+                            ) { Text("下载 / 补齐未完成内容") }
                         }
                         Spacer(Modifier.height(6.dp))
                         Row(Modifier.fillMaxWidth().padding(horizontal = WnSpace.lg),
@@ -578,9 +710,8 @@ fun MangaDetailScreen(
                                                 val rr = gateway.httpPost(ep.port,
                                                     mangaPath(d.source, d.comicId, "/download"), body)
                                                 if (rr.ok) pollTick++
-                                                actionMsg = if (rr.ok)
-                                                    "已创建下载任务：新话 ${missing.size} 个（见下载页）"
-                                                else "创建失败：HTTP ${rr.code}"
+                                                actionMsg = downloadStartMessage(
+                                                    rr, "已创建下载任务：新话 ${missing.size} 个（见下载页）")
                                             }
                                         },
                                         modifier = Modifier.weight(1f),
@@ -615,11 +746,8 @@ fun MangaDetailScreen(
                                             val r = gateway.httpPost(ep.port,
                                                 mangaPath(d.source, d.comicId, "/download"), body)
                                             if (r.ok) pollTick++
-                                            actionMsg = if (r.ok) {
-                                                "已创建下载任务：选中的 ${ids.size} 个单元（见下载页）"
-                                            } else {
-                                                "创建失败：HTTP ${r.code} ${r.body.take(80)}"
-                                            }
+                                            actionMsg = downloadStartMessage(
+                                                r, "已创建下载任务：选中的 ${ids.size} 个单元（见下载页）")
                                             if (r.ok) selected = emptySet()
                                         }
                                     },
@@ -672,6 +800,9 @@ fun MangaDetailScreen(
                             Text(it, style = MaterialTheme.typography.labelMedium,
                                  color = MaterialTheme.colorScheme.primary,
                                  modifier = Modifier.padding(horizontal = WnSpace.lg))
+                            if (it.startsWith("阅读历史暂不可读")) {
+                                TextButton(onClick = { reload() }) { Text("重试读取历史") }
+                            }
                         }
                         // 下载任务实时状态：章级/图级进度 + 暂停/继续（数据全部来自
                         // 服务端轮询，不自己估算；停止原因照实显示）
@@ -734,11 +865,16 @@ fun MangaDetailScreen(
                                                     onClick = {
                                                         dlBusy = true
                                                         scope.launch {
-                                                            gateway.httpPost(ep.port,
+                                                            val r = gateway.httpPost(ep.port,
                                                                 "/api/manga/download/resume" +
                                                                     "?source=${Uri.encode(source)}" +
                                                                     "&cid=${Uri.encode(comicId)}")
-                                                            pollTick++
+                                                            actionMsg = if (r.ok) {
+                                                                pollTick++
+                                                                "已请求继续下载"
+                                                            } else {
+                                                                "继续下载未启动：${r.body.take(100)}"
+                                                            }
                                                             dlBusy = false
                                                         }
                                                     },
@@ -846,19 +982,28 @@ fun MangaDetailScreen(
                             )
                         }
                         val downloaded = d.downloaded.contains(c.id)
+                        val partialDownloaded = d.partialDownloaded.contains(c.id)
                         // 在下载任务里的话：有部分图片（被计为已下载）=「下载中」，
                         // 还没轮到 =「排队中」——不能再笼统显示「已下载」
                         val inDlTask = dl?.chapterIds?.contains(c.id) == true
                         val dlActive = dl?.active == true
-                        // 管理模式：已下载的可勾选删除；普通模式：未下载的可勾选下载
-                        val rowCheckable = if (manageMode) downloaded
+                        val chapterStatus = mangaChapterStatusLabel(
+                            isReading = d.volumes.size + i == readIdx,
+                            inDownloadTask = dlActive && inDlTask,
+                            taskRunning = dl?.status == "running",
+                            isCurrentDownloadChapter = dl?.currentChapterId == c.id,
+                            downloaded = downloaded,
+                            partiallyDownloaded = partialDownloaded,
+                        )
+                        // 管理模式可删除完整/部分本地内容；普通模式可下载或补齐未完成章节。
+                        val rowCheckable = if (manageMode) downloaded || partialDownloaded
                             else !downloaded && !(dlActive && inDlTask)
                         Row(
                             Modifier.fillMaxWidth()
                                 .clickable {
                                     if (manageMode) {
                                         // 管理模式：点行=勾选删除（不误进阅读器）
-                                        if (downloaded) deleteSel =
+                                        if (downloaded || partialDownloaded) deleteSel =
                                             if (deleteSel.contains(c.id))
                                                 deleteSel - c.id else deleteSel + c.id
                                     } else {
@@ -893,20 +1038,16 @@ fun MangaDetailScreen(
                                  maxLines = 1, overflow = TextOverflow.Ellipsis,
                                  modifier = Modifier.weight(1f))
                             Text(
-                                when {
-                                    d.volumes.size + i == readIdx -> "在读"
-                                    dlActive && inDlTask && downloaded -> "下载中"
-                                    dlActive && inDlTask -> "排队中"
-                                    downloaded -> "已下载"
-                                    else -> "未下载"
-                                },
+                                chapterStatus,
                                 style = MaterialTheme.typography.labelSmall,
                                 color = when {
-                                    d.volumes.size + i == readIdx -> MaterialTheme.colorScheme.primary
-                                    dlActive && inDlTask && downloaded -> WnColors.accent
-                                    dlActive && inDlTask ->
+                                    chapterStatus == "在读" -> MaterialTheme.colorScheme.primary
+                                    chapterStatus == "补齐中" || chapterStatus == "下载中" ->
+                                        WnColors.accent
+                                    chapterStatus == "排队中" ->
                                         MaterialTheme.colorScheme.onSurfaceVariant
-                                    downloaded -> MaterialTheme.colorScheme.onSurfaceVariant
+                                    chapterStatus == "部分下载 · 可补齐" -> WnColors.accent
+                                    chapterStatus == "已下载" -> MaterialTheme.colorScheme.onSurfaceVariant
                                     else -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                                 },
                             )
@@ -939,6 +1080,7 @@ fun MangaDetailScreen(
                                 .toString()
                             val r = gateway.httpPost(ep.port,
                                 mangaPath(source, comicId, "/chapters/delete"), body)
+                            if (r.ok) MangaReadCache.invalidate(source, comicId)
                             val o = runCatching { org.json.JSONObject(r.body) }.getOrNull()
                             actionMsg = if (r.ok && o?.optBoolean("ok") == true) {
                                 "已删除 ${o.optInt("deleted")} 项，释放 " +
@@ -968,46 +1110,28 @@ fun MangaDetailScreen(
             title = { Text("从书库移除？") },
             text = {
                 Text(
-                    "「仅移除记录」：保留已下载的图片（占手机空间），以后还能直接离线读。\n" +
-                        "「移除并删文件」：连已下载图片一起删掉，**释放空间后无法离线阅读**。" +
-                        "两种都会移除书库记录、源站缓存与阅读历史。"
+                    "从书架移除只影响书架显示；已下载图片、阅读历史和收藏都会保留。\n" +
+                        "删除下载图片请在「管理已下载」中单独选择章节删除，不会清除阅读历史或收藏。"
                 )
             },
             confirmButton = {
-                // 危险动作放次要位置：默认按钮是"仅移除记录"
                 TextButton(onClick = {
                     confirmRemove = false
                     scope.launch {
                         // 注意：书库删除路由是 /api/manga/library/<source>/<comic_id>，
                         // 不是 /api/manga/<source>/<id>/library（早先写错会 404）
                         val r = gateway.httpDelete(ep.port,
-                            "/api/manga/library/${Uri.encode(source)}/${Uri.encode(comicId)}" +
-                                "?files=1")
-                        val freed = runCatching {
-                            org.json.JSONObject(r.body).optLong("freed_bytes")
-                        }.getOrDefault(0L)
+                            "/api/manga/library/${Uri.encode(source)}/${Uri.encode(comicId)}")
                         actionMsg = if (r.ok) {
-                            "已移除并删除已下载文件：${detail?.title ?: comicId}" +
-                                (if (freed > 0) "（释放 ${Export.human(freed)}）" else "")
+                            "已从书架移除，下载内容与阅读数据已保留：${detail?.title ?: comicId}"
                         } else "移除失败：HTTP ${r.code} ${r.body.take(80)}"
                         if (r.ok) onBack()
                     }
-                }, modifier = Modifier.testTag("remove_with_files")) { Text("移除并删文件") }
+                }, modifier = Modifier.testTag("remove_keep_files")) { Text("确认移出书架") }
             },
             dismissButton = {
                 Row {
                     TextButton(onClick = { confirmRemove = false }) { Text("取消") }
-                    TextButton(onClick = {
-                        confirmRemove = false
-                        scope.launch {
-                            val r = gateway.httpDelete(ep.port,
-                                "/api/manga/library/${Uri.encode(source)}/${Uri.encode(comicId)}")
-                            actionMsg = if (r.ok) "已从书库移除（已下载图片保留）：" +
-                                "${detail?.title ?: comicId}"
-                            else "移除失败：HTTP ${r.code} ${r.body.take(80)}"
-                            if (r.ok) onBack()
-                        }
-                    }, modifier = Modifier.testTag("remove_keep_files")) { Text("仅移除记录") }
                 }
             },
         )
@@ -1017,6 +1141,35 @@ fun MangaDetailScreen(
 // 实时进度：两次自动保存之间的最小间隔（毫秒）。太小会疯狂打本机接口，
 // 太大就"不实时"；2s 兼顾"翻页即记"与开销。
 private const val PROGRESS_MIN_GAP_MS = 2000L
+private const val READER_CONTROLS_IDLE_HIDE_MS = 4000L
+
+/** Small reader-only hot zone: a deliberate center tap reveals controls without stealing page taps. */
+internal fun isReaderControlHotZone(x: Float, y: Float, width: Float, height: Float): Boolean =
+    x in (width * 0.39f)..(width * 0.61f) &&
+        y in (height * 0.43f)..(height * 0.57f)
+
+internal enum class MangaReaderKeyAction { PREVIOUS_PAGE, NEXT_PAGE, PREVIOUS_CHAPTER, NEXT_CHAPTER }
+
+/** Keep hardware-key behavior aligned with the web reader without changing touch hit zones. */
+internal fun mangaReaderKeyAction(keyCode: Int, paged: Boolean): MangaReaderKeyAction? = when (keyCode) {
+    AndroidKeyEvent.KEYCODE_PAGE_UP -> MangaReaderKeyAction.PREVIOUS_PAGE
+    AndroidKeyEvent.KEYCODE_PAGE_DOWN -> MangaReaderKeyAction.NEXT_PAGE
+    AndroidKeyEvent.KEYCODE_MOVE_HOME -> MangaReaderKeyAction.PREVIOUS_CHAPTER
+    AndroidKeyEvent.KEYCODE_MOVE_END -> MangaReaderKeyAction.NEXT_CHAPTER
+    AndroidKeyEvent.KEYCODE_DPAD_LEFT ->
+        if (paged) MangaReaderKeyAction.PREVIOUS_PAGE else null
+    AndroidKeyEvent.KEYCODE_DPAD_RIGHT ->
+        if (paged) MangaReaderKeyAction.NEXT_PAGE else null
+    AndroidKeyEvent.KEYCODE_DPAD_UP ->
+        if (!paged) MangaReaderKeyAction.PREVIOUS_PAGE else null
+    AndroidKeyEvent.KEYCODE_DPAD_DOWN ->
+        if (!paged) MangaReaderKeyAction.NEXT_PAGE else null
+    else -> null
+}
+
+/** A chapter URL list is reusable only for the catalog mode that produced it. */
+internal fun readerCacheMatchesCatalog(pages: MangaChapterPages, localCatalog: Boolean): Boolean =
+    pages.local == localCatalog
 
 // ── 原生漫画阅读器（纵向连续）────────────────────────────────
 
@@ -1040,10 +1193,24 @@ fun MangaReaderScreen(
     /** 起始话的**身份**：在自己的列表里再定位一次（列表可能与详情页不同） */
     startChapterId: String = "",
     startLabel: String = "",
+    localCatalog: Boolean = false,
 ) {
     val ctx = androidx.compose.ui.platform.LocalContext.current
     var detail by remember { mutableStateOf<MangaDetail?>(null) }
-    var chapterIndex by remember { mutableIntStateOf(startChapterIndex.coerceAtLeast(0)) }
+    var chapterIndex by rememberSaveable(source, comicId, localCatalog) {
+        mutableIntStateOf(startChapterIndex.coerceAtLeast(0))
+    }
+    // The route contains the original launch position. After recreation, prefer the live
+    // session position saved below instead of reopening that original chapter.
+    var readerSessionStarted by rememberSaveable(source, comicId, localCatalog) {
+        mutableStateOf(false)
+    }
+    var liveChapterId by rememberSaveable(source, comicId, localCatalog) {
+        mutableStateOf(startChapterId)
+    }
+    var liveChapterLabel by rememberSaveable(source, comicId, localCatalog) {
+        mutableStateOf(startLabel)
+    }
     // 用户是否**自己**换过章（点目录/上一话/下一话）。近似落点下只有这个动作
     // 才算"用户选择了这一话"，才允许覆盖记录。
     var userNavigated by remember { mutableStateOf(startTrusted) }
@@ -1069,13 +1236,31 @@ fun MangaReaderScreen(
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
     var showToc by remember { mutableStateOf(false) }
-    var pageNo by remember { mutableIntStateOf(startPage.coerceAtLeast(1)) }
+    var controlsVisible by remember { mutableStateOf(false) }
+    var readerSeekPage by remember { mutableIntStateOf(0) }
+    var progressSliderDragging by remember { mutableStateOf(false) }
+    var pageNo by rememberSaveable(source, comicId, localCatalog) {
+        mutableIntStateOf(startPage.coerceAtLeast(1))
+    }
     // 缩放：默认 1×（适应宽度）。只有放大后才接管拖动，否则保持正常滚动。
     var zoom by remember { mutableFloatStateOf(1f) }
     var panOffset by remember { mutableStateOf(Offset.Zero) }
     // 阅读方向：纵向连续 / 横向翻页（偏好落盘，下次进入沿用）
     var prefs by remember { mutableStateOf(ReaderPrefs.load(ctx)) }
     val paged = prefs.horizontalPaging
+
+    // 阅读控件只在阅读画面内出现：触摸中心小热区后短暂显示，阅读继续/空闲后收起。
+    // 打开目录、拖动进度条、章节/页码/缩放发生变化时重置计时；加载错误状态不抢用户操作。
+    LaunchedEffect(
+        controlsVisible, showToc, progressSliderDragging, pageNo, chapterIndex,
+        zoom, readerSeekPage, paged, loading, error, pages,
+    ) {
+        if (!controlsVisible || showToc || progressSliderDragging || loading || error != null || pages == null) {
+            return@LaunchedEffect
+        }
+        delay(READER_CONTROLS_IDLE_HIDE_MS)
+        controlsVisible = false
+    }
     // 已读过的章节页数缓存：来回翻章不重复请求
     val cache = remember { mutableStateMapOf<String, MangaChapterPages>() }
     // 页加载失败 → 就地**重试**（§8.C"图片失败重试"）：计数器进 ImageRequest 参数，
@@ -1086,7 +1271,7 @@ fun MangaReaderScreen(
                     p: MangaChapterPages?, i: Int): ImageRequest {
         val tick = retryTick["$chapterId:$i"] ?: 0
         val url = resolveMangaPageUrl(ep.imagePort, src, cid, chapterId,
-            p?.entries?.getOrNull(i), i, tick)
+            p?.entries?.getOrNull(i), i, tick, localCatalog)
         return ImageRequest.Builder(ctx)
             .data(url)
             .memoryCacheKey(url)
@@ -1104,6 +1289,9 @@ fun MangaReaderScreen(
     // 后台预取永远抢不到可见页的引擎线程，也不会形成请求风暴。
     val prefetchLoader = remember(ep) {
         engineImageLoader(ctx, ep, maxPerHost = 3, smallMemoryCache = true)
+    }
+    DisposableEffect(prefetchLoader) {
+        onDispose { releaseEngineImageLoader(prefetchLoader) }
     }
 
     /**
@@ -1145,26 +1333,37 @@ fun MangaReaderScreen(
     suspend fun loadChapter(idx: Int) {
         val d = detail ?: return
         val ch = d.readingChapters.getOrNull(idx) ?: return
+        val preservePosition = readerSessionStarted && idx == chapterIndex
+        val requestedPage = if (preservePosition) pageNo
+            else if (idx == startResolved) startPageResolved else 1
+        readerSessionStarted = true
+        liveChapterId = ch.id
+        liveChapterLabel = ch.label
         // 本屏"进入"这一话：此后即使图片取不到，也允许把"读到这一话"记下来
         loadedChapterId = ch.id
         loading = true; error = null
-        val hit = cache[ch.id] ?: MangaReadCache.getUrls(d.source, d.comicId, ch.id)
+        val hit = cache[ch.id]?.takeIf { readerCacheMatchesCatalog(it, localCatalog) }
+            ?: MangaReadCache.getUrls(d.source, d.comicId, ch.id, localCatalog)
         if (hit != null) {
             cache[ch.id] = hit
-            pages = hit; chapterIndex = idx; loading = false
+            pages = hit
+            chapterIndex = idx
+            pageNo = requestedPage.coerceIn(1, hit.count.coerceAtLeast(1))
+            loading = false
             return
         }
         // 批量接口 /urls（与网页端同一路径）：一次给出每页加载方式（本地直出/
         // 懒下载通道/CDN 直连），服务端同时启动本章流水线预热。失败自动重试 1 次
         // （对齐网页端 45s 超时×2：copymanga 间歇风控时"首次失败、手动再点才成功"
         // 的抖动大多能自己缓过来）。
+        val localSuffix = if (localCatalog) "?catalog=local" else ""
         var r = gateway.httpText(ep.port,
-            mangaPath(d.source, d.comicId, "/chapter/${Uri.encode(ch.id)}/urls"))
+            mangaPath(d.source, d.comicId, "/chapter/${Uri.encode(ch.id)}/urls") + localSuffix)
         var p = if (r.ok) EngineData.mangaChapterUrls(r.body) else null
         if (p == null || p.count <= 0) {
             delay(1500)
             r = gateway.httpText(ep.port,
-                mangaPath(d.source, d.comicId, "/chapter/${Uri.encode(ch.id)}/urls"))
+                mangaPath(d.source, d.comicId, "/chapter/${Uri.encode(ch.id)}/urls") + localSuffix)
             p = if (r.ok) EngineData.mangaChapterUrls(r.body) else null
         }
         if (p == null || p.count <= 0) {
@@ -1173,37 +1372,39 @@ fun MangaReaderScreen(
                 if (r.body.isNotBlank()) " · ${r.body.take(120)}" else ""
         } else {
             cache[ch.id] = p
-            MangaReadCache.putUrls(d.source, d.comicId, ch.id, p)
+            MangaReadCache.putUrls(d.source, d.comicId, ch.id, p, localCatalog)
             pages = p
             staleReason = if (p.staleProcessing) {
                 p.staleReason.ifBlank { "本章图片是旧版处理缓存，需联网重新获取" }
             } else ""
             chapterIndex = idx
-            pageNo = if (idx == startResolved) startPageResolved else 1
+            pageNo = requestedPage.coerceIn(1, p.count.coerceAtLeast(1))
         }
         loading = false
     }
 
-    LaunchedEffect(source, comicId) {
+    // 同作品的完整/本地目录是两种不同阅读会话；切换时取消旧加载并取对应目录。
+    LaunchedEffect(source, comicId, localCatalog) {
         // 详情缓存命中（详情页预载）→ 零往返直接开章节；否则联网取，失败自动重试 1 次
         var lastCode = 0
-        val cached = MangaReadCache.getDetail(source, comicId)
+        val cached = MangaReadCache.getDetail(source, comicId, localCatalog)
         if (cached != null) {
             detail = cached
         } else {
             // 失败重试同样只在快速失败时（<12s）；超时链路重试等于把等待翻倍
             val t0 = System.currentTimeMillis()
-            var r = gateway.httpText(ep.port, mangaPath(source, comicId))
+            val catalogSuffix = if (localCatalog) "?catalog=local" else ""
+            var r = gateway.httpText(ep.port, mangaPath(source, comicId, catalogSuffix))
             lastCode = r.code
             var d = if (r.ok) EngineData.mangaDetail(r.body) else null
             if (d == null && System.currentTimeMillis() - t0 < 12_000) {
                 delay(1500)
-                r = gateway.httpText(ep.port, mangaPath(source, comicId))
+                r = gateway.httpText(ep.port, mangaPath(source, comicId, catalogSuffix))
                 lastCode = r.code
                 d = if (r.ok) EngineData.mangaDetail(r.body) else null
             }
             detail = d
-            if (d != null) MangaReadCache.putDetail(source, comicId, d)
+            if (d != null) MangaReadCache.putDetail(source, comicId, d, localCatalog)
         }
         val d = detail
         if (d == null) {
@@ -1214,7 +1415,10 @@ fun MangaReaderScreen(
         // 0.64.0：起始话**在本屏自己的列表里按身份重新定位**。详情页与阅读器
         // 各自取详情（一个可能来自下载缓存、一个是源站最新），只传下标会在两份
         // 列表不一致时打开别的一话——用户看到的就是"继续阅读打开的又不是记录里那一话"。
-        val idx = MangaResumeResolver.resolve(
+        val idx = if (readerSessionStarted) {
+            MangaResumeResolver.resolve(
+                d.readingChapters, liveChapterId, liveChapterLabel, chapterIndex)
+        } else MangaResumeResolver.resolve(
             d.readingChapters, startChapterId, startLabel, startChapterIndex)
         startResolved = idx
         loadChapter(if (idx >= 0) idx else startChapterIndex.coerceAtLeast(0))
@@ -1236,6 +1440,7 @@ fun MangaReaderScreen(
 
     Scaffold(
         topBar = {
+            if (controlsVisible) {
             TopAppBar(
                 title = {
                     val d = detail
@@ -1259,7 +1464,10 @@ fun MangaReaderScreen(
                     }
                 },
                 actions = {
-                    TextButton(onClick = { showToc = true }) { Text("目录") }
+                    TextButton(onClick = {
+                        controlsVisible = false
+                        showToc = true
+                    }) { Text("目录") }
                     TextButton(onClick = {
                         val next = prefs.copy(horizontalPaging = !prefs.horizontalPaging)
                         prefs = next
@@ -1271,49 +1479,70 @@ fun MangaReaderScreen(
                     }) { Text(if (zoom > 1f) "复位" else "放大") }
                 },
             )
+            }
         },
         bottomBar = {
+            if (controlsVisible) {
             Column {
                 HorizontalDivider(color = WnColors.line)
                 Surface(color = WnColors.surface) {
-                Row(Modifier.fillMaxWidth().padding(horizontal = WnSpace.sm, vertical = WnSpace.xs),
-                    verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(
-                        onClick = {
-                            userNavigated = true
-                            scope.launch { saveProgress(chapterIndex, pageNo); loadChapter(chapterIndex - 1) }
-                        },
-                        enabled = chapterIndex > 0,
-                    ) { Text("上一话") }
-                    Text(
-                        buildString {
-                            append(chapterIndex + 1).append(" / ")
-                                .append(detail?.readingChapters?.size ?: 0)
-                            pages?.let { append(" · $pageNo/").append(it.count).append("页") }
-                            if (zoom > 1f) {
-                                append(" · 缩放 ")
-                                append(String.format(java.util.Locale.US, "%.1f", zoom))
-                                append("×")
-                            }
-                        },
-                        color = WnColors.ink,
-                        style = MaterialTheme.typography.labelMedium,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.weight(1f),
-                    )
-                    TextButton(
-                        onClick = {
-                            userNavigated = true
-                            scope.launch { saveProgress(chapterIndex, pageNo); loadChapter(chapterIndex + 1) }
-                        },
-                        enabled = chapterIndex + 1 < (detail?.readingChapters?.size ?: 0),
-                    ) { Text("下一话") }
+                    Column(Modifier.fillMaxWidth().padding(horizontal = WnSpace.sm,
+                        vertical = WnSpace.xs)) {
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            TextButton(
+                                onClick = {
+                                    userNavigated = true
+                                    scope.launch { saveProgress(chapterIndex, pageNo); loadChapter(chapterIndex - 1) }
+                                },
+                                enabled = chapterIndex > 0,
+                            ) { Text("上一话") }
+                            Text(
+                                buildString {
+                                    append(chapterIndex + 1).append(" / ")
+                                        .append(detail?.readingChapters?.size ?: 0)
+                                    pages?.let { append(" · $pageNo/").append(it.count).append("页") }
+                                    if (zoom > 1f) {
+                                        append(" · 缩放 ")
+                                        append(String.format(java.util.Locale.US, "%.1f", zoom))
+                                        append("×")
+                                    }
+                                },
+                                color = WnColors.ink,
+                                style = MaterialTheme.typography.labelMedium,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.weight(1f).testTag("reader_progress_label"),
+                            )
+                            TextButton(
+                                onClick = {
+                                    userNavigated = true
+                                    scope.launch { saveProgress(chapterIndex, pageNo); loadChapter(chapterIndex + 1) }
+                                },
+                                enabled = chapterIndex + 1 < (detail?.readingChapters?.size ?: 0),
+                            ) { Text("下一话") }
+                        }
+                        val pageCount = pages?.count ?: 0
+                        if (pageCount > 1) {
+                            Slider(
+                                value = (pageNo - 1).coerceIn(0, pageCount - 1).toFloat(),
+                                onValueChange = { value ->
+                                    val target = value.roundToInt().coerceIn(0, pageCount - 1) + 1
+                                    progressSliderDragging = true
+                                    pageNo = target
+                                    readerSeekPage = target
+                                },
+                                onValueChangeFinished = { progressSliderDragging = false },
+                                valueRange = 0f..(pageCount - 1).coerceAtLeast(1).toFloat(),
+                                steps = (pageCount - 2).coerceAtLeast(0),
+                                modifier = Modifier.fillMaxWidth().testTag("reader_progress_slider"),
+                            )
+                        }
+                    }
                 }
-                }
+            }
             }
         },
     ) { pad ->
-        Box(Modifier.padding(pad).fillMaxSize().background(bg)) {
+        Box(Modifier.fillMaxSize().background(bg)) {
             val d = detail
             val p = pages
             when {
@@ -1339,11 +1568,24 @@ fun MangaReaderScreen(
                 }
                 else -> key(d.readingChapters[chapterIndex].id, paged) {
                     val ch = d.readingChapters[chapterIndex]
-                    val initial = if (chapterIndex == startResolved) {
-                        (startPageResolved - 1).coerceIn(0, (p.count - 1).coerceAtLeast(0))
-                    } else 0
+                    // 切换连续/翻页模式会重建视图状态，但阅读位置属于章节而不是
+                    // 某种视图：必须从当前实时页码恢复，不能退回进入阅读器时的落点。
+                    val initial = (pageNo - 1).coerceIn(0, (p.count - 1).coerceAtLeast(0))
                     val listState = rememberLazyListState(initialFirstVisibleItemIndex = initial)
                     val pagerState = rememberPagerState(initialPage = initial) { p.count }
+                    val readerFocusRequester = remember(ch.id) { FocusRequester() }
+                    LaunchedEffect(readerFocusRequester) {
+                        readerFocusRequester.requestFocus()
+                    }
+                    LaunchedEffect(readerSeekPage, ch.id, paged) {
+                        if (readerSeekPage <= 0) return@LaunchedEffect
+                        val target = (readerSeekPage - 1).coerceIn(0, p.count - 1)
+                        if (paged) pagerState.animateScrollToPage(target)
+                        else listState.animateScrollToItem(target)
+                        userNavigated = true
+                        saveProgress(chapterIndex, target + 1)
+                        readerSeekPage = 0
+                    }
                     LaunchedEffect(ch.id, p.count, paged) {
                         // 两种模式共用同一套进度保存：连续模式看首个可见项，翻页模式看当前页
                         val flow = if (paged) snapshotFlow { pagerState.currentPage }
@@ -1354,11 +1596,13 @@ fun MangaReaderScreen(
                         // 一路都在"等停"，只有停顿那一刻才真正落盘，中途卡死/被杀就丢进度。
                         var lastAt = 0L
                         flow.collect { pos ->
-                            pageNo = (pos + 1).coerceIn(1, p.count)
-                            val now = System.currentTimeMillis()
-                            if (now - lastAt >= PROGRESS_MIN_GAP_MS) {
-                                lastAt = now
-                                saveProgress(chapterIndex, pageNo)
+                            if (!progressSliderDragging) {
+                                pageNo = (pos + 1).coerceIn(1, p.count)
+                                val now = System.currentTimeMillis()
+                                if (now - lastAt >= PROGRESS_MIN_GAP_MS) {
+                                    lastAt = now
+                                    saveProgress(chapterIndex, pageNo)
+                                }
                             }
                         }
                     }
@@ -1384,7 +1628,7 @@ fun MangaReaderScreen(
                     // execute 自 pacing——源站多快就多快、最多 2 个在途：快源几秒
                     // 拉完一话，被限速的源自动低速跟进而不是硬顶（16 并发触发风控
                     // 的教训）；换话时 LaunchedEffect 自动取消。
-                    LaunchedEffect(ch.id, p.count) {
+                    LaunchedEffect(ch.id, p.count, localCatalog) {
                         val start = (pageNo - 1).coerceIn(0, (p.count - 1).coerceAtLeast(0))
                         listOf(0, 1).forEach { lane ->
                             launch {
@@ -1402,18 +1646,22 @@ fun MangaReaderScreen(
                     // 临近话尾（剩 ≤3 页）：经同一慢速通道预取下一话元数据（进本屏
                     // 页数缓存，翻话零等待）+ 前 4 页。有界：1 话元数据 + 4 页、
                     // 2 并发——提速靠通道隔离与自 pacing，不靠堆量。
-                    LaunchedEffect(ch.id, pageNo, p.count) {
-                        if (p.count - pageNo > 3) return@LaunchedEffect
+                    val approachingChapterEnd = p.count - pageNo <= 3
+                    LaunchedEffect(ch.id, p.count, approachingChapterEnd, localCatalog) {
+                        // 不把 pageNo 本身作为 effect key：尾部连续翻页时目录请求与
+                        // 图片预取应保持在途，不能每翻一页就取消并重新请求一次。
+                        if (!approachingChapterEnd) return@LaunchedEffect
                         val nextCh = d.readingChapters.getOrNull(chapterIndex + 1)
                             ?: return@LaunchedEffect
                         if (cache.containsKey(nextCh.id)) return@LaunchedEffect
                         val r = gateway.httpText(ep.port,
                             mangaPath(d.source, d.comicId,
-                                "/chapter/${Uri.encode(nextCh.id)}/urls"))
+                                "/chapter/${Uri.encode(nextCh.id)}/urls") +
+                                if (localCatalog) "?catalog=local" else "")
                         val np = if (r.ok) EngineData.mangaChapterUrls(r.body) else null
                         if (np != null && np.count > 0) {
                             cache[nextCh.id] = np
-                            MangaReadCache.putUrls(d.source, d.comicId, nextCh.id, np)
+                            MangaReadCache.putUrls(d.source, d.comicId, nextCh.id, np, localCatalog)
                             for (i in 0..minOf(3, np.count - 1)) {
                                 runCatching {
                                     prefetchLoader.execute(
@@ -1429,14 +1677,63 @@ fun MangaReaderScreen(
                     }
                     Box(
                         Modifier.fillMaxSize()
+                            .focusRequester(readerFocusRequester)
+                            .onPreviewKeyEvent { event ->
+                                if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                                val action = mangaReaderKeyAction(
+                                    event.nativeKeyEvent.keyCode, paged,
+                                ) ?: return@onPreviewKeyEvent false
+                                userNavigated = true
+                                scope.launch {
+                                    when (action) {
+                                        MangaReaderKeyAction.PREVIOUS_PAGE,
+                                        MangaReaderKeyAction.NEXT_PAGE -> {
+                                            val forward = action == MangaReaderKeyAction.NEXT_PAGE
+                                            if (paged) {
+                                                val target = pagerState.currentPage + if (forward) 1 else -1
+                                                pagerState.animateScrollToPage(target.coerceIn(0, p.count - 1))
+                                            } else {
+                                                val visibleCount = listState.layoutInfo.visibleItemsInfo.size
+                                                    .coerceAtLeast(1)
+                                                val step = (visibleCount - 1).coerceAtLeast(1)
+                                                val target = listState.firstVisibleItemIndex +
+                                                    if (forward) step else -step
+                                                listState.animateScrollToItem(target.coerceIn(0, p.count - 1))
+                                            }
+                                        }
+                                        MangaReaderKeyAction.PREVIOUS_CHAPTER -> {
+                                            if (chapterIndex > 0) {
+                                                saveProgress(chapterIndex, pageNo)
+                                                loadChapter(chapterIndex - 1)
+                                            }
+                                        }
+                                        MangaReaderKeyAction.NEXT_CHAPTER -> {
+                                            if (chapterIndex + 1 < d.readingChapters.size) {
+                                                saveProgress(chapterIndex, pageNo)
+                                                loadChapter(chapterIndex + 1)
+                                            }
+                                        }
+                                    }
+                                }
+                                true
+                            }
+                            .focusable()
                             .graphicsLayer {
                                 scaleX = zoom; scaleY = zoom
                                 translationX = panOffset.x; translationY = panOffset.y
                             }
                             // 只有放大状态才接管手势，否则让 LazyColumn 正常滚动
                             .transformable(state = transformState, enabled = zoom > 1f)
-                            .pointerInput(ch.id) {
-                                detectTapGestures(onDoubleTap = {
+                            .pointerInput(ch.id, paged) {
+                                detectTapGestures(onTap = { offset ->
+                                    // Horizontal pages own single-tap behavior below, avoiding a
+                                    // parent/child double toggle in the deliberately small hit zone.
+                                    if (!paged && isReaderControlHotZone(
+                                            offset.x, offset.y,
+                                            size.width.toFloat(), size.height.toFloat())) {
+                                        controlsVisible = !controlsVisible
+                                    }
+                                }, onDoubleTap = {
                                     if (zoom > 1f) { zoom = 1f; panOffset = Offset.Zero } else { zoom = 2f }
                                 })
                             },
@@ -1458,6 +1755,11 @@ fun MangaReaderScreen(
                                             offset.x > w * 2f / 3f -> scope.launch {
                                                 pagerState.animateScrollToPage(
                                                     (i + 1).coerceAtMost(p.count - 1))
+                                            }
+                                            else -> if (isReaderControlHotZone(
+                                                    offset.x, offset.y,
+                                                    size.width.toFloat(), size.height.toFloat())) {
+                                                controlsVisible = !controlsVisible
                                             }
                                         }
                                     }
@@ -1640,41 +1942,73 @@ SubcomposeAsyncImage(
                 Surface(Modifier.fillMaxSize(), color = bg) {
                     Column(Modifier.fillMaxSize()) {
                         Row(Modifier.fillMaxWidth().padding(WnSpace.sm), verticalAlignment = Alignment.CenterVertically) {
-                            TextButton(onClick = { showToc = false }) { Text("关闭") }
+                            TextButton(onClick = {
+                                showToc = false
+                            }) { Text("关闭") }
                             Text("目录（${d.readingChapters.size} 个单元）", color = WnColors.ink,
                                  style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
                         }
                         HorizontalDivider(color = WnColors.line)
-                        LazyColumn(Modifier.fillMaxSize().testTag("manga_toc")) {
-                            itemsIndexed(d.readingChapters) { i, c ->
-                                if (c.group.isNotBlank() &&
-                                    (i == 0 || d.readingChapters[i - 1].group != c.group)) {
-                                    Text(c.group, color = WnColors.ink,
-                                         style = MaterialTheme.typography.titleSmall,
-                                         fontWeight = FontWeight.Bold,
-                                         modifier = Modifier.padding(start = WnSpace.lg, top = WnSpace.md))
-                                }
-                                Row(
-                                    Modifier.fillMaxWidth().clickable {
-                                        showToc = false
-                                        userNavigated = true
-                                    scope.launch { saveProgress(chapterIndex, pageNo); loadChapter(i) }
-                                    }.padding(horizontal = WnSpace.lg, vertical = WnSpace.md),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Text(
-                                        c.label,
-                                        color = if (i == chapterIndex) MaterialTheme.colorScheme.primary else WnColors.ink,
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        maxLines = 1, overflow = TextOverflow.Ellipsis,
-                                        modifier = Modifier.weight(1f),
-                                    )
-                                    if (d.downloaded.contains(c.id)) {
-                                        Text("已下载", color = WnColors.inkDim,
-                                             style = MaterialTheme.typography.labelSmall)
+                        // 重开目录时直接回到当前阅读单元附近，长目录无需反复从卷首找进度。
+                        // 每个章节占一个 LazyColumn item（卷标题包含在对应章节 item 内），
+                        // 所以章节索引可直接作为初始列表位置。
+                        val tocListState = rememberLazyListState(
+                            initialFirstVisibleItemIndex = chapterIndex.coerceIn(
+                                0, d.readingChapters.lastIndex.coerceAtLeast(0)),
+                        )
+                        LaunchedEffect(chapterIndex, d.readingChapters.size) {
+                            if (d.readingChapters.isNotEmpty()) {
+                                tocListState.scrollToItem(
+                                    chapterIndex.coerceIn(0, d.readingChapters.lastIndex),
+                                )
+                            }
+                        }
+                        BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+                            LazyColumn(
+                                Modifier.fillMaxSize().testTag("manga_toc"),
+                                state = tocListState,
+                            ) {
+                                itemsIndexed(d.readingChapters) { i, c ->
+                                    if (c.group.isNotBlank() &&
+                                        (i == 0 || d.readingChapters[i - 1].group != c.group)) {
+                                        Text(c.group, color = WnColors.ink,
+                                             style = MaterialTheme.typography.titleSmall,
+                                             fontWeight = FontWeight.Bold,
+                                             modifier = Modifier.padding(start = WnSpace.lg, top = WnSpace.md))
                                     }
+                                    Row(
+                                        Modifier.fillMaxWidth().clickable {
+                                            showToc = false
+                                            controlsVisible = false
+                                            userNavigated = true
+                                            scope.launch {
+                                                saveProgress(chapterIndex, pageNo)
+                                                loadChapter(i)
+                                            }
+                                        }.padding(horizontal = WnSpace.lg, vertical = WnSpace.md)
+                                            .then(if (i == chapterIndex)
+                                                Modifier.testTag("manga_toc_current_chapter") else Modifier),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Text(
+                                            c.label,
+                                            color = if (i == chapterIndex) MaterialTheme.colorScheme.primary else WnColors.ink,
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.weight(1f),
+                                        )
+                                        if (d.downloaded.contains(c.id)) {
+                                            Text("已下载", color = WnColors.inkDim,
+                                                 style = MaterialTheme.typography.labelSmall)
+                                        }
+                                    }
+                                    HorizontalDivider(color = WnColors.line)
                                 }
-                                HorizontalDivider(color = WnColors.line)
+                                // Give even the final chapter enough scroll room to align near
+                                // the top, instead of being clamped to the viewport bottom.
+                                item(key = "manga_toc_tail_space") {
+                                    Spacer(Modifier.height(maxHeight))
+                                }
                             }
                         }
                     }

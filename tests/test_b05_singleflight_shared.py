@@ -270,7 +270,7 @@ def test_image_leader_success_followers_served_zero_refetch(
         d = S._manga_media_root(source, comic_id, chapter_id)
         os.makedirs(d, exist_ok=True)
         with open(os.path.join(d, f"{idx:04d}.webp"), "wb") as f:
-            f.write(b"\x00" * 2000)
+            f.write(b"RIFF" + b"\x00\x00\x00\x00" + b"WEBP" + b"x" * 2000)
         time.sleep(0.3)
         return A._serve_local_image(d, idx)
 

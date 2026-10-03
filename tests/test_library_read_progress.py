@@ -49,11 +49,8 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(st, "MANGA_LIBRARY_FILE", str(lib), raising=False)
     monkeypatch.setattr(st, "MANGA_HISTORY_FILE", str(hist), raising=False)
     monkeypatch.setattr(st, "BOOK_PROGRESS_FILE", str(prog), raising=False)
-    monkeypatch.setattr(st, "MANGA_TOTAL_TTL", 300, raising=False)
-    try:
-        st._manga_total_cache.clear()      # 总话数短 TTL 记忆：用例间清干净
-    except Exception:
-        pass
+    with st._manga_catalog_lock:
+        st._manga_chapters_cache.clear()  # 目录统一缓存：测试按 fixture 隔离
     return {"st": st, "ma": ma, "cache": cache, "lib": lib, "hist": hist,
             "prog": prog, "tmp": tmp_path}
 
@@ -109,10 +106,13 @@ def test_manga_library_unread_and_unknown_total(env):
 def test_manga_total_chapters_reads_detail_cache_and_is_cached(env):
     st = env["st"]
     d = env["cache"] / SRC / CID
+    # The fixture replaces the authoritative disk snapshot; drop both memoized
+    # catalog views so this assertion tests the new snapshot generation.
+    st._manga_catalog_invalidate(SRC, CID)
     _write(d / "_info_full.json",
            {"data": {"chapters": [{"id": "1"}, {"id": "2"}, {"id": "3"}]}})
     assert st._manga_total_chapters(SRC, CID) == 3
-    # 二次调用走短 TTL 记忆：删掉文件仍然返回旧值（5 分钟内）
+    # 二次调用走同一个目录缓存：删掉文件仍保持一致（5 分钟内）
     os.remove(str(d / "_info_full.json"))
     assert st._manga_total_chapters(SRC, CID) == 3
     assert st._manga_total_chapters(SRC, "no_such") == 0

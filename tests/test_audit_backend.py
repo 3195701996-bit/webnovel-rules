@@ -21,6 +21,7 @@ import os
 import sys
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -224,6 +225,38 @@ def test_save_concurrent_threads_no_corruption(tmp_path, monkeypatch):
     data = json.loads(p.read_text(encoding="utf-8"))
     assert data["k"]["status"] == "running"
     assert [f for f in os.listdir(tmp_path) if f.endswith(".tmp")] == []
+
+
+def test_media_delete_reservation_blocks_download_start_and_resume():
+    from engine.manga.download_manager import DownloadManager
+
+    dm = DownloadManager()
+    key = "copymanga_web:comic-reserved"
+    assert dm.begin_media_delete(key)
+    assert dm.start("copymanga_web", "comic-reserved", "作品") == (key, "deleting")
+    assert dm.resume(key) is False
+    assert dm.resume_result(key) == "deleting"
+    assert dm.begin_media_delete(key) is False
+    dm.end_media_delete(key)
+    assert dm.begin_media_delete(key)
+    dm.end_media_delete(key)
+
+
+def test_resume_returns_false_for_missing_or_terminal_task(monkeypatch):
+    from engine.manga.download_manager import DownloadManager
+
+    dm = DownloadManager()
+    monkeypatch.setattr(dm, "_kick_workers", lambda: None)
+    assert dm.resume("missing") is False
+    assert dm.resume_result("missing") == "no_task"
+    dm._tasks["done"] = {"status": "done"}
+    assert dm.resume("done") is False
+    assert dm.resume_result("done") == "not_resumable"
+    dm._tasks["paused"] = {"status": "paused"}
+    assert dm.resume("paused") is True
+    assert dm.resume_result("paused") == "resumed"
+    dm._tasks["running"] = {"status": "running"}
+    assert dm.resume_result("running") == "resumed"
 
 
 # ══════════════════════════════════════════════════════════════
@@ -443,7 +476,7 @@ def test_check_updates_download_uses_tuple_key(monkeypatch, client):
     monkeypatch.setattr(
         mapi._manga_dl, "start",
         lambda src, cid, title, chapters=None, **kw:
-            calls.append((src, cid, tuple(chapters or []))))
+            (calls.append((src, cid, tuple(chapters or []))) or ("task", "queued")))
 
     r = client.post("/api/manga/check-updates-download")
     assert r.status_code == 200
@@ -563,6 +596,634 @@ def test_favorite_save_failure_sanitized(monkeypatch, client):
     # 服务端绝对路径不得泄漏给客户端
     assert "secret" not in json.dumps(body)
     assert "/Users/" not in json.dumps(body)
+
+
+def test_favorites_update_status_and_completion(monkeypatch, client, tmp_path):
+    import server.manga_api as mapi
+    fav_file = tmp_path / "_favorites.json"
+    fav_file.write_text(json.dumps({"source:c1": {"title": "作品", "ts": 1}}),
+                        encoding="utf-8")
+    monkeypatch.setattr(mapi, "MANGA_FAV_FILE", str(fav_file))
+    monkeypatch.setattr(mapi, "MANGA_HISTORY_FILE", str(tmp_path / "_history.json"))
+    monkeypatch.setattr(mapi, "_manga_cached_chapters", lambda *a: [])
+    monkeypatch.setattr(mapi, "_manga_check_one", lambda *a, **k: {
+        "ok": True, "all_chapters": [{"id": "a"}, {"id": "b"}],
+        "latest_chapter_id": "b", "latest": "第2话", "update_time": "2026-10-01",
+    })
+    r = client.post("/api/manga/favorites/check-updates")
+    assert r.status_code == 200 and r.get_json()["started"] == 1
+    deadline = time.time() + 2
+    while time.time() < deadline:
+        state = client.get("/api/manga/favorites/check-updates/status").get_json()
+        if not state["running"]:
+            break
+        time.sleep(.01)
+    assert state["checked"] == 1 and state["succeeded"] == 1 and state["failed"] == 0
+    saved = json.loads(fav_file.read_text(encoding="utf-8"))["source:c1"]
+    assert saved["unread_count"] == 2
+    assert saved["latest_chapter_id"] == "b"
+    assert saved["update_time"] == "2026-10-01"
+
+
+def test_favorite_update_keeps_full_catalog_beyond_public_limit(
+        monkeypatch, client, tmp_path):
+    """The response cap must not truncate the persisted unread baseline."""
+    import server.manga_api as mapi
+    import server.state as state
+
+    comic_id = "long-favorite-series"
+    source = "fixture-source"
+    favorite_file = tmp_path / "_favorites-long.json"
+    history_file = tmp_path / "_history-long.json"
+    cache_root = tmp_path / "_cache-long"
+    favorite_file.write_text(json.dumps({f"{source}:{comic_id}": {
+        "title": "超长篇作品", "ts": 1,
+    }}), encoding="utf-8")
+    full_catalog = [
+        {"id": f"chapter-{i}", "name": f"第{i}话"}
+        for i in range(1, 5003)
+    ]
+    history_file.write_text(json.dumps({f"{source}:{comic_id}": {
+        "read_chapter_ids": [row["id"] for row in full_catalog[:5000]],
+    }}), encoding="utf-8")
+    monkeypatch.setattr(mapi, "MANGA_FAV_FILE", str(favorite_file))
+    monkeypatch.setattr(mapi, "MANGA_HISTORY_FILE", str(history_file))
+    monkeypatch.setattr(mapi, "MANGA_CACHE_DIR", str(cache_root))
+    monkeypatch.setattr(state, "MANGA_CACHE_DIR", str(cache_root))
+    monkeypatch.setattr(state, "MANGA_DOWNLOADS_DIR", str(tmp_path / "downloads"))
+    monkeypatch.setattr(mapi, "_manga_cached_chapters", lambda *_: [])
+
+    class FakeAdapter:
+        def comic_info(self, _comic_id):
+            return SimpleNamespace(
+                update_time="2026-10-03",
+                chapters=[SimpleNamespace(id=row["id"], name=row["name"])
+                          for row in full_catalog],
+            )
+
+    monkeypatch.setattr(state, "_manga_adapter", lambda _source: FakeAdapter())
+    monkeypatch.setattr(state, "_downloaded_ids_for_chapters", lambda *_: set())
+    monkeypatch.setattr(state, "_integrity_summary", lambda *_: None)
+    monkeypatch.setattr(state._manga_dl, "status", lambda *_: {"status": "idle"})
+    checked = state._manga_check_one(source, comic_id, force_refresh=True)
+    assert len(checked["all_chapters"]) == 5000  # existing public bound
+    assert len(checked["_catalog_chapters"]) == 5002
+    monkeypatch.setattr(mapi, "_manga_check_one", lambda *a, **k: checked)
+
+    response = client.post("/api/manga/favorites/check-updates")
+    assert response.status_code == 200 and response.get_json()["started"] == 1
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        status = client.get("/api/manga/favorites/check-updates/status").get_json()
+        if not status["running"]:
+            break
+        time.sleep(.01)
+    assert status["succeeded"] == 1 and status["failed"] == 0
+
+    saved_favorite = json.loads(favorite_file.read_text(encoding="utf-8"))[
+        f"{source}:{comic_id}"]
+    assert saved_favorite["unread_count"] == 2
+    catalog_file = cache_root / source / comic_id / "_favorites_catalog.json"
+    catalog = json.loads(catalog_file.read_text(encoding="utf-8"))["data"]
+    assert len(catalog["chapters"]) == 5002
+    assert catalog["chapters"][-1]["id"] == "chapter-5002"
+
+    # The single-title endpoint remains bounded and does not leak the internal
+    # full catalog field over HTTP.
+    response = client.post(f"/api/manga/{source}/{comic_id}/check-update")
+    body = response.get_json()
+    assert response.status_code == 200
+    assert len(body["all_chapters"]) == 5000
+    assert "_catalog_chapters" not in body
+
+
+def test_favorites_update_migrates_legacy_jm_identity(monkeypatch, client, tmp_path):
+    """启动追更检查必须命中旧前缀键，并在成功后规范化为唯一收藏键。"""
+    import server.manga_api as mapi
+    fav_file = tmp_path / "_favorites-legacy.json"
+    fav_file.write_text(json.dumps({"jm:JM559440": {
+        "title": "旧版收藏", "ts": 1,
+    }}), encoding="utf-8")
+    monkeypatch.setattr(mapi, "MANGA_FAV_FILE", str(fav_file))
+    monkeypatch.setattr(mapi, "MANGA_HISTORY_FILE", str(tmp_path / "_history.json"))
+    monkeypatch.setattr(mapi, "MANGA_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setattr(mapi, "_manga_check_one", lambda *a, **k: {
+        "ok": True, "all_chapters": [{"id": "ch1", "name": "第1话"}],
+        "latest_chapter_id": "ch1", "latest": "第1话",
+        "update_time": "2026-10-02",
+    })
+
+    response = client.post("/api/manga/favorites/check-updates")
+    assert response.status_code == 200 and response.get_json()["started"] == 1
+    deadline = time.time() + 2
+    while time.time() < deadline:
+        state = client.get("/api/manga/favorites/check-updates/status").get_json()
+        if not state["running"]:
+            break
+        time.sleep(.01)
+    assert state["checked"] == 1 and state["succeeded"] == 1
+    saved = json.loads(fav_file.read_text(encoding="utf-8"))
+    assert list(saved) == ["jm:559440"]
+    assert saved["jm:559440"]["latest_chapter_id"] == "ch1"
+
+
+def test_favorite_removed_during_update_check_is_not_resurrected(
+        monkeypatch, client, tmp_path):
+    """A background result may update a favorite, never undo the user's delete."""
+    import server.manga_api as mapi
+
+    key = "copymanga_web:remove-during-check"
+    fav_file = tmp_path / "_favorites.json"
+    fav_file.write_text(json.dumps({key: {"title": "稍后取消收藏", "ts": 1}}),
+                        encoding="utf-8")
+    monkeypatch.setattr(mapi, "MANGA_FAV_FILE", str(fav_file))
+    monkeypatch.setattr(mapi, "MANGA_HISTORY_FILE", str(tmp_path / "_history.json"))
+    entered_check = threading.Event()
+    release_check = threading.Event()
+
+    def slow_check(*args, **kwargs):
+        entered_check.set()
+        assert release_check.wait(3), "test did not release favorite update check"
+        return {
+            "ok": True, "all_chapters": [{"id": "ch1"}],
+            "latest_chapter_id": "ch1", "latest": "第1话",
+            "update_time": "2026-10-02",
+        }
+
+    monkeypatch.setattr(mapi, "_manga_check_one", slow_check)
+    response = client.post("/api/manga/favorites/check-updates")
+    assert response.status_code == 200
+    try:
+        assert entered_check.wait(2), "background favorite check did not start"
+        deleted = client.delete(
+            "/api/manga/favorites/copymanga_web/remove-during-check")
+        assert deleted.status_code == 200
+    finally:
+        release_check.set()
+
+    deadline = time.time() + 2
+    while time.time() < deadline:
+        state = client.get("/api/manga/favorites/check-updates/status").get_json()
+        if not state["running"]:
+            break
+        time.sleep(.01)
+    assert not state["running"]
+    assert key not in json.loads(fav_file.read_text(encoding="utf-8"))
+
+
+def test_concurrent_favorite_update_starts_attach_to_one_worker(
+        monkeypatch, client, tmp_path):
+    """Web/APK startup races must not launch duplicate source scans."""
+    import server.manga_api as mapi
+    import server.state as state
+
+    key = "copymanga_web:single-flight-check"
+    favorite_file = tmp_path / "_favorites-single-flight.json"
+    history_file = tmp_path / "_history-single-flight.json"
+    cache_root = tmp_path / "_cache-single-flight"
+    favorite_file.write_text(json.dumps({key: {"title": "单飞作品", "ts": 1}}),
+                             encoding="utf-8")
+    monkeypatch.setattr(mapi, "MANGA_FAV_FILE", str(favorite_file))
+    monkeypatch.setattr(mapi, "MANGA_HISTORY_FILE", str(history_file))
+    monkeypatch.setattr(mapi, "MANGA_CACHE_DIR", str(cache_root))
+    monkeypatch.setattr(state, "MANGA_CACHE_DIR", str(cache_root))
+    entered = threading.Event()
+    release = threading.Event()
+    calls = []
+
+    def slow_check(*_args, **_kwargs):
+        calls.append(1)
+        entered.set()
+        assert release.wait(3), "test did not release the source check"
+        return {"ok": True, "all_chapters": [{"id": "ch1", "name": "第1话"}],
+                "latest_chapter_id": "ch1", "latest": "第1话"}
+
+    monkeypatch.setattr(mapi, "_manga_check_one", slow_check)
+    first = client.post("/api/manga/favorites/check-updates")
+    assert first.status_code == 200
+    assert first.get_json()["started"] == 1
+    try:
+        assert entered.wait(2), "first favorite check did not enter the worker"
+        second = client.post("/api/manga/favorites/check-updates")
+        assert second.status_code == 200
+        assert second.get_json() == {
+            "ok": True, "started": 0, "already_running": True,
+        }
+        assert len(calls) == 1, "a concurrent startup must not create another source scan"
+    finally:
+        release.set()
+
+    deadline = time.time() + 3
+    while time.time() < deadline:
+        status = client.get("/api/manga/favorites/check-updates/status").get_json()
+        if not status["running"]:
+            break
+        time.sleep(.01)
+    assert not status["running"]
+    assert status["checked"] == 1 and status["succeeded"] == 1
+
+
+def test_read_progress_for_favorite_does_not_require_downloaded_files(
+        monkeypatch, client, tmp_path):
+    """在线阅读收藏作品时，进度/未读必须独立于本地下载目录持久化。"""
+    import server.manga_api as mapi
+
+    source, comic_id = "copymanga_web", "online-only-favorite"
+    key = f"{source}:{comic_id}"
+    manga_root = tmp_path / "manga"
+    favorites_file = manga_root / "_favorites.json"
+    history_file = manga_root / "_history.json"
+    favorites_file.parent.mkdir(parents=True)
+    favorites_file.write_text(json.dumps({key: {
+        "title": "仅在线收藏作品", "cover": "cover", "ts": 1,
+    }}), encoding="utf-8")
+    monkeypatch.setattr(mapi, "MANGA_FAV_FILE", str(favorites_file))
+    monkeypatch.setattr(mapi, "MANGA_HISTORY_FILE", str(history_file))
+    monkeypatch.setattr(mapi, "MANGA_DIR", str(manga_root))
+    monkeypatch.setattr(mapi, "MANGA_DOWNLOADS_DIR", str(manga_root / "downloads"))
+    monkeypatch.setattr(mapi, "MANGA_CACHE_DIR", str(manga_root / "_cache"))
+    monkeypatch.setattr(mapi, "_manga_cached_chapters", lambda *_: [
+        {"id": "ch1", "name": "第1话"}, {"id": "ch2", "name": "第2话"},
+    ])
+
+    saved = client.post("/api/manga/history", json={
+        "source": source, "comic_id": comic_id, "idx": 0,
+        "chapter_id": "ch1", "chapter_label": "第1话", "pos": "第1话 P3",
+    })
+    assert saved.status_code == 200 and saved.get_json()["ok"] is True
+    history = json.loads(history_file.read_text(encoding="utf-8"))["copymanga:" + comic_id]
+    assert history["chapter_id"] == "ch1"
+    assert history["read_chapter_ids"] == ["ch1"]
+    assert history["pos"] == "第1话 P3"
+    assert not (manga_root / "downloads").exists()
+
+    favorite = client.get("/api/manga/favorites").get_json()["favorites"][0]
+    assert favorite["comic_id"] == comic_id
+    assert favorite["unread_count"] == 1
+    assert favorite["latest_chapter_id"] == "ch2"
+
+
+def test_favorites_sort_by_source_update_time(monkeypatch, client, tmp_path):
+    import server.manga_api as mapi
+
+    favorite_file = tmp_path / "_favorites.json"
+    favorite_file.write_text(json.dumps({
+        "mangadex:older": {"title": "较早更新", "update_time": "2026-09-29", "ts": 99},
+        "copymanga_web:newer": {"title": "较新更新", "update_time": "2026-10-02", "ts": 1},
+    }), encoding="utf-8")
+    monkeypatch.setattr(mapi, "MANGA_FAV_FILE", str(favorite_file))
+    monkeypatch.setattr(mapi, "MANGA_HISTORY_FILE", str(tmp_path / "_history.json"))
+    monkeypatch.setattr(mapi, "_manga_cached_chapters", lambda *_: [])
+
+    favorites = client.get("/api/manga/favorites").get_json()["favorites"]
+    assert [item["title"] for item in favorites] == ["较新更新", "较早更新"]
+
+
+def test_favorites_update_thread_start_failure_resets_state(monkeypatch, client, tmp_path):
+    import server.manga_api as mapi
+    fav_file = tmp_path / "_favorites.json"
+    fav_file.write_text(json.dumps({"source:c1": {"title": "作品", "ts": 1}}),
+                        encoding="utf-8")
+    monkeypatch.setattr(mapi, "MANGA_FAV_FILE", str(fav_file))
+    monkeypatch.setattr(mapi.threading, "Thread", _BoomThread)
+    response = client.post("/api/manga/favorites/check-updates")
+    assert response.status_code == 500
+    state = client.get("/api/manga/favorites/check-updates/status").get_json()
+    assert not state["running"] and state["failed"] == 1
+
+
+@pytest.mark.parametrize("route,body", [
+    ("download", {"chapters": ["ch9"]}),
+    ("download-new", {"new_chapters": ["ch9"]}),
+])
+def test_download_start_auto_favorites_and_preserves_tracking(
+        monkeypatch, client, tmp_path, route, body):
+    import server.manga_api as mapi
+    fav_file = tmp_path / "_favorites.json"
+    fav_file.write_text(json.dumps({"copymanga_web:comic1": {
+        "title": "旧标题", "cover": "old-cover", "ts": 10,
+        "unread_count": 6, "latest_chapter_id": "ch8",
+        "update_time": "2026-09-30", "read_chapter_ids": ["ch1", "ch2"],
+    }}), encoding="utf-8")
+    monkeypatch.setattr(mapi, "MANGA_FAV_FILE", str(fav_file))
+    monkeypatch.setattr(mapi._manga_dl, "start",
+                        lambda *a, **k: ("task-key", "queued"))
+
+    response = client.post(f"/api/manga/copymanga_web/comic1/{route}", json={
+        "title": "新标题", "cover": "new-cover", **body})
+    assert response.status_code == 200
+    assert response.get_json()["favorited"] is True
+    saved = json.loads(fav_file.read_text(encoding="utf-8"))["copymanga:comic1"]
+    assert saved["title"] == "新标题" and saved["cover"] == "new-cover"
+    assert saved["unread_count"] == 6 and saved["latest_chapter_id"] == "ch8"
+    assert saved["update_time"] == "2026-09-30"
+    assert saved["read_chapter_ids"] == ["ch1", "ch2"]
+
+
+def test_batch_update_download_also_favorites(monkeypatch, client, tmp_path):
+    import server.manga_api as mapi
+    fav_file = tmp_path / "_favorites.json"
+    monkeypatch.setattr(mapi, "MANGA_FAV_FILE", str(fav_file))
+    monkeypatch.setattr(mapi, "_mcache", {("copymanga_web", "comic2"): {
+        "ts": time.time(), "missing": ["ch10"], "source": "copymanga_web",
+        "title": "批量更新作品", "cover": "cover-url",
+    }})
+    monkeypatch.setattr(mapi._manga_dl, "start",
+                        lambda *a, **k: ("task-key", "queued"))
+    response = client.post("/api/manga/check-updates-download")
+    assert response.status_code == 200
+    assert response.get_json()["started"] == 1
+    assert json.loads(fav_file.read_text(encoding="utf-8"))[
+        "copymanga:comic2"]["cover"] == "cover-url"
+
+
+def test_favorite_unread_count_uses_read_chapter_set_not_last_index(
+        monkeypatch, client, tmp_path):
+    import server.manga_api as mapi
+    fav_file, history_file = tmp_path / "_favorites.json", tmp_path / "_history.json"
+    key = "copymanga_web:comic3"
+    read_ids = [f"ch{i}" for i in range(1, 14)] + [f"ch{i}" for i in range(19, 31)]
+    fav_file.write_text(json.dumps({key: {"title": "跳读作品", "ts": 1}}),
+                        encoding="utf-8")
+    history_file.write_text(json.dumps({key: {
+        "source": "copymanga_web", "comic_id": "comic3", "idx": 11,
+        "read_chapter_ids": read_ids,
+    }}), encoding="utf-8")
+    monkeypatch.setattr(mapi, "MANGA_FAV_FILE", str(fav_file))
+    monkeypatch.setattr(mapi, "MANGA_HISTORY_FILE", str(history_file))
+    monkeypatch.setattr(mapi, "_manga_check_one", lambda *a, **k: {
+        "ok": True,
+        "all_chapters": [{"id": f"ch{i}"} for i in range(1, 32)],
+        "latest_chapter_id": "ch31", "latest": "第31话",
+        "update_time": "2026-10-02",
+    })
+
+    def check_and_wait():
+        result = client.post("/api/manga/favorites/check-updates")
+        assert result.status_code == 200
+        deadline = time.time() + 2
+        while time.time() < deadline:
+            state = client.get("/api/manga/favorites/check-updates/status").get_json()
+            if not state["running"]:
+                return
+            time.sleep(.01)
+        pytest.fail("收藏更新检查未在时限内完成")
+
+    check_and_wait()
+    saved = json.loads(fav_file.read_text(encoding="utf-8"))["copymanga:comic3"]
+    assert saved["unread_count"] == 6  # 跳过 14–18 + 新增 31
+
+    # 重读第 12 话只更新最近位置，不会抹掉其它已读章节或填平未读缺口。
+    response = client.post("/api/manga/history", json={
+        "source": "copymanga_web", "comic_id": "comic3", "idx": 11,
+        "chapter_id": "ch12", "chapter_label": "第12话", "pos": "第12话 P2",
+    })
+    assert response.status_code == 200
+    saved_history = json.loads(history_file.read_text(encoding="utf-8"))["copymanga:comic3"]
+    assert set(saved_history["read_chapter_ids"]) == set(read_ids)
+    check_and_wait()
+    saved = json.loads(fav_file.read_text(encoding="utf-8"))["copymanga:comic3"]
+    assert saved["unread_count"] == 6
+
+
+def test_read_chapter_identity_is_not_dropped_after_five_thousand_reads(
+        client, monkeypatch, tmp_path):
+    """Long-running series must not forget old read chapters at an arbitrary cap."""
+    import server.manga_api as mapi
+    history_file = tmp_path / "_history.json"
+    monkeypatch.setattr(mapi, "MANGA_HISTORY_FILE", str(history_file))
+    key = "jm:long-series"
+    read_ids = [f"ch{index}" for index in range(5000)]
+    history_file.write_text(json.dumps({key: {
+        "idx": 4999, "pos": "第4999话 P1", "read_chapter_ids": read_ids,
+        "read_chapters": [{"id": chapter_id, "label": f"第{i}话"}
+                           for i, chapter_id in enumerate(read_ids)],
+    }}), encoding="utf-8")
+    payload = {
+        "source": "jm", "comic_id": "long-series", "idx": 5000,
+        "chapter_id": "ch5000", "chapter_label": "第5000话", "pos": "第5000话 P1",
+    }
+    assert client.post("/api/manga/history", json=payload).status_code == 200
+    saved = json.loads(history_file.read_text(encoding="utf-8"))["jm:long-series"]
+    assert len(saved["read_chapter_ids"]) == 5001
+    assert "ch0" in saved["read_chapter_ids"]
+
+
+def test_favorite_get_uses_new_checked_catalog_over_stale_detail_snapshot(
+        monkeypatch, client, tmp_path):
+    """A shelf refresh after checking must not replace fresh counts with stale TOC."""
+    import server.manga_api as mapi
+    import server.state as st
+
+    source, comic_id = "copymanga_web", "favorite-stale-toc"
+    key = f"{source}:{comic_id}"
+    fav_file = tmp_path / "manga" / "_favorites.json"
+    history_file = tmp_path / "manga" / "_history.json"
+    cache_dir = tmp_path / "manga" / "_cache"
+    detail_dir = cache_dir / source / comic_id
+    detail_dir.mkdir(parents=True)
+    fav_file.parent.mkdir(parents=True, exist_ok=True)
+    fav_file.write_text(json.dumps({key: {"title": "收藏更新回归", "ts": 1}}),
+                        encoding="utf-8")
+    history_file.write_text(json.dumps({key: {
+        "ts": 1, "read_chapter_ids": ["ch1", "ch2"],
+    }}), encoding="utf-8")
+    (detail_dir / "_info_full.json").write_text(json.dumps({"ts": 1, "data": {
+        "volumes": [],
+        "chapters": [{"id": "ch1", "name": "第1话"},
+                     {"id": "ch2", "name": "第2话"}],
+    }}), encoding="utf-8")
+    monkeypatch.setattr(mapi, "MANGA_FAV_FILE", str(fav_file))
+    monkeypatch.setattr(mapi, "MANGA_HISTORY_FILE", str(history_file))
+    monkeypatch.setattr(mapi, "MANGA_CACHE_DIR", str(cache_dir))
+    monkeypatch.setattr(st, "MANGA_CACHE_DIR", str(cache_dir))
+    st._manga_chapters_cache.pop((source, comic_id), None)
+    monkeypatch.setattr(mapi, "_manga_check_one", lambda *a, **k: {
+        "ok": True,
+        "all_chapters": [{"id": f"ch{i}", "name": f"第{i}话"}
+                          for i in range(1, 5)],
+        "latest_chapter_id": "ch4", "latest": "第4话",
+        "update_time": "2026-10-02",
+    })
+
+    response = client.post("/api/manga/favorites/check-updates")
+    assert response.status_code == 200
+    deadline = time.time() + 2
+    while time.time() < deadline:
+        state = client.get("/api/manga/favorites/check-updates/status").get_json()
+        if not state["running"]:
+            break
+        time.sleep(.01)
+    assert state["succeeded"] == 1
+
+    # Simulate a cold process cache: the persisted checked catalog must outrank
+    # the older full-detail snapshot after restart as well.
+    st._manga_chapters_cache.pop((source, comic_id), None)
+    favorite = client.get("/api/manga/favorites").get_json()["favorites"][0]
+    assert favorite["unread_count"] == 2
+    assert favorite["latest_chapter_id"] == "ch4"
+    assert favorite["latest_chapter_label"] == "第4话"
+
+    # A read after the check is immediately reflected against that same catalog.
+    response = client.post("/api/manga/history", json={
+        "source": source, "comic_id": comic_id, "idx": 3,
+        "chapter_id": "ch4", "chapter_label": "第4话", "pos": "第4话 P1",
+    })
+    assert response.status_code == 200
+    favorite = client.get("/api/manga/favorites").get_json()["favorites"][0]
+    assert favorite["unread_count"] == 1
+
+
+def test_favorite_check_catalog_write_failure_does_not_publish_or_update_unread(
+        monkeypatch, client, tmp_path):
+    import server.manga_api as mapi
+    import server.state as st
+
+    source, comic_id = "copymanga", "catalog-write-failure"
+    key = f"{source}:{comic_id}"
+    favorites = tmp_path / "_favorites.json"
+    history = tmp_path / "_history.json"
+    cache = tmp_path / "cache"
+    detail_dir = cache / source / comic_id
+    detail_dir.mkdir(parents=True)
+    favorites.write_text(json.dumps({key: {
+        "title": "旧目录", "unread_count": 9,
+    }}), encoding="utf-8")
+    history.write_text(json.dumps({}), encoding="utf-8")
+    (detail_dir / "_info_full.json").write_text(json.dumps({"ts": 1, "data": {
+        "volumes": [], "chapters": [{"id": "old", "name": "旧话"}],
+    }}), encoding="utf-8")
+    monkeypatch.setattr(mapi, "MANGA_FAV_FILE", str(favorites))
+    monkeypatch.setattr(mapi, "MANGA_HISTORY_FILE", str(history))
+    monkeypatch.setattr(mapi, "MANGA_CACHE_DIR", str(cache))
+    monkeypatch.setattr(st, "MANGA_CACHE_DIR", str(cache))
+    st._manga_catalog_invalidate(source, comic_id)
+    assert [row["id"] for row in st._manga_cached_chapters(source, comic_id)] == ["old"]
+    original_atomic_write = mapi.atomic_write
+
+    def fail_catalog_write(path, payload, *args, **kwargs):
+        if str(path).endswith("_favorites_catalog.json"):
+            raise OSError("injected catalog disk failure")
+        return original_atomic_write(path, payload, *args, **kwargs)
+
+    monkeypatch.setattr(mapi, "atomic_write", fail_catalog_write)
+    monkeypatch.setattr(mapi, "_manga_check_one", lambda *a, **k: {
+        "ok": True,
+        "all_chapters": [
+            {"id": "new-1", "name": "新话1"},
+            {"id": "new-2", "name": "新话2"},
+        ],
+        "latest_chapter_id": "new-2", "latest": "新话2",
+        "update_time": "2026-10-03",
+    })
+
+    response = client.post("/api/manga/favorites/check-updates")
+    assert response.status_code == 200
+    deadline = time.time() + 2
+    while time.time() < deadline:
+        status = client.get("/api/manga/favorites/check-updates/status").get_json()
+        if not status["running"]:
+            break
+        time.sleep(.01)
+    assert status["failed"] == 1 and status["succeeded"] == 0
+    assert json.loads(favorites.read_text(encoding="utf-8"))[key][
+        "unread_count"] == 9
+    assert [row["id"] for row in st._manga_cached_chapters(source, comic_id)] == ["old"]
+
+
+def test_read_chapter_identity_migrates_changed_ids_only_for_unique_labels(
+        monkeypatch, client, tmp_path):
+    import server.manga_api as mapi
+    fav_file, history_file = tmp_path / "_favorites.json", tmp_path / "_history.json"
+    key = "copymanga_web:comic-identity-migration"
+    fav_file.write_text(json.dumps({key: {"title": "ID迁移作品", "ts": 1}}),
+                        encoding="utf-8")
+    history_file.write_text(json.dumps({key: {
+        "read_chapter_ids": ["old-1", "old-2"],
+        "read_chapters": [
+            {"id": "old-1", "label": "第01话"},
+            {"id": "old-2", "label": "第02话"},
+        ],
+    }}), encoding="utf-8")
+    monkeypatch.setattr(mapi, "MANGA_FAV_FILE", str(fav_file))
+    monkeypatch.setattr(mapi, "MANGA_HISTORY_FILE", str(history_file))
+    monkeypatch.setattr(mapi, "_manga_check_one", lambda *a, **k: {
+        "ok": True,
+        "all_chapters": [
+            {"id": "new-1", "name": "第1話"},
+            {"id": "new-2", "name": "第2話"},
+            {"id": "new-3", "name": "第3話"},
+        ],
+        "latest_chapter_id": "new-3", "latest": "第3話",
+        "update_time": "2026-10-02",
+    })
+
+    response = client.post("/api/manga/favorites/check-updates")
+    assert response.status_code == 200
+    deadline = time.time() + 2
+    while time.time() < deadline:
+        state = client.get("/api/manga/favorites/check-updates/status").get_json()
+        if not state["running"]:
+            break
+        time.sleep(.01)
+    saved = json.loads(fav_file.read_text(encoding="utf-8"))[
+        "copymanga:comic-identity-migration"]
+    assert saved["unread_count"] == 1
+
+    # 同名章节无法无歧义迁移时不猜测，宁可显示未读也不误标为已读。
+    monkeypatch.setattr(mapi, "_manga_check_one", lambda *a, **k: {
+        "ok": True,
+        "all_chapters": [
+            {"id": "new-a", "name": "第1话"},
+            {"id": "new-b", "name": "第1話"},
+            {"id": "new-3", "name": "第3话"},
+        ],
+        "latest_chapter_id": "new-3", "latest": "第3话",
+        "update_time": "2026-10-02",
+    })
+    response = client.post("/api/manga/favorites/check-updates")
+    assert response.status_code == 200
+    deadline = time.time() + 2
+    while time.time() < deadline:
+        state = client.get("/api/manga/favorites/check-updates/status").get_json()
+        if not state["running"]:
+            break
+        time.sleep(.01)
+    saved = json.loads(fav_file.read_text(encoding="utf-8"))[
+        "copymanga:comic-identity-migration"]
+    assert saved["unread_count"] == 3
+
+
+def test_delete_chapter_removes_alias_and_cache_by_saved_title(
+        client, monkeypatch, tmp_path):
+    import server.manga_api as mapi
+    downloads = tmp_path / "downloads"
+    cache = tmp_path / "cache"
+    # requested detail uses new ID; old CopyManga alias and cache use the saved old ID.
+    for root, source, chapter in ((downloads, "copymanga", "old-app-id"),
+                                  (cache, "copymanga_web", "old-web-id")):
+        base = root / source / "comic"
+        (base / chapter).mkdir(parents=True)
+        (base / chapter / "0000.jpg").write_bytes(b"image")
+        (base / "_info.json").write_text(json.dumps({"chapters": [
+            {"id": chapter, "name": "第1話"}]}), encoding="utf-8")
+    current = cache / "copymanga_web" / "comic"
+    (current / "_info_full.json").write_text(json.dumps({"data": {
+        "chapters": [{"id": "new-detail-id", "name": "第1話"}],
+    }}), encoding="utf-8")
+    monkeypatch.setattr(mapi, "MANGA_DOWNLOADS_DIR", str(downloads))
+    monkeypatch.setattr(mapi, "MANGA_CACHE_DIR", str(cache))
+    monkeypatch.setattr(mapi._manga_dl, "status", lambda _key: {"status": "none"})
+    rescans = []
+    monkeypatch.setattr(mapi, "_manga_stats_request", lambda source, cid: rescans.append((source, cid)))
+    response = client.post("/api/manga/copymanga_web/comic/chapters/delete",
+                           json={"chapter_ids": ["new-detail-id"]})
+    assert response.status_code == 200, response.get_data(as_text=True)
+    result = response.get_json()
+    assert result["deleted"] == 2 and result["missing"] == 0
+    assert not (downloads / "copymanga" / "comic" / "old-app-id").exists()
+    assert not (cache / "copymanga_web" / "comic" / "old-web-id").exists()
+    assert set(rescans) == {("copymanga", "comic"), ("copymanga_web", "comic")}
 
 
 # ══════════════════════════════════════════════════════════════
