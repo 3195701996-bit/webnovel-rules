@@ -107,6 +107,10 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # setup-android defaults to the removed `tools` package; installing it
+          # now makes sdkmanager fail before the project build can run.
+          packages: platform-tools
 
       - name: Install Android SDK platform
         run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
