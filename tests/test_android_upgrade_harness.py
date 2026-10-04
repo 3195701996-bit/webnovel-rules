@@ -261,6 +261,26 @@ def test_explicitly_configured_v200_to_v201_upgrade_is_supported(tmp_path):
     assert "install -r " + str(apks[1]) not in calls
 
 
+def test_explicitly_configured_v201_to_v202_upgrade_is_supported(tmp_path):
+    apks, adb_log, env = _fixture(
+        tmp_path, old_name="2.0.1", old_code="156", new_name="2.0.2", new_code="157")
+    env.update({
+        "UPGRADE_OLD_VERSION_NAME": "2.0.1",
+        "UPGRADE_OLD_VERSION_CODE": "156",
+        "UPGRADE_NEW_VERSION_NAME": "2.0.2",
+        "MOCK_VERBOSE_DUMPSYS": "1",
+    })
+    result = _run(apks, env)
+
+    assert result.returncode != 0  # Fake instrumentation deliberately omits phase-1 proof.
+    assert "旧版基线必须是" not in result.stderr
+    assert "phase 1 intentionally missing completion evidence" in result.stdout
+    calls = adb_log.read_text(encoding="utf-8")
+    assert "install -r " + str(apks[0]) in calls
+    assert "phase1_setupState" in calls
+    assert "install -r " + str(apks[1]) not in calls
+
+
 def test_explicit_upgrade_avd_override_remains_supported(tmp_path):
     apks, adb_log, env = _fixture(tmp_path, avd="CustomSafe_API35")
     env["UPGRADE_AVD_NAME"] = "CustomSafe_API35"
