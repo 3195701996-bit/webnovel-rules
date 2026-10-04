@@ -118,9 +118,9 @@ old_code="$("$apkanalyzer_bin" manifest version-code "$old_apk")"
 new_code="$("$apkanalyzer_bin" manifest version-code "$new_apk")"
 old_name="$("$apkanalyzer_bin" manifest version-name "$old_apk")"
 new_name="$("$apkanalyzer_bin" manifest version-name "$new_apk")"
-old_cert="$("$apksigner_bin" verify --print-certs "$old_apk" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n 1)"
-new_cert="$("$apksigner_bin" verify --print-certs "$new_apk" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n 1)"
-test_cert="$("$apksigner_bin" verify --print-certs "$test_apk" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n 1)"
+old_cert="$("$apksigner_bin" verify --print-certs "$old_apk" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | awk 'NR == 1 { first = $0 } END { if (NR) print first }')"
+new_cert="$("$apksigner_bin" verify --print-certs "$new_apk" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | awk 'NR == 1 { first = $0 } END { if (NR) print first }')"
+test_cert="$("$apksigner_bin" verify --print-certs "$test_apk" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | awk 'NR == 1 { first = $0 } END { if (NR) print first }')"
 
 [[ "$old_pkg" == "$package" && "$new_pkg" == "$package" ]] || {
   echo "包名不匹配：旧=$old_pkg 新=$new_pkg 预期=$package" >&2; exit 2;
@@ -151,7 +151,7 @@ if ! new_identity="$($unzip_bin -p "$new_apk" "$identity_entry" 2>/dev/null)" ||
 fi
 identity_value() {
   local identity="$1" key="$2"
-  printf '%s\n' "$identity" | sed -n "s/^${key}=//p" | head -n 1
+  printf '%s\n' "$identity" | awk -F= -v wanted="$key" '$1 == wanted && !found { sub(/^[^=]*=/, ""); value = $0; found = 1 } END { if (found) print value }'
 }
 new_revision="$(identity_value "$new_identity" revision)"
 new_dirty="$(identity_value "$new_identity" dirty)"
@@ -198,7 +198,7 @@ echo "[1/5] 安装旧版 APK（保留该专用设备上此应用的现有数据�
 "${adb_cmd[@]}" shell am force-stop "$package"
 "${adb_cmd[@]}" shell monkey -p "$package" 1 >/dev/null
 sleep 5
-installed_old="$("${adb_cmd[@]}" shell dumpsys package "$package" | sed -n 's/.*versionCode=\([0-9]*\).*/\1/p' | head -n 1 | tr -d '\r')"
+installed_old="$("${adb_cmd[@]}" shell dumpsys package "$package" | awk 'match($0, /versionCode=[0-9]+/) && !found { print substr($0, RSTART + 12, RLENGTH - 12); found = 1 }' | tr -d '\r')"
 [[ "$installed_old" == "$old_code" ]] || { echo "旧版启动后版本不符：$installed_old" >&2; exit 1; }
 
 echo "[2/5] 在旧版本运行期间建立书架、阅读进度、部分下载与用户源修改证据"
@@ -213,7 +213,7 @@ require_evidence "$tmp_dir/phase1.log" "UPGRADE_EVIDENCE 阶段 1 完成" "阶�
 
 echo "[3/5] 以 install -r 覆盖安装新版，保留应用私有数据"
 "${adb_cmd[@]}" install -r "$new_apk"
-installed_new="$("${adb_cmd[@]}" shell dumpsys package "$package" | sed -n 's/.*versionCode=\([0-9]*\).*/\1/p' | head -n 1 | tr -d '\r')"
+installed_new="$("${adb_cmd[@]}" shell dumpsys package "$package" | awk 'match($0, /versionCode=[0-9]+/) && !found { print substr($0, RSTART + 12, RLENGTH - 12); found = 1 }' | tr -d '\r')"
 [[ "$installed_new" == "$new_code" ]] || { echo "覆盖升级后版本不符：$installed_new" >&2; exit 1; }
 
 echo "[4/5] 新版首次启动后验证用户数据、下载字节、任务状态、进度和源文件"

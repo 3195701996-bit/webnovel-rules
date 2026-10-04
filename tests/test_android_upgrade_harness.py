@@ -66,7 +66,17 @@ case "$1" in
         esac
         ;;
       dumpsys)
-        if [ -f "$MOCK_INSTALLED_STATE" ]; then echo "versionCode=$MOCK_OLD_CODE"; fi
+        if [ -f "$MOCK_INSTALLED_STATE" ]; then
+          if [ "$MOCK_VERBOSE_DUMPSYS" = "1" ]; then
+            i=0
+            while [ "$i" -lt 12000 ]; do
+              echo "package line $i versionCode=$MOCK_OLD_CODE minSdk=24 targetSdk=35"
+              i=$((i + 1))
+            done
+          else
+            echo "versionCode=$MOCK_OLD_CODE"
+          fi
+        fi
         ;;
       pm)
         if [ "$3" = "list" ] && [ "$4" = "packages" ]; then
@@ -233,6 +243,7 @@ def test_explicitly_configured_v200_to_v201_upgrade_is_supported(tmp_path):
         "UPGRADE_OLD_VERSION_NAME": "2.0.0",
         "UPGRADE_OLD_VERSION_CODE": "155",
         "UPGRADE_NEW_VERSION_NAME": "2.0.1",
+        "MOCK_VERBOSE_DUMPSYS": "1",
     })
     result = _run(apks, env)
 
