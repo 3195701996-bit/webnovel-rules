@@ -309,7 +309,9 @@ internal fun destKey(d: Dest): String = when (d) {
     is Dest.Detail -> "Detail:${d.key}"
     is Dest.Novel -> "Novel:${d.key}"
     is Dest.MangaDetail -> "MangaDetail:${d.source}:${d.comicId}:${d.localCatalog}"
-    is Dest.Manga -> "Manga:${d.source}:${d.comicId}:${d.localCatalog}"
+    // 每次明确选章都是一个新的导航意图；若共享 reader key，SaveableStateHolder
+    // 会把上次章节恢复回来，覆盖用户刚从目录点选的章节。
+    is Dest.Manga -> "Manga:${d.source}:${d.comicId}:${d.localCatalog}:${d.startChapterId}:${d.index}"
     Dest.Explore -> "Explore"
     Dest.MangaSources -> "MangaSources"
     is Dest.MangaSource -> "MangaSource:${d.key}"

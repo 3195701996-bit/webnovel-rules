@@ -69,6 +69,21 @@ class MangaUiAcceptanceTest {
         }
     }
 
+    private fun waitReaderEntry(timeoutMs: Long = 30_000) {
+        rule.waitUntil(timeoutMs) {
+            rule.onAllNodesWithText("开始阅读").fetchSemanticsNodes().isNotEmpty() ||
+                rule.onAllNodesWithText("继续阅读", substring = true)
+                    .fetchSemanticsNodes().isNotEmpty()
+        }
+    }
+
+    private fun clickReaderEntry() {
+        waitReaderEntry()
+        val resume = rule.onAllNodesWithText("继续阅读", substring = true)
+        if (resume.fetchSemanticsNodes().isNotEmpty()) resume[0].performClick()
+        else rule.onNodeWithText("开始阅读").performClick()
+    }
+
     @Before
     fun setUp() {
         // Reader preferences persist across instrumentation methods; keep this test's
@@ -122,10 +137,10 @@ class MangaUiAcceptanceTest {
         //    书库入口则必须带 catalog=local 且只显示实盘已下载的话。
         rule.onNodeWithTag("manga_cached:${comic.sourceKey}:${comic.comicIdValue}")
             .performClick()
-        waitText("开始阅读")
+        waitReaderEntry()
         rule.onNodeWithText("第 1 话 起").assertExists()
-        assertTrue("本地目录必须含 3 个单元，已下载状态必须准确",
-            rule.onAllNodesWithText("已下载").fetchSemanticsNodes().size >= 2)
+        assertTrue("本地目录必须呈现其余已下载状态；当前阅读话单独标注为在读",
+            rule.onAllNodesWithText("已下载").fetchSemanticsNodes().isNotEmpty())
         ev("详情：本地目录单元统计节点在位")
         // 书架入口必须是本地目录，只含实际下载章节；未下载的第 3 话不应出现。
         rule.onNodeWithTag("manga_detail_list").assertExists()
@@ -138,7 +153,7 @@ class MangaUiAcceptanceTest {
         // Activity recreation must restore the same local-only destination rather
         // than silently reopening this comic's full online catalog.
         rule.activityRule.scenario.recreate()
-        waitText("开始阅读", timeoutMs = 30_000)
+        waitReaderEntry()
         rule.onNodeWithTag("manga_detail_list").assertExists()
         rule.onNodeWithText(SelfTestComic.CH3_NAME, substring = true).assertDoesNotExist()
         rule.onNodeWithText(SelfTestComic.GROUP_A).assertExists()
@@ -170,7 +185,7 @@ class MangaUiAcceptanceTest {
         // 回到刚才的本地详情继续既有流程。
         rule.onNodeWithTag("manga_cached:${comic.sourceKey}:${comic.comicIdValue}")
             .performClick()
-        waitText("开始阅读")
+        waitReaderEntry()
 
         // 2b) 详情页应提供"从书库移除"入口（本用例只断言入口在位）
         rule.onNodeWithText("从书库移除").assertIsDisplayed()
@@ -187,7 +202,16 @@ class MangaUiAcceptanceTest {
             MangaChapterPages(count = 1, local = false, images = listOf("https://invalid.test/online.jpg")),
             localCatalog = false,
         )
-        clickText("开始阅读")
+        rule.waitUntil(30_000) {
+            MangaReadCache.getUrls(comic.sourceKey, comic.comicIdValue,
+                SelfTestComic.CH1_ID, localCatalog = true) != null
+        }
+        val prewarmedLocal = MangaReadCache.getUrls(comic.sourceKey, comic.comicIdValue,
+            SelfTestComic.CH1_ID, localCatalog = true)
+        assertTrue("本地详情应预载严格本地图片清单", prewarmedLocal?.local == true)
+        assertEquals("本地预载页数应来自已下载目录", 2, prewarmedLocal?.count)
+        ev("本地阅读：进入阅读器前已预载本地章节清单，页数=${prewarmedLocal?.count}")
+        clickReaderEntry()
         rule.waitUntil(30_000) {
             rule.onAllNodesWithTag("manga_pages").fetchSemanticsNodes().isNotEmpty()
         }
@@ -385,5 +409,37 @@ class MangaUiAcceptanceTest {
         rule.onAllNodesWithText("读到 ${SelfTestComic.CH2_NAME} P1", substring = true)[0]
             .assertIsDisplayed()
         ev("书架：读到 ${SelfTestComic.CH2_NAME} P1")
+
+        // P0 regression: the history now points to chapter 2. Put it at chapter 1,
+        // reopen the local catalog, and verify an explicit tap on chapter 2 wins.
+        val chapterOneHistory = kotlinx.coroutines.runBlocking {
+            histGw.httpPost(histEp.port, "/api/manga/history",
+                org.json.JSONObject().put("source", comic.sourceKey)
+                    .put("comic_id", comic.comicIdValue).put("idx", 0)
+                    .put("pos", SelfTestComic.CH1_NAME).put("title", SelfTestComic.TITLE)
+                    .put("chapter_id", SelfTestComic.CH1_ID)
+                    .put("chapter_label", SelfTestComic.CH1_NAME).toString())
+        }
+        assertTrue("设置章节点选回归的历史前置条件失败", chapterOneHistory.ok)
+        rule.openCachedShelf()
+        rule.onNodeWithText("已缓存").performClick()
+        rule.waitUntil(30_000) {
+            rule.onAllNodesWithTag("manga_cached:${comic.sourceKey}:${comic.comicIdValue}")
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+        rule.onNodeWithTag("manga_cached:${comic.sourceKey}:${comic.comicIdValue}")
+            .performClick()
+        waitReaderEntry()
+        rule.onNodeWithTag("manga_detail_list").performScrollToNode(
+            hasText(SelfTestComic.CH2_NAME, substring = true))
+        rule.onNodeWithText(SelfTestComic.CH2_NAME, substring = true).performClick()
+        rule.waitUntil(30_000) {
+            rule.onAllNodesWithTag("manga_pages").fetchSemanticsNodes().isNotEmpty()
+        }
+        rule.onNodeWithTag("manga_pages").performTouchInput {
+            click(androidx.compose.ui.geometry.Offset(width / 2f, height / 2f))
+        }
+        waitText(SelfTestComic.CH2_NAME, timeoutMs = 30_000, substring = true)
+        ev("章节点选优先于历史：有第1话历史时，点第2话实际打开第2话")
     }
 }

@@ -326,7 +326,7 @@ fun MangaDetailScreen(
                 // 首屏 3 页预载（缓存键与阅读器 pageRequest 一致 → 打开即命中）
                 for (i in 0..minOf(2, p.count - 1)) {
                     val u = resolveMangaPageUrl(ep.imagePort, d.source, d.comicId, ch.id,
-                        p.entries.getOrNull(i), i, 0)
+                        p.entries.getOrNull(i), i, 0, localCatalog)
                     if (u.isNotBlank()) {
                         loader.enqueue(coil.request.ImageRequest.Builder(ctx).data(u)
                             .memoryCacheKey(u).diskCacheKey(u).build())
@@ -342,8 +342,12 @@ fun MangaDetailScreen(
             // 详情获取失败自动重试 1 次——但**只在快速失败时**重试（间歇风控的
             // 瞬时失败大多能自愈）；首次已等满 ~30s 超时说明链路不通，再重试
             // 只会让"打不开"翻倍成"一分钟打不开"（实测教训）
-            val hD = async { gateway.httpText(ep.port, "/api/manga/history") }
-            val favD = async { gateway.httpText(ep.port, "/api/manga/favorites") }
+            // 本地详情响应自身已携带服务端解析的 resume；不额外等完整历史接口，
+            // 避免书架打开本地漫画被与图片无关的网络请求拖慢。
+            val hD = if (localCatalog) null else
+                async { gateway.httpText(ep.port, "/api/manga/history") }
+            val favD = if (localCatalog) null else
+                async { gateway.httpText(ep.port, "/api/manga/favorites") }
             val t0 = System.currentTimeMillis()
             val catalogSuffix = if (localCatalog) "?catalog=local" else ""
             var r = gateway.httpText(ep.port, mangaPath(source, comicId, catalogSuffix))
@@ -358,7 +362,35 @@ fun MangaDetailScreen(
                     if (r.body.isNotBlank()) " · ${EngineData.httpErrorMessage(r.body)}" else ""
             } else {
                 detail = d
-                val fav = favD.await()
+                if (localCatalog) {
+                    val resume = d.resume
+                    readIdx = if (resume?.hasRecord == true) {
+                        MangaResumeResolver.resolve(
+                            d.readingChapters,
+                            resume.matchedId.ifBlank { resume.recordId },
+                            resume.recordLabel,
+                            resume.index,
+                        )
+                    } else -1
+                    prestage(d, readIdx)
+                    val localDetail = d
+                    // 收藏状态是非关键元数据，后台加载，不能挡住本地目录与阅读入口。
+                    scope.launch {
+                        val fav = gateway.httpText(ep.port, "/api/manga/favorites")
+                        val parsed = if (fav.ok)
+                            EngineData.mangaFavoritesOrNull(fav.body) else null
+                        if (parsed != null) {
+                            favoritedState = parsed.any {
+                                sameMangaIdentitySource(it.identitySource,
+                                    localDetail.identitySource.ifBlank { source }) &&
+                                    it.comicId == localDetail.comicId.ifBlank { comicId }
+                            }
+                        }
+                    }
+                    loading = false
+                    return@launch
+                }
+                val fav = favD!!.await()
                 val parsedFavorites = if (fav.ok)
                     EngineData.mangaFavoritesOrNull(fav.body) else null
                 if (parsedFavorites != null) {
@@ -377,7 +409,7 @@ fun MangaDetailScreen(
                 // 回显字段曾为空串 → 匹配失败 → 续读落点退回第 1 话
                 // （用户 2026-09-16 反馈"明明记了进度却从第一话开始"）。
                 // 服务端已补齐字段，这里再做一层"不依赖回显"的防御。
-                val h = hD.await()
+                val h = hD!!.await()
                 if (!h.ok) {
                     readIdx = -1
                     detail = d.copy(resume = null)
@@ -389,8 +421,10 @@ fun MangaDetailScreen(
                             it.comicId == (d.comicId.ifBlank { comicId })
                     }?.idx ?: -1
                 }
-                // 秒开预载：续读话 /urls + 首屏页提前进缓存
-                if (!localCatalog) prestage(d, readIdx)
+                // 秒开预载：本地书库和在线详情都预载续读话 /urls + 首屏页。
+                // 本地书架之前跳过了预载，阅读器只能串行取目录与图片清单，导致
+                // 已下载漫画打开速度明显慢于在线详情。
+                prestage(d, readIdx)
             }
             loading = false
         }

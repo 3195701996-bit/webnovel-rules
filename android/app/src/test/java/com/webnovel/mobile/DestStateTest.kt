@@ -44,9 +44,13 @@ class DestStateTest {
         val localReader = Dest.Manga("mangadex", "comic-1", index = 2, page = 5,
             localCatalog = true)
         val onlineReader = localReader.copy(localCatalog = false)
+        val explicitlySelectedChapter = localReader.copy(
+            index = 1, startChapterId = "chapter-2", startLabel = "第2话")
 
         assertNotEquals(destKey(localDetail), destKey(onlineDetail))
         assertNotEquals(destKey(localReader), destKey(onlineReader))
+        assertNotEquals("a user-selected chapter must not restore the prior reader session",
+            destKey(localReader), destKey(explicitlySelectedChapter))
         assertEquals(localDetail, decodeDest(encodeDest(localDetail)))
         assertEquals(onlineDetail, decodeDest(encodeDest(onlineDetail)))
         assertEquals(localReader, decodeDest(encodeDest(localReader)))
