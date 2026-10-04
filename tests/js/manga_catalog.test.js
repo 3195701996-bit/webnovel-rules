@@ -19,6 +19,27 @@ const androidManga = fs.readFileSync(path.join(root,
 const androidSearch = fs.readFileSync(path.join(root,
   'android/app/src/main/java/com/webnovel/mobile/SearchScreens.kt'), 'utf8');
 
+const optionalInfoRenderer = detail.match(/function renderOptionalInfo\([^)]*\)\s*\{[\s\S]*?\n\}/)?.[0];
+assert.ok(optionalInfoRenderer,
+  'optional manga metadata must use a focused, testable renderer');
+const optionalInfoContext = vm.createContext({
+  esc: value => String(value).replace(/[&<>"']/g, char =>
+    ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[char])),
+});
+vm.runInContext(`${optionalInfoRenderer}; globalThis.renderOptionalInfo = renderOptionalInfo;`, optionalInfoContext);
+function renderOptionalInfo(value, label, labelClass) {
+  const row = {hidden: false, innerHTML: 'stale'};
+  optionalInfoContext.renderOptionalInfo(row, value, label, labelClass);
+  return row;
+}
+assert.deepEqual({...renderOptionalInfo('', '浏览量', 'lbl-views')},
+  {hidden: true, innerHTML: ''}, 'empty optional metadata must not leave an empty outlined row');
+assert.deepEqual({...renderOptionalInfo('   ', '更新时间', 'lbl-time')},
+  {hidden: true, innerHTML: ''}, 'whitespace-only optional metadata must be hidden');
+assert.deepEqual({...renderOptionalInfo('<script>', '浏览量', 'lbl-views')},
+  {hidden: false, innerHTML: '<span class="info-label lbl-views">浏览量</span><span class="info-val">&lt;script&gt;</span>'},
+  'present optional metadata must render escaped content');
+
 const mangaCardFactory = mangaPage.match(/function makeMangaCard\(c\) \{[\s\S]*?\n\}/)?.[0];
 assert.ok(mangaCardFactory, 'manga search must keep a dedicated card renderer');
 assert.match(styles, /\.manga-card \.cover-wrap\.cover-missing::after\s*\{\s*opacity:\s*1;/,
