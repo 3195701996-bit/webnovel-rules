@@ -60,8 +60,11 @@ on_exit() {
       -e class "$test_class#cleanupAfterFailure" \
       -e upgradeHarness 1 \
       -e upgradeRunId "$run_id" \
-      "$runner" >"$tmp_dir/cleanup.log" 2>&1 &&
-      grep -Fq "UPGRADE_EVIDENCE 失败后夹具下载/小说/书目/收藏/历史及用户书源已清理或还原" "$tmp_dir/cleanup.log"; then
+      "$runner" >"$tmp_dir/cleanup.log" 2>&1; then
+      "${adb_cmd[@]}" logcat -d -s System.out:I >>"$tmp_dir/cleanup.log" 2>&1
+    fi
+    if grep -Fq "UPGRADE_EVIDENCE 失败后夹具下载/小说/书目/收藏/历史及用户书源已清理或还原" \
+      "$tmp_dir/cleanup.log"; then
       echo "失败后的夹具清理与源文件恢复完成。" >&2
     else
       echo "自动清理未能确认完成；设备保持隔离，请保留日志并运行 cleanupAfterFailure 用例复核。" >&2
@@ -204,11 +207,13 @@ installed_old="$("${adb_cmd[@]}" shell dumpsys package "$package" | awk 'match($
 echo "[2/5] 在旧版本运行期间建立书架、阅读进度、部分下载与用户源修改证据"
 "${adb_cmd[@]}" install -r "$test_apk"
 phase1_started=1
+"${adb_cmd[@]}" logcat -c
 "${adb_cmd[@]}" shell am instrument -w -r \
   -e class "$test_class#phase1_setupState" \
   -e upgradeHarness 1 \
   -e upgradeRunId "$run_id" \
   "$runner" | tee "$tmp_dir/phase1.log"
+"${adb_cmd[@]}" logcat -d -s System.out:I >>"$tmp_dir/phase1.log"
 require_evidence "$tmp_dir/phase1.log" "UPGRADE_EVIDENCE 阶段 1 完成" "阶段 1"
 
 echo "[3/5] 以 install -r 覆盖安装新版，保留应用私有数据"
@@ -220,11 +225,13 @@ echo "[4/5] 新版首次启动后验证用户数据、下载字节、任务状�
 "${adb_cmd[@]}" shell am force-stop "$package"
 "${adb_cmd[@]}" shell am start -n "${package}/.MainActivity"
 sleep 5
+"${adb_cmd[@]}" logcat -c
 "${adb_cmd[@]}" shell am instrument -w -r \
   -e class "$test_class#phase2_verifyAfterUpgrade" \
   -e upgradeHarness 1 \
   -e upgradeRunId "$run_id" \
   "$runner" | tee "$tmp_dir/phase2.log"
+"${adb_cmd[@]}" logcat -d -s System.out:I >>"$tmp_dir/phase2.log"
 require_evidence "$tmp_dir/phase2.log" "UPGRADE_EVIDENCE 阶段 2 通过并清理完成" "阶段 2"
 
 echo "[5/5] PASS：真实旧版运行 -> 同签名新版覆盖安装 -> 新版数据保全断言通过。"

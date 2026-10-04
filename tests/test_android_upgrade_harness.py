@@ -57,8 +57,9 @@ case "$1" in
   install)
     if [ "$(basename "$3")" = "old.apk" ]; then touch "$MOCK_INSTALLED_STATE"; fi
     ;;
-  shell)
+      shell)
     case "$2" in
+      logcat) ;;
       getprop)
         case "$3" in
           ro.build.version.sdk) echo "$MOCK_SDK" ;;
@@ -166,6 +167,9 @@ def test_upgrade_data_audit_rejects_missing_task_and_checks_exact_identities():
     assert 'assets/build-identity.properties' in harness
     assert 'test_revision" == "$new_revision"' in harness
     assert 'test_identity_code" == "$new_code"' in harness
+    assert 'shell am start -n "${package}/.MainActivity"' in harness
+    assert 'logcat -c' in harness
+    assert 'logcat -d -s System.out:I' in harness
 
 
 def test_strict_upgrade_fixture_never_falls_back_to_another_source():
