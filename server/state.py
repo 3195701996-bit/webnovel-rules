@@ -2080,7 +2080,13 @@ _MANGA_DOWNLOAD_SCAN_TTL = 30.0
 
 
 def _manga_download_scan_fingerprint(source, comic_id):
-    """Cheaply notice page additions/removals without opening every image file."""
+    """Cheaply fingerprint a comic without stat'ing every chapter directory.
+
+    Chapter/page mutations performed by this process invalidate explicitly via
+    ``_manga_stats_note_change``. Root and manifest metadata are a bounded-cost
+    fallback for external changes; walking each chapter here made every detail
+    request O(chapter count), defeating the verified-ID cache.
+    """
     sources = [source]
     if source == "copymanga":
         sources.append("copymanga_web")
@@ -2093,13 +2099,6 @@ def _manga_download_scan_fingerprint(source, comic_id):
             try:
                 base_stat = os.stat(base)
                 fingerprint.append((base, base_stat.st_mtime_ns))
-                for entry in os.scandir(base):
-                    if entry.name.endswith(".repair_old") or not entry.is_dir():
-                        continue
-                    try:
-                        fingerprint.append((entry.path, entry.stat().st_mtime_ns))
-                    except OSError:
-                        continue
                 manifest = os.path.join(base, "_info.json")
                 try:
                     stat = os.stat(manifest)
@@ -2157,10 +2156,12 @@ def _scan_downloaded_chapters(source, comic_id):
     fingerprint = _manga_download_scan_fingerprint(source, comic_id)
     with _manga_download_scan_lock:
         cached = _manga_download_scan_cache.get(cache_key)
-        if (cached and now - cached[0] < _MANGA_DOWNLOAD_SCAN_TTL
+        if (cached and len(cached) > 3
+                and now - cached[0] < _MANGA_DOWNLOAD_SCAN_TTL
                 and cached[1] == fingerprint):
             return list(cached[2])
     out = []
+    partial = []
     # copymanga 与 copymanga_web 共用站点/漫画 ID，但历史下载可能落在任一
     # source 目录；详情页必须和书库统计一样合并两边，否则显示“未下载”。
     _sources = [source]
@@ -2207,6 +2208,7 @@ def _scan_downloaded_chapters(source, comic_id):
                         if _is_manga_image_file(_fp):
                             _pages.setdefault(int(_m.group(1)), _fp)
                     _has_img = bool(_pages)
+                    _expected = 0
                     if _has_img:
                         # 新清单要求期望数与 0-based 页序完全匹配；旧清单缺少
                         # 期望数时，至少要求现存页号从 0 连续，已知缺页不可算完整。
@@ -2226,15 +2228,18 @@ def _scan_downloaded_chapters(source, comic_id):
                             except (OSError, ValueError, TypeError, AttributeError):
                                 continue
                         # 即便没有任何可用页数清单，也必须拒绝可证实的中间缺号。
-                        _has_img = (_has_img and
-                                    _manga_page_sequence_complete(set(_pages)))
+                        _sequence_complete = _manga_page_sequence_complete(
+                            set(_pages), _expected)
+                        if not _sequence_complete and _n not in partial:
+                            partial.append(_n)
+                        _has_img = _has_img and _sequence_complete
                 except Exception:
                     _has_img = False
                 if _has_img and _n not in out:
                     out.append(_n)
     with _manga_download_scan_lock:
         _manga_download_scan_cache[cache_key] = (
-            time.monotonic(), fingerprint, tuple(out))
+            time.monotonic(), fingerprint, tuple(out), tuple(partial))
         if len(_manga_download_scan_cache) > 256:
             oldest = sorted(_manga_download_scan_cache,
                             key=lambda key: _manga_download_scan_cache[key][0])[:64]
@@ -2250,68 +2255,22 @@ def _scan_partial_downloaded_chapters(source, comic_id):
     现存页序连续时，无法证明尾页缺失，因此不把它误归类为“部分下载”。
     普通在线阅读缓存仍需由旧下载清单证明，避免混入用户可见的下载状态。
     """
-    out = []
-    sources = [source]
-    if source == "copymanga":
-        sources.append("copymanga_web")
-    elif source == "copymanga_web":
-        sources.append("copymanga")
-    for src in sources:
-        download_base = os.path.join(MANGA_DOWNLOADS_DIR, src, comic_id)
-        cache_base = os.path.join(MANGA_CACHE_DIR, src, comic_id)
-        legacy_ids = set()
-        try:
-            with open(os.path.join(cache_base, "_info.json"), encoding="utf-8") as f:
-                legacy_ids = {str(c.get("id") or "")
-                              for c in (json.load(f).get("chapters") or [])
-                              if isinstance(c, dict) and c.get("id")}
-        except Exception:
-            pass
-        for base, allowed_ids in ((download_base, None),
-                                  (cache_base, legacy_ids)):
-            if not os.path.isdir(base):
-                continue
-            try:
-                names = os.listdir(base)
-            except OSError:
-                continue
-            for chapter_id in names:
-                if chapter_id.endswith(".repair_old") or (
-                        allowed_ids is not None and chapter_id not in allowed_ids):
-                    continue
-                chapter_dir = os.path.join(base, chapter_id)
-                if not os.path.isdir(chapter_dir):
-                    continue
-                pages = set()
-                try:
-                    for filename in os.listdir(chapter_dir):
-                        match = re.match(r"^(\d+)(?:\.[^.]+)?$", filename)
-                        path = os.path.join(chapter_dir, filename)
-                        if match and _is_manga_image_file(path):
-                            pages.add(int(match.group(1)))
-                except OSError:
-                    continue
-                if not pages:
-                    continue
-                expected = 0
-                for manifest in (os.path.join(download_base, "_info.json"),
-                                 os.path.join(cache_base, "_info.json")):
-                    try:
-                        with open(manifest, encoding="utf-8") as f:
-                            rows = json.load(f).get("chapters") or []
-                        row = next((item for item in rows
-                                    if isinstance(item, dict) and
-                                    str(item.get("id") or "") == chapter_id), None)
-                        expected = max(0, int((row or {}).get(
-                            "download_page_count") or 0))
-                        if expected:
-                            break
-                    except (OSError, ValueError, TypeError, AttributeError):
-                        continue
-                complete = _manga_page_sequence_complete(pages, expected)
-                if not complete and chapter_id not in out:
-                    out.append(chapter_id)
-    return out
+    cache_key = (os.path.realpath(MANGA_DOWNLOADS_DIR),
+                 os.path.realpath(MANGA_CACHE_DIR), source, str(comic_id))
+    now = time.monotonic()
+    fingerprint = _manga_download_scan_fingerprint(source, comic_id)
+    with _manga_download_scan_lock:
+        cached = _manga_download_scan_cache.get(cache_key)
+        if (cached and now - cached[0] < _MANGA_DOWNLOAD_SCAN_TTL
+                and cached[1] == fingerprint and len(cached) > 3):
+            return list(cached[3])
+    # Reuse the same strict media validation pass; it also populates complete IDs.
+    _scan_downloaded_chapters(source, comic_id)
+    with _manga_download_scan_lock:
+        cached = _manga_download_scan_cache.get(cache_key)
+        if cached and cached[1] == fingerprint and len(cached) > 3:
+            return list(cached[3])
+    return []
 
 
 def _downloaded_ids_for_chapters(source, comic_id, chapters):

@@ -53,9 +53,81 @@ def test_download_scan_reuses_verified_pages_and_invalidates_after_change(
     assert checks == 1
 
     # Nested page changes alter the chapter directory timestamp and are detected
-    # immediately; explicit hooks also cover rename/replace edge cases.
+    # immediately after the same invalidation path used by download/delete APIs.
     (chapter / "0000.jpg").unlink()
+    state._invalidate_manga_download_scan("jm", "comic")
     assert state._scan_downloaded_chapters("jm", "comic") == []
+
+
+def test_download_scan_fingerprint_is_constant_cost_for_large_catalog(
+        tmp_path, monkeypatch):
+    """The cache-hit fingerprint must not stat/list every chapter directory."""
+    import server.state as state
+
+    downloads = tmp_path / "downloads"
+    cache = tmp_path / "cache"
+    monkeypatch.setattr(state, "MANGA_DOWNLOADS_DIR", str(downloads))
+    monkeypatch.setattr(state, "MANGA_CACHE_DIR", str(cache))
+    base = downloads / "jm" / "comic"
+    for index in range(1_000):
+        _page(base / f"chapter-{index:04d}")
+    state._invalidate_manga_download_scan("jm", "comic")
+
+    original_scandir = state.os.scandir
+    scanned = []
+
+    def count_scandir(path):
+        scanned.append(str(path))
+        return original_scandir(path)
+
+    monkeypatch.setattr(state.os, "scandir", count_scandir)
+    expected = state._manga_download_scan_fingerprint("jm", "comic")
+    # The only list operation in the fingerprint may be on the comic root; it
+    # must not enumerate chapter roots on every request.
+    assert len(expected) <= 4
+    assert scanned == []
+
+    # The actual first scan still verifies every chapter, then a repeat must
+    # take the constant-cost fingerprint path and reuse those verified IDs.
+    first = state._scan_downloaded_chapters("jm", "comic")
+    scans_after_first = len(scanned)
+    second = state._scan_downloaded_chapters("jm", "comic")
+    assert len(first) == 1_000
+    assert second == first
+    assert len(scanned) == scans_after_first
+
+
+def test_partial_and_complete_scan_share_one_verified_snapshot(tmp_path, monkeypatch):
+    import server.state as state
+
+    downloads = tmp_path / "downloads"
+    monkeypatch.setattr(state, "MANGA_DOWNLOADS_DIR", str(downloads))
+    monkeypatch.setattr(state, "MANGA_CACHE_DIR", str(tmp_path / "cache"))
+    base = downloads / "jm" / "comic"
+    _page(base / "complete")
+    partial = base / "partial"
+    _page(partial)
+    (partial / "0002.jpg").write_bytes(b"\xff\xd8\xff" + b"y" * 128)
+    (base / "_info.json").write_text(json.dumps({"chapters": [
+        {"id": "complete", "name": "第1话", "download_page_count": 1},
+        {"id": "partial", "name": "第2话", "download_page_count": 3},
+    ]}), encoding="utf-8")
+    state._invalidate_manga_download_scan("jm", "comic")
+
+    original_check = state._is_manga_image_file
+    checks = 0
+
+    def count_checks(path):
+        nonlocal checks
+        checks += 1
+        return original_check(path)
+
+    monkeypatch.setattr(state, "_is_manga_image_file", count_checks)
+    assert state._scan_downloaded_chapters("jm", "comic") == ["complete"]
+    checks_after_scan = checks
+    assert state._scan_partial_downloaded_chapters("jm", "comic") == ["partial"]
+    assert state._scan_downloaded_chapters("jm", "comic") == ["complete"]
+    assert checks == checks_after_scan == 3, "部分状态读取应复用同一次图片校验"
 
 
 def test_old_cache_root_download_requires_saved_download_manifest(
@@ -130,9 +202,11 @@ def test_download_scan_requires_complete_page_sequence_when_manifest_has_images(
     info = {"chapters": [{"id": "chapter", "name": "第1话",
                            "download_page_count": 2}]}
     (base / "_info.json").write_text(json.dumps(info), encoding="utf-8")
+    state._invalidate_manga_download_scan("jm", "comic")
     (chapter / "0001.jpg").rename(chapter / "0002.jpg")
     assert state._scan_downloaded_chapters("jm", "comic") == []
     (chapter / "0002.jpg").rename(chapter / "0001.jpg")
+    state._invalidate_manga_download_scan("jm", "comic")
     assert state._scan_downloaded_chapters("jm", "comic") == ["chapter"]
 
 
@@ -158,6 +232,7 @@ def test_legacy_manifest_with_known_page_gap_is_not_marked_complete(
     assert state._manga_scan_comic("old-source", "old-comic") == (2, 1, 0)
 
     (chapter / "0001.jpg").write_bytes(b"\xff\xd8\xff" + b"y" * 128)
+    state._invalidate_manga_download_scan("old-source", "old-comic")
     assert state._scan_downloaded_chapters("old-source", "old-comic") == [
         "old-chapter"]
     assert state._manga_scan_comic("old-source", "old-comic") == (3, 1, 1)

@@ -30,8 +30,9 @@ object OfflineStore {
 
     // Offline shelf and reader can request the same comic in one app session. Keep the
     // validated file index so opening its detail does not reopen every image header.
-    // The fingerprint includes chapter-directory listings (not just the comic root,
-    // whose mtime does not change when nested pages are added or removed).
+    // Cache-hit fingerprints stay O(1); the app invalidates the index after its
+    // own download/delete operations because nested mutations do not change the
+    // comic root's mtime.
     private data class MangaIndexEntry(
         val fingerprint: List<String>,
         val chapters: List<Pair<String, List<File>>>,
@@ -46,14 +47,9 @@ object OfflineStore {
         mangaSourceAliases(source).flatMap { alias ->
             listOf("downloads/$alias", "_cache/$alias").map { relative ->
                 val comic = File(File(rootDir, "manga/$relative"), comicId)
-                val children = comic.listFiles().orEmpty().filter { it.isDirectory }
-                    .sortedBy { it.name }
                 buildString {
                     append(comic.absolutePath).append(':')
                     append(comic.lastModified()).append(':').append(comic.exists())
-                    for (chapter in children) {
-                        append('|').append(chapter.name).append('@').append(chapter.lastModified())
-                    }
                     val manifest = File(comic, "_info.json")
                     append("|manifest:").append(manifest.length()).append('@')
                         .append(manifest.lastModified())

@@ -196,7 +196,7 @@ class OfflineIndexTest {
     }
 
     @Test
-    fun offlineMangaIndexIsReusedAndInvalidatedWhenChapterDirectoryChanges() {
+    fun offlineMangaIndexIsReusedAndInvalidatedAfterDownloadMutation() {
         val root = tmpRoot()
         val comic = File(root, "manga/downloads/jm/index-cache")
         val chapter = File(comic, "chapter-1").apply { mkdirs() }
@@ -209,13 +209,33 @@ class OfflineIndexTest {
 
         val nextChapter = File(comic, "chapter-2").apply { mkdirs() }
         File(nextChapter, "0000.jpg").writeBytes(jpeg)
-        assertTrue("章节目录新增后必须立即重建索引",
-            nextChapter.setLastModified(System.currentTimeMillis() + 2_000))
+        assertTrue("章节目录创建成功", nextChapter.isDirectory)
+        OfflineStore.invalidateMangaIndex(root, "jm", "index-cache")
         assertEquals(listOf("chapter-1", "chapter-2"),
             OfflineStore.mangaChaptersFrom(root, "jm", "index-cache").map { it.first })
 
         OfflineStore.invalidateMangaIndex(root, "jm", "index-cache")
         assertEquals(2, OfflineStore.mangaChaptersFrom(root, "jm", "index-cache").size)
+    }
+
+    @Test
+    fun offlineMangaCacheHitDoesNotEnumerateEveryChapterDirectory() {
+        val root = tmpRoot()
+        val comic = File(root, "manga/downloads/jm/large-index")
+        val jpeg = byteArrayOf(0xff.toByte(), 0xd8.toByte(), 0xff.toByte()) + ByteArray(32)
+        for (index in 0 until 1_000) {
+            File(comic, "chapter-${index.toString().padStart(4, '0')}")
+                .apply { mkdirs() }.resolve("0000.jpg").writeBytes(jpeg)
+        }
+
+        val first = OfflineStore.mangaChaptersFrom(root, "jm", "large-index")
+        val startedAt = System.nanoTime()
+        val repeated = OfflineStore.mangaChaptersFrom(root, "jm", "large-index")
+        val repeatedMs = (System.nanoTime() - startedAt) / 1_000_000
+        assertTrue("1000 章目录缓存命中应复用索引对象", first === repeated)
+        assertEquals(1_000, repeated.size)
+        // This is a generous algorithmic guard, not a device performance SLA.
+        assertTrue("缓存命中意外变慢：${repeatedMs}ms", repeatedMs < 1_000)
     }
 
     @Test
@@ -383,6 +403,7 @@ class OfflineIndexTest {
 
         File(expectedChapter, "0001.jpg").writeBytes(jpeg)
         File(gappedLegacyChapter, "0001.jpg").writeBytes(jpeg)
+        OfflineStore.invalidateMangaIndex(root, "jm", "integrity")
         val all = OfflineStore.mangaFrom(root).single()
         assertEquals("补齐连续页序后，旧清单与新清单章节都可离线阅读", 3,
             all.chapterCount)
