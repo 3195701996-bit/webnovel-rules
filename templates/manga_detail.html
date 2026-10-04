@@ -248,6 +248,14 @@ let chapterReadIndices = new Set();
 let detail = null;
 let readingHistoryReady = false;
 
+function renderOptionalInfo(row, value, label, labelClass) {
+  const text = String(value || '').trim();
+  row.hidden = !text;
+  row.innerHTML = text
+    ? `<span class="info-label ${labelClass}">${label}</span><span class="info-val">${esc(text)}</span>`
+    : '';
+}
+
 function catalogActionState(localOnly, unitCount) {
   const hasUnits = Number(unitCount) > 0;
   return {
@@ -454,8 +462,8 @@ async function load() {
     // 改 data-tag + 事件绑定，dataset 读出的是未转义原值，searchTag 内自行 encodeURIComponent
     $('#info-tags').querySelectorAll('.info-val.clickable').forEach(el =>
       el.addEventListener('click', () => searchTag(el.dataset.tag)));
-    $('#info-views').innerHTML = `<span class="info-label lbl-views">浏览量</span><span class="info-val">${esc(detail.views || '')}</span>`;
-    $('#info-time').innerHTML = `<span class="info-label lbl-time">更新时间</span><span class="info-val">${esc(detail.update_time || '')}</span>`;
+    renderOptionalInfo($('#info-views'), detail.views, '浏览量', 'lbl-views');
+    renderOptionalInfo($('#info-time'), detail.update_time, '更新时间', 'lbl-time');
     // 章节（话）
     const chs = detail.chapters || [];
     const vols = detail.volumes || [];
