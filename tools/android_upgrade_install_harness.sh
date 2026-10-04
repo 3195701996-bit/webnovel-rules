@@ -196,7 +196,7 @@ echo "目标设备：${ANDROID_SERIAL}（${avd_name}/API ${sdk_level}）；包�
 echo "[1/5] 安装旧版 APK（保留该专用设备上此应用的现有数据）"
 "${adb_cmd[@]}" install -r "$old_apk"
 "${adb_cmd[@]}" shell am force-stop "$package"
-"${adb_cmd[@]}" shell monkey -p "$package" 1 >/dev/null
+"${adb_cmd[@]}" shell am start -n "${package}/.MainActivity"
 sleep 5
 installed_old="$("${adb_cmd[@]}" shell dumpsys package "$package" | awk 'match($0, /versionCode=[0-9]+/) && !found { print substr($0, RSTART + 12, RLENGTH - 12); found = 1 }' | tr -d '\r')"
 [[ "$installed_old" == "$old_code" ]] || { echo "旧版启动后版本不符：$installed_old" >&2; exit 1; }
@@ -218,7 +218,7 @@ installed_new="$("${adb_cmd[@]}" shell dumpsys package "$package" | awk 'match($
 
 echo "[4/5] 新版首次启动后验证用户数据、下载字节、任务状态、进度和源文件"
 "${adb_cmd[@]}" shell am force-stop "$package"
-"${adb_cmd[@]}" shell monkey -p "$package" 1 >/dev/null
+"${adb_cmd[@]}" shell am start -n "${package}/.MainActivity"
 sleep 5
 "${adb_cmd[@]}" shell am instrument -w -r \
   -e class "$test_class#phase2_verifyAfterUpgrade" \

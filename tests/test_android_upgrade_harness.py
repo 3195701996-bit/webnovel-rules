@@ -252,6 +252,7 @@ def test_explicitly_configured_v200_to_v201_upgrade_is_supported(tmp_path):
     assert "phase 1 intentionally missing completion evidence" in result.stdout
     calls = adb_log.read_text(encoding="utf-8")
     assert "install -r " + str(apks[0]) in calls
+    assert "shell am start -n com.webnovel.mobile/.MainActivity" in calls
     assert "phase1_setupState" in calls
     assert "install -r " + str(apks[1]) not in calls
 
