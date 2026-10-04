@@ -2076,7 +2076,62 @@ _manga_chapters_cache = {}       # (source, comic_id) -> (ts, chapters)
 # synchronously, with the TTL as a safety net for out-of-process file changes.
 _manga_download_scan_lock = threading.Lock()
 _manga_download_scan_cache = {}
+_manga_download_scan_epoch = {}
 _MANGA_DOWNLOAD_SCAN_TTL = 30.0
+_MANGA_DOWNLOAD_SCAN_INDEX_VERSION = 1
+
+
+def _manga_download_scan_index_path(source, comic_id):
+    """Stable per-comic verified snapshot outside the media tree.
+
+    The index lives in app-private state rather than beside chapter files, so
+    writing it cannot perturb the media-root fingerprint used to validate it.
+    """
+    identity = f"{source}\0{comic_id}".encode("utf-8", "replace")
+    key = hashlib.sha256(identity).hexdigest()
+    return os.path.join(MANGA_STATE_DIR, "download-scan", key + ".json")
+
+
+def _manga_download_scan_index_fingerprint(fingerprint):
+    return [list(row) for row in fingerprint]
+
+
+def _load_manga_download_scan_index(source, comic_id, fingerprint):
+    path = _manga_download_scan_index_path(source, comic_id)
+    try:
+        with open(path, encoding="utf-8") as stream:
+            entry = json.load(stream)
+        if (not isinstance(entry, dict)
+                or entry.get("version") != _MANGA_DOWNLOAD_SCAN_INDEX_VERSION
+                or entry.get("fingerprint") !=
+                    _manga_download_scan_index_fingerprint(fingerprint)):
+            return None
+        downloaded = entry.get("downloaded")
+        partial = entry.get("partial")
+        if (not isinstance(downloaded, list) or not isinstance(partial, list)
+                or not all(isinstance(value, str) for value in downloaded + partial)):
+            return None
+        downloaded = tuple(dict.fromkeys(downloaded))
+        partial = tuple(value for value in dict.fromkeys(partial)
+                        if value not in downloaded)
+        return downloaded, partial
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def _save_manga_download_scan_index(source, comic_id, fingerprint, downloaded, partial):
+    path = _manga_download_scan_index_path(source, comic_id)
+    try:
+        atomic_write(path, {
+            "version": _MANGA_DOWNLOAD_SCAN_INDEX_VERSION,
+            "fingerprint": _manga_download_scan_index_fingerprint(fingerprint),
+            "downloaded": list(downloaded),
+            "partial": list(partial),
+        })
+    except (OSError, TypeError, ValueError):
+        # The strict in-memory snapshot remains useful even if app-private state
+        # storage is temporarily unavailable; never fail detail rendering here.
+        pass
 
 
 def _manga_download_scan_fingerprint(source, comic_id):
@@ -2117,9 +2172,26 @@ def _invalidate_manga_download_scan(source, comic_id):
     elif source == "copymanga_web":
         sources.add("copymanga")
     with _manga_download_scan_lock:
+        for src in sources:
+            epoch_key = (src, str(comic_id))
+            _manga_download_scan_epoch[epoch_key] = (
+                _manga_download_scan_epoch.get(epoch_key, 0) + 1)
         for key in list(_manga_download_scan_cache):
             if key[2] in sources and key[3] == str(comic_id):
                 _manga_download_scan_cache.pop(key, None)
+    for src in sources:
+        try:
+            os.remove(_manga_download_scan_index_path(src, str(comic_id)))
+        except FileNotFoundError:
+            pass
+        except OSError:
+            # A cache file that cannot be removed must not be trusted later.
+            # Store an invalid version marker atomically when possible.
+            try:
+                atomic_write(_manga_download_scan_index_path(src, str(comic_id)),
+                             {"version": -1})
+            except OSError:
+                pass
 
 
 def _manga_total_chapters(source, comic_id):
@@ -2154,12 +2226,53 @@ def _scan_downloaded_chapters(source, comic_id):
                  os.path.realpath(MANGA_CACHE_DIR), source, str(comic_id))
     now = time.monotonic()
     fingerprint = _manga_download_scan_fingerprint(source, comic_id)
+    epoch_key = (source, str(comic_id))
+    with _manga_download_scan_lock:
+        epoch = _manga_download_scan_epoch.get(epoch_key, 0)
+    # A verified snapshot must not mask a download currently creating or
+    # replacing chapter directories. Starts/resumes invalidate before workers
+    # run; this guard also covers the small interval before that invalidation.
+    if _manga_download_scan_has_active_task(source, comic_id):
+        return _scan_downloaded_chapters_strict(source, comic_id, cache_key,
+                                                fingerprint, epoch, persist=False)
     with _manga_download_scan_lock:
         cached = _manga_download_scan_cache.get(cache_key)
         if (cached and len(cached) > 3
                 and now - cached[0] < _MANGA_DOWNLOAD_SCAN_TTL
                 and cached[1] == fingerprint):
             return list(cached[2])
+    disk_snapshot = _load_manga_download_scan_index(source, str(comic_id), fingerprint)
+    if disk_snapshot is not None:
+        downloaded, partial = disk_snapshot
+        with _manga_download_scan_lock:
+            if _manga_download_scan_epoch.get(epoch_key, 0) == epoch:
+                _manga_download_scan_cache[cache_key] = (
+                    now, fingerprint, downloaded, partial)
+                return list(downloaded)
+    return _scan_downloaded_chapters_strict(source, comic_id, cache_key,
+                                            fingerprint, epoch, persist=True)
+
+
+def _manga_download_scan_has_active_task(source, comic_id):
+    manager = globals().get("_manga_dl")
+    if manager is None:
+        return False
+    sources = [source]
+    if source == "copymanga":
+        sources.append("copymanga_web")
+    elif source == "copymanga_web":
+        sources.append("copymanga")
+    for src in sources:
+        try:
+            if manager.status(f"{src}:{comic_id}").get("status") in ("running", "queued"):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _scan_downloaded_chapters_strict(source, comic_id, cache_key, fingerprint,
+                                     epoch, persist):
     out = []
     partial = []
     # copymanga 与 copymanga_web 共用站点/漫画 ID，但历史下载可能落在任一
@@ -2175,6 +2288,7 @@ def _scan_downloaded_chapters(source, comic_id):
         _download_base = os.path.join(MANGA_DOWNLOADS_DIR, _src, comic_id)
         _cache_base = os.path.join(MANGA_CACHE_DIR, _src, comic_id)
         _legacy_ids = set()
+        _expected_page_counts = {}
         try:
             with open(os.path.join(_cache_base, "_info.json"), encoding="utf-8") as f:
                 _legacy_ids = {str(c.get("id") or "")
@@ -2182,6 +2296,27 @@ def _scan_downloaded_chapters(source, comic_id):
                                if isinstance(c, dict) and c.get("id")}
         except Exception:
             pass
+        # Parse manifests once per comic. Reading the full chapter manifest for
+        # every chapter directory made a cold detail request quadratic in the
+        # number of chapters (and dominated local catalog loading).
+        for _manifest in (
+                os.path.join(_download_base, "_info.json"),
+                os.path.join(_cache_base, "_info.json")):
+            try:
+                with open(_manifest, encoding="utf-8") as _mf:
+                    _rows = json.load(_mf).get("chapters") or []
+                for _row in _rows:
+                    if not isinstance(_row, dict) or not _row.get("id"):
+                        continue
+                    _cid = str(_row["id"])
+                    try:
+                        _count = int(_row.get("download_page_count") or 0)
+                    except (TypeError, ValueError, OverflowError):
+                        continue
+                    if _count > 0 and _cid not in _expected_page_counts:
+                        _expected_page_counts[_cid] = _count
+            except (OSError, ValueError, TypeError, AttributeError):
+                continue
         # downloads 是当前正式持久目录；cache 仅限可由旧下载清单证明的章节。
         _bases = [(_download_base, None), (_cache_base, _legacy_ids)]
         for base, allowed_ids in _bases:
@@ -2212,21 +2347,10 @@ def _scan_downloaded_chapters(source, comic_id):
                     if _has_img:
                         # 新清单要求期望数与 0-based 页序完全匹配；旧清单缺少
                         # 期望数时，至少要求现存页号从 0 连续，已知缺页不可算完整。
-                        for _manifest in (
-                                os.path.join(_download_base, "_info.json"),
-                                os.path.join(_cache_base, "_info.json")):
-                            try:
-                                with open(_manifest, encoding="utf-8") as _mf:
-                                    _rows = json.load(_mf).get("chapters") or []
-                                _row = next((r for r in _rows if isinstance(r, dict)
-                                             and str(r.get("id") or "") == _n), None)
-                                _expected = int((_row or {}).get("download_page_count") or 0)
-                                if _expected > 0:
-                                    _has_img = _manga_page_sequence_complete(
-                                        set(_pages), _expected)
-                                    break
-                            except (OSError, ValueError, TypeError, AttributeError):
-                                continue
+                        _expected = _expected_page_counts.get(_n, 0)
+                        if _expected > 0:
+                            _has_img = _manga_page_sequence_complete(
+                                set(_pages), _expected)
                         # 即便没有任何可用页数清单，也必须拒绝可证实的中间缺号。
                         _sequence_complete = _manga_page_sequence_complete(
                             set(_pages), _expected)
@@ -2237,14 +2361,34 @@ def _scan_downloaded_chapters(source, comic_id):
                     _has_img = False
                 if _has_img and _n not in out:
                     out.append(_n)
+    downloaded_snapshot = tuple(out)
+    partial_snapshot = tuple(partial)
     with _manga_download_scan_lock:
-        _manga_download_scan_cache[cache_key] = (
-            time.monotonic(), fingerprint, tuple(out), tuple(partial))
+        unchanged = (_manga_download_scan_epoch.get((source, str(comic_id)), 0)
+                     == epoch)
+        if unchanged:
+            _manga_download_scan_cache[cache_key] = (
+                time.monotonic(), fingerprint, downloaded_snapshot, partial_snapshot)
         if len(_manga_download_scan_cache) > 256:
             oldest = sorted(_manga_download_scan_cache,
                             key=lambda key: _manga_download_scan_cache[key][0])[:64]
             for key in oldest:
                 _manga_download_scan_cache.pop(key, None)
+    if (persist and unchanged and
+            not _manga_download_scan_has_active_task(source, comic_id)):
+        # Do not bless a snapshot if media changed while verification ran.
+        current_fingerprint = _manga_download_scan_fingerprint(source, comic_id)
+        if current_fingerprint == fingerprint:
+            # Serialize the final generation check + atomic write with
+            # invalidation. Otherwise a scan could pass its first check, race a
+            # download/delete invalidation, and recreate the just-removed stale
+            # snapshot after the mutation.
+            with _manga_download_scan_lock:
+                if (_manga_download_scan_epoch.get(
+                        (source, str(comic_id)), 0) == epoch):
+                    _save_manga_download_scan_index(
+                        source, str(comic_id), fingerprint,
+                        downloaded_snapshot, partial_snapshot)
     return out
 
 
