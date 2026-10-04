@@ -198,7 +198,11 @@ def test_partial_results_are_cached_only_briefly(
     # 必须**消费响应体**，否则 Flask 测试客户端的生成器根本不执行（也就不会写缓存）
     evts = _events(client.get("/api/search/stream?q=部分缓存测试书"))
     assert evts and evts[-1].get("finished") is True
-    assert started.wait(timeout=1), "慢源任务未进入阻塞桩，无法证明缓存是部分结果"
+    # 不依赖 CI 调度器在固定 1 秒内启动慢源 worker；最终事件明确把该源
+    # 标为仍在查询，才是“本轮存在未完成源、结果属于部分结果”的产品契约。
+    errors = evts[-1].get("errors") or {}
+    assert any("仍在查询" in reason for reason in errors.values()), errors
+    assert any(name == "源hang" for name in errors), errors
     assert not release.is_set(), "慢源阻塞门闩不能在本测试断言前释放"
     with st._toc_lock:
         entry = st._search_cache.get(("部分缓存测试书", "", "default", "normal"))
