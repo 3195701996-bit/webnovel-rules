@@ -2070,6 +2070,58 @@ def _manga_cached_chapters(source, comic_id):
 
 _manga_chapters_cache = {}       # (source, comic_id) -> (ts, chapters)
 
+# Verifying image headers is intentionally strict, but doing that disk walk on every
+# local-detail request makes opening a large library item proportional to all pages.
+# Cache only the verified ID set briefly; download/repair/delete hooks invalidate it
+# synchronously, with the TTL as a safety net for out-of-process file changes.
+_manga_download_scan_lock = threading.Lock()
+_manga_download_scan_cache = {}
+_MANGA_DOWNLOAD_SCAN_TTL = 30.0
+
+
+def _manga_download_scan_fingerprint(source, comic_id):
+    """Cheaply notice page additions/removals without opening every image file."""
+    sources = [source]
+    if source == "copymanga":
+        sources.append("copymanga_web")
+    elif source == "copymanga_web":
+        sources.append("copymanga")
+    fingerprint = []
+    for src in sources:
+        for root in (MANGA_DOWNLOADS_DIR, MANGA_CACHE_DIR):
+            base = os.path.join(root, src, str(comic_id))
+            try:
+                base_stat = os.stat(base)
+                fingerprint.append((base, base_stat.st_mtime_ns))
+                for entry in os.scandir(base):
+                    if entry.name.endswith(".repair_old") or not entry.is_dir():
+                        continue
+                    try:
+                        fingerprint.append((entry.path, entry.stat().st_mtime_ns))
+                    except OSError:
+                        continue
+                manifest = os.path.join(base, "_info.json")
+                try:
+                    stat = os.stat(manifest)
+                    fingerprint.append((manifest, stat.st_size, stat.st_mtime_ns))
+                except OSError:
+                    fingerprint.append((manifest, None, None))
+            except OSError:
+                fingerprint.append((base, None))
+    return tuple(fingerprint)
+
+
+def _invalidate_manga_download_scan(source, comic_id):
+    sources = {source}
+    if source == "copymanga":
+        sources.add("copymanga_web")
+    elif source == "copymanga_web":
+        sources.add("copymanga")
+    with _manga_download_scan_lock:
+        for key in list(_manga_download_scan_cache):
+            if key[2] in sources and key[3] == str(comic_id):
+                _manga_download_scan_cache.pop(key, None)
+
 
 def _manga_total_chapters(source, comic_id):
     """该漫画已知总话数（读详情缓存 _info_full.json）；未知返回 0。
@@ -2099,6 +2151,15 @@ def _scan_downloaded_chapters(source, comic_id):
     将章节误认成下载；为了兼容旧版把下载写入缓存根的情况，仅接受其 _info.json
     下载清单明确列出的章节目录。
     """
+    cache_key = (os.path.realpath(MANGA_DOWNLOADS_DIR),
+                 os.path.realpath(MANGA_CACHE_DIR), source, str(comic_id))
+    now = time.monotonic()
+    fingerprint = _manga_download_scan_fingerprint(source, comic_id)
+    with _manga_download_scan_lock:
+        cached = _manga_download_scan_cache.get(cache_key)
+        if (cached and now - cached[0] < _MANGA_DOWNLOAD_SCAN_TTL
+                and cached[1] == fingerprint):
+            return list(cached[2])
     out = []
     # copymanga 与 copymanga_web 共用站点/漫画 ID，但历史下载可能落在任一
     # source 目录；详情页必须和书库统计一样合并两边，否则显示“未下载”。
@@ -2171,6 +2232,14 @@ def _scan_downloaded_chapters(source, comic_id):
                     _has_img = False
                 if _has_img and _n not in out:
                     out.append(_n)
+    with _manga_download_scan_lock:
+        _manga_download_scan_cache[cache_key] = (
+            time.monotonic(), fingerprint, tuple(out))
+        if len(_manga_download_scan_cache) > 256:
+            oldest = sorted(_manga_download_scan_cache,
+                            key=lambda key: _manga_download_scan_cache[key][0])[:64]
+            for key in oldest:
+                _manga_download_scan_cache.pop(key, None)
     return out
 
 
@@ -2743,6 +2812,7 @@ def _manga_stats_note_change(source, comic_id, removed=False):
     removed=True 时直接摘除条目。"""
     global _manga_lib_rev
     k = _manga_stats_skey(source, comic_id)
+    _invalidate_manga_download_scan(source, comic_id)
     if removed:
         with _manga_stats_lock:
             _manga_stats_pending.discard(k)

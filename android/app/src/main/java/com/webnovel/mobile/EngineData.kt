@@ -569,8 +569,12 @@ data class MangaDetail(
     val localOnly: Boolean = false,
 ) {
     /** 阅读目录：卷漫画没有普通 chapters，卷本身就是可下载/可阅读单元。 */
-    val readingChapters: List<MangaChapter> get() = volumes + chapters
-    val downloadedCount: Int get() = (volumes + chapters).count { downloaded.contains(it.id) }
+    val readingChapters: List<MangaChapter> by lazy(LazyThreadSafetyMode.NONE) {
+        volumes + chapters
+    }
+    val downloadedCount: Int by lazy(LazyThreadSafetyMode.NONE) {
+        readingChapters.count { downloaded.contains(it.id) }
+    }
     /** 上次读到的章名（记录里的原话），用于向用户解释"要打开的是哪一话" */
     val resumeRecordLabel: String get() = resume?.recordLabel.orEmpty()
 
