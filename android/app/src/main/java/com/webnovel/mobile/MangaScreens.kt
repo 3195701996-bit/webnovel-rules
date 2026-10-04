@@ -455,6 +455,7 @@ fun MangaDetailScreen(
             if (!st.active) {
                 if (wasActive || st.status == "done") {
                     MangaReadCache.invalidate(source, comicId)
+                    OfflineStore.invalidateMangaIndex(OfflineStore.runtimeDir(ctx), source, comicId)
                     reload()
                 }
                 break
@@ -1117,7 +1118,11 @@ fun MangaDetailScreen(
                                 .toString()
                             val r = gateway.httpPost(ep.port,
                                 mangaPath(source, comicId, "/chapters/delete"), body)
-                            if (r.ok) MangaReadCache.invalidate(source, comicId)
+                            if (r.ok) {
+                                MangaReadCache.invalidate(source, comicId)
+                                OfflineStore.invalidateMangaIndex(
+                                    OfflineStore.runtimeDir(ctx), source, comicId)
+                            }
                             val o = runCatching { org.json.JSONObject(r.body) }.getOrNull()
                             actionMsg = if (r.ok && o?.optBoolean("ok") == true) {
                                 "已删除 ${o.optInt("deleted")} 项，释放 " +

@@ -196,6 +196,29 @@ class OfflineIndexTest {
     }
 
     @Test
+    fun offlineMangaIndexIsReusedAndInvalidatedWhenChapterDirectoryChanges() {
+        val root = tmpRoot()
+        val comic = File(root, "manga/downloads/jm/index-cache")
+        val chapter = File(comic, "chapter-1").apply { mkdirs() }
+        val jpeg = byteArrayOf(0xff.toByte(), 0xd8.toByte(), 0xff.toByte()) + ByteArray(32)
+        File(chapter, "0000.jpg").writeBytes(jpeg)
+
+        val first = OfflineStore.mangaChaptersFrom(root, "jm", "index-cache")
+        val repeated = OfflineStore.mangaChaptersFrom(root, "jm", "index-cache")
+        assertTrue("同一份实盘索引应复用，避免重复读取每张图片头", first === repeated)
+
+        val nextChapter = File(comic, "chapter-2").apply { mkdirs() }
+        File(nextChapter, "0000.jpg").writeBytes(jpeg)
+        assertTrue("章节目录新增后必须立即重建索引",
+            nextChapter.setLastModified(System.currentTimeMillis() + 2_000))
+        assertEquals(listOf("chapter-1", "chapter-2"),
+            OfflineStore.mangaChaptersFrom(root, "jm", "index-cache").map { it.first })
+
+        OfflineStore.invalidateMangaIndex(root, "jm", "index-cache")
+        assertEquals(2, OfflineStore.mangaChaptersFrom(root, "jm", "index-cache").size)
+    }
+
+    @Test
     fun copyMangaLegacyAliasesMergeIntoOneOfflineIdentityAndDeduplicatePages() {
         val root = tmpRoot()
         val comicId = "legacy-copy-id"

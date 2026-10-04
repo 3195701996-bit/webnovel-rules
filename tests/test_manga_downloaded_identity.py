@@ -26,6 +26,38 @@ def test_download_scan_excludes_untracked_read_cache_but_keeps_downloads(
     ]) == {"downloaded"}
 
 
+def test_download_scan_reuses_verified_pages_and_invalidates_after_change(
+        tmp_path, monkeypatch):
+    import server.state as state
+
+    downloads = tmp_path / "downloads"
+    cache = tmp_path / "cache"
+    monkeypatch.setattr(state, "MANGA_DOWNLOADS_DIR", str(downloads))
+    monkeypatch.setattr(state, "MANGA_CACHE_DIR", str(cache))
+    chapter = downloads / "jm" / "comic" / "chapter-1"
+    _page(chapter)
+    state._invalidate_manga_download_scan("jm", "comic")
+    original_check = state._is_manga_image_file
+    checks = 0
+
+    def count_checks(path):
+        nonlocal checks
+        checks += 1
+        return original_check(path)
+
+    monkeypatch.setattr(state, "_is_manga_image_file", count_checks)
+
+    assert state._scan_downloaded_chapters("jm", "comic") == ["chapter-1"]
+    # A repeated detail/status read reuses the image-header verification.
+    assert state._scan_downloaded_chapters("jm", "comic") == ["chapter-1"]
+    assert checks == 1
+
+    # Nested page changes alter the chapter directory timestamp and are detected
+    # immediately; explicit hooks also cover rename/replace edge cases.
+    (chapter / "0000.jpg").unlink()
+    assert state._scan_downloaded_chapters("jm", "comic") == []
+
+
 def test_old_cache_root_download_requires_saved_download_manifest(
         tmp_path, monkeypatch):
     import server.state as state
