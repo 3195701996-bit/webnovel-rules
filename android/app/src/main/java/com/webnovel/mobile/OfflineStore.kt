@@ -6,6 +6,7 @@ import org.json.JSONObject
 import java.io.File
 import java.text.Normalizer
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * 离线本地索引（方向基线 §5.4 / §6.6）。
@@ -26,6 +27,60 @@ import java.util.Locale
  *         已下载图片 `runtime/manga/downloads/<source>/<comic_id>/<chapter_id>/0000.jpg`
  */
 object OfflineStore {
+
+    // Offline shelf and reader can request the same comic in one app session. Keep the
+    // validated file index so opening its detail does not reopen every image header.
+    // The fingerprint includes chapter-directory listings (not just the comic root,
+    // whose mtime does not change when nested pages are added or removed).
+    private data class MangaIndexEntry(
+        val fingerprint: List<String>,
+        val chapters: List<Pair<String, List<File>>>,
+    )
+    private val mangaIndex = ConcurrentHashMap<String, MangaIndexEntry>()
+    private const val MANGA_INDEX_LIMIT = 32
+
+    private fun mangaIndexKey(root: File, source: String, comicId: String) =
+        "${root.absolutePath}|$source|$comicId"
+
+    private fun mangaFingerprint(rootDir: File, source: String, comicId: String): List<String> =
+        mangaSourceAliases(source).flatMap { alias ->
+            listOf("downloads/$alias", "_cache/$alias").map { relative ->
+                val comic = File(File(rootDir, "manga/$relative"), comicId)
+                val children = comic.listFiles().orEmpty().filter { it.isDirectory }
+                    .sortedBy { it.name }
+                buildString {
+                    append(comic.absolutePath).append(':')
+                    append(comic.lastModified()).append(':').append(comic.exists())
+                    for (chapter in children) {
+                        append('|').append(chapter.name).append('@').append(chapter.lastModified())
+                    }
+                    val manifest = File(comic, "_info.json")
+                    append("|manifest:").append(manifest.length()).append('@')
+                        .append(manifest.lastModified())
+                }
+            }
+        }
+
+    private fun cachedMangaChapters(
+        rootDir: File, source: String, comicId: String,
+    ): List<Pair<String, List<File>>> {
+        val key = mangaIndexKey(rootDir, source, comicId)
+        val fingerprint = mangaFingerprint(rootDir, source, comicId)
+        mangaIndex[key]?.takeIf { it.fingerprint == fingerprint }?.let { return it.chapters }
+        val chapters = scanMangaChapters(rootDir, source, comicId)
+        mangaIndex[key] = MangaIndexEntry(fingerprint, chapters)
+        if (mangaIndex.size > MANGA_INDEX_LIMIT) {
+            val oldest = mangaIndex.keys.firstOrNull { it != key }
+            if (oldest != null) mangaIndex.remove(oldest)
+        }
+        return chapters
+    }
+
+    internal fun invalidateMangaIndex(root: File, source: String, comicId: String) {
+        mangaSourceAliases(source).forEach { alias ->
+            mangaIndex.remove(mangaIndexKey(root, alias, comicId))
+        }
+    }
 
     /** CopyManga APP/Web adapters share comic identities but older builds used separate roots. */
     internal fun mangaSourceAliases(source: String): List<String> =
@@ -247,7 +302,7 @@ object OfflineStore {
             }
         }
         val out = identities.mapNotNull { (source, comicId) ->
-            val chapters = mangaChaptersFrom(rootDir, source, comicId)
+            val chapters = cachedMangaChapters(rootDir, source, comicId)
             if (chapters.isEmpty()) return@mapNotNull null
             val title = mangaSourceAliases(source).asSequence()
                 .mapNotNull { titles["$it|$comicId"]?.takeIf(String::isNotBlank) }
@@ -269,6 +324,10 @@ object OfflineStore {
     }
 
     internal fun mangaChaptersFrom(
+        rootDir: File, source: String, comicId: String,
+    ): List<Pair<String, List<File>>> = cachedMangaChapters(rootDir, source, comicId)
+
+    private fun scanMangaChapters(
         rootDir: File, source: String, comicId: String,
     ): List<Pair<String, List<File>>> {
         data class MangaRoot(
