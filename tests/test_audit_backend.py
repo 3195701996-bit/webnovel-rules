@@ -986,6 +986,61 @@ def test_favorite_unread_count_uses_read_chapter_set_not_last_index(
     assert saved["unread_count"] == 6
 
 
+def test_shared_unread_fixture_matches_favorite_update_api(
+        monkeypatch, client, tmp_path):
+    """The cross-client skipped/reread/new-chapter case uses the real API path."""
+    import server.manga_api as mapi
+    from server import state
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    fixture_path = os.path.join(
+        root, "android/app/src/test/resources/manga_favorite_unread_parity.json")
+    with open(fixture_path, encoding="utf-8") as handle:
+        cases = json.load(handle)["cases"]
+    assert cases, "shared unread fixture must not be empty"
+
+    for case in cases:
+        source, comic_id = case["source"], case["comic_id"]
+        key = f"{case['identity_source']}:{comic_id}"
+        favorites_file = tmp_path / f"{comic_id}-favorites.json"
+        history_file = tmp_path / f"{comic_id}-history.json"
+        cache_dir = tmp_path / f"{comic_id}-cache"
+        favorites_file.write_text(json.dumps({key: {"title": case["name"], "ts": 1}}),
+                                  encoding="utf-8")
+        history_file.write_text(json.dumps({key: {
+            "source": source,
+            "comic_id": comic_id,
+            "read_chapter_ids": [row["id"] for row in case["read_chapters"]],
+            "read_chapters": case["read_chapters"],
+        }}), encoding="utf-8")
+        monkeypatch.setattr(mapi, "MANGA_FAV_FILE", str(favorites_file))
+        monkeypatch.setattr(mapi, "MANGA_HISTORY_FILE", str(history_file))
+        monkeypatch.setattr(mapi, "MANGA_CACHE_DIR", str(cache_dir))
+        monkeypatch.setattr(mapi, "_manga_check_one", lambda *args, _case=case, **kwargs: {
+            "ok": True,
+            "all_chapters": _case["chapters"],
+            "latest_chapter_id": _case["chapters"][-1]["id"],
+            "latest": _case["chapters"][-1]["name"],
+            "update_time": "2026-10-04",
+        })
+        state._manga_catalog_invalidate(source, comic_id)
+
+        response = client.post("/api/manga/favorites/check-updates")
+        assert response.status_code == 200
+        assert response.get_json()["started"] == 1
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            status = client.get("/api/manga/favorites/check-updates/status").get_json()
+            if not status["running"]:
+                break
+            time.sleep(.01)
+        else:
+            pytest.fail("shared unread fixture update did not finish")
+
+        saved = json.loads(favorites_file.read_text(encoding="utf-8"))[key]
+        assert saved["unread_count"] == case["expected_unread_count"], case["name"]
+
+
 def test_read_chapter_identity_is_not_dropped_after_five_thousand_reads(
         client, monkeypatch, tmp_path):
     """Long-running series must not forget old read chapters at an arbitrary cap."""

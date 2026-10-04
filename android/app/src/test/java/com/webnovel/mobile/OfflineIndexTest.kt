@@ -515,6 +515,47 @@ class OfflineIndexTest {
         }
     }
 
+    @Test
+    fun downloadedManifestPageCountWinsOverStaleCacheManifest() {
+        val fixtureText = requireNotNull(
+            javaClass.getResourceAsStream("/manga_download_manifest_precedence.json"),
+        ) { "下载清单优先级共享夹具缺失" }.bufferedReader().use { it.readText() }
+        val cases = JSONObject(fixtureText).getJSONArray("cases")
+        val jpeg = byteArrayOf(0xff.toByte(), 0xd8.toByte(), 0xff.toByte(), 0xe0.toByte()) +
+            ByteArray(16)
+
+        for (index in 0 until cases.length()) {
+            val case = cases.getJSONObject(index)
+            val source = case.getString("source")
+            val comicId = case.getString("comic_id")
+            val chapterId = case.getString("chapter_id")
+            val chapterName = case.getString("chapter_name")
+            val expected = case.getInt("downloads_expected_page_count")
+            val root = tmpRoot()
+            val downloadComic = File(root, "manga/downloads/$source/$comicId")
+            val chapterDir = File(downloadComic, chapterId).apply { mkdirs() }
+            val indices = case.getJSONArray("page_indices")
+            for (page in 0 until indices.length()) {
+                File(chapterDir, "%04d.jpg".format(indices.getInt(page))).writeBytes(jpeg)
+            }
+            fun manifest(pageCount: Int) = JSONObject().put("chapters", JSONArray().put(
+                JSONObject().put("id", chapterId).put("name", chapterName)
+                    .put("download_page_count", pageCount),
+            )).toString()
+            File(downloadComic, "_info.json").writeText(manifest(expected), Charsets.UTF_8)
+            File(root, "manga/_cache/$source/$comicId").apply { mkdirs() }
+                .resolve("_info.json")
+                .writeText(manifest(case.getInt("cache_expected_page_count")), Charsets.UTF_8)
+
+            assertEquals(case.getBoolean("expected_complete"),
+                listOf(chapterId) == OfflineStore.mangaChaptersFrom(
+                    root, source, comicId,
+                ).map { it.first })
+            assertEquals(1, OfflineStore.mangaFrom(root).single().chapterCount)
+            root.deleteRecursively()
+        }
+    }
+
     // ── 缓存键契约（与服务端 cache_key_of 逐字一致）────────────────────
     /**
      * 期望值全部由**服务端实现**算出（`engine/app_utils.py::cache_key_of`，Python）：

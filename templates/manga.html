@@ -729,7 +729,8 @@ async function loadFavs() {
     const r = await fetch('/api/manga/favorites');
     const d = await r.json();
     if (!r.ok || d.recoverable) throw new Error(d.error || '收藏暂不可读取，请稍后重试');
-    const list = d.favorites || [];
+    if (!Array.isArray(d.favorites)) throw new Error('收藏响应格式异常，原有收藏未更改，请重试');
+    const list = d.favorites;
     if (!list.length) { box.innerHTML = '<div style="grid-column:1/-1;text-align:center;padding:40px;color:var(--text-dim);">暂无收藏</div>'; return; }
     box.innerHTML = '';
     list.forEach(c => {

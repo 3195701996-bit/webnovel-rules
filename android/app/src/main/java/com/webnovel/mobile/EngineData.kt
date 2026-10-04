@@ -837,15 +837,27 @@ object EngineData {
     }
 
     fun mangaFavorites(body: String): List<MangaFavorite> {
-        val o = runCatching { JSONObject(body) }.getOrNull() ?: return emptyList()
-        val a = o.optJSONArray("favorites") ?: return emptyList()
-        return (0 until a.length()).mapNotNull { i -> a.optJSONObject(i)?.let { x ->
-            MangaFavorite(x.optString("source"), x.optString("comic_id"),
+        return mangaFavoritesOrNull(body) ?: emptyList()
+    }
+
+    /** Null means the API envelope is malformed/recoverable, not a valid empty shelf. */
+    fun mangaFavoritesOrNull(body: String): List<MangaFavorite>? {
+        val o = runCatching { JSONObject(body) }.getOrNull() ?: return null
+        if (o.optBoolean("recoverable")) return null
+        val a = o.optJSONArray("favorites") ?: return null
+        val parsed = ArrayList<MangaFavorite>(a.length())
+        for (i in 0 until a.length()) {
+            val x = a.optJSONObject(i) ?: return null
+            val source = x.optString("source")
+            val comicId = x.optString("comic_id")
+            if (source.isBlank() || comicId.isBlank()) return null
+            parsed += MangaFavorite(source, comicId,
                 x.optString("title"), x.optString("cover"), x.optDouble("ts"),
                 x.optInt("unread_count"), x.optString("latest_chapter_label"),
                 x.optString("update_time"),
-                x.optString("identity_source").ifBlank { x.optString("source") })
-        } }
+                x.optString("identity_source").ifBlank { source })
+        }
+        return parsed
     }
 
     fun mangaFavoriteCheckStatus(body: String): MangaFavoriteCheckStatus? {

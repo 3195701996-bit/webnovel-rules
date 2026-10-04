@@ -389,6 +389,8 @@ assert.match(androidManga, /"\/chapter\/\$\{Uri\.encode\(ch\.id\)\}\/urls"\) \+ 
 
 const loadFavs = mangaPage.match(/async function loadFavs\(\) \{[\s\S]*?\n\}/);
 assert.ok(loadFavs, 'web favorite shelf must render from the shared favorites endpoint');
+assert.match(loadFavs[0], /!Array\.isArray\(d\.favorites\)[\s\S]*?响应格式异常/,
+  'a malformed HTTP 200 favorites envelope must not be reported as an empty collection');
 assert.match(loadFavs[0], /Number\(c\.unread_count \|\| 0\) > 0[\s\S]*fav-unread-badge/,
   'web favorite cover must show a badge only for a positive actual unread count');
 assert.match(loadFavs[0], /<div class="cover-wrap">[\s\S]*fav-unread-badge/,

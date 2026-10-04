@@ -2649,7 +2649,13 @@ def _manga_scan_comic(source, comic_id):
                         try:
                             candidate_count = max(
                                 0, int(row.get("download_page_count") or 0))
-                            if candidate_count > 0 or chapter_id not in expected_by_id:
+                            # Root iteration is downloads first, then legacy cache.
+                            # Keep the first authoritative positive count; a stale
+                            # cache manifest must not override the real download
+                            # manifest and make the shelf disagree with detail/APK.
+                            current_count = expected_by_id.get(chapter_id, 0)
+                            if (chapter_id not in expected_by_id or
+                                    (candidate_count > 0 and current_count <= 0)):
                                 expected_by_id[chapter_id] = candidate_count
                         except (TypeError, ValueError):
                             expected_by_id.setdefault(chapter_id, 0)

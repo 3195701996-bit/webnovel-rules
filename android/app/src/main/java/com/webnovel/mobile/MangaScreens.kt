@@ -359,14 +359,17 @@ fun MangaDetailScreen(
             } else {
                 detail = d
                 val fav = favD.await()
-                if (fav.ok) {
-                    favoritedState = EngineData.mangaFavorites(fav.body).any {
+                val parsedFavorites = if (fav.ok)
+                    EngineData.mangaFavoritesOrNull(fav.body) else null
+                if (parsedFavorites != null) {
+                    favoritedState = parsedFavorites.any {
                         sameMangaIdentitySource(it.identitySource, d.identitySource.ifBlank { source }) &&
                             it.comicId == d.comicId.ifBlank { comicId }
                     }
                 } else {
-                    actionMsg = "收藏状态读取失败：" + EngineData.httpErrorMessage(fav.body,
-                        fallback = "HTTP ${fav.code}")
+                    actionMsg = "收藏状态读取失败：" + if (fav.ok)
+                        "响应格式异常，可重试" else EngineData.httpErrorMessage(fav.body,
+                            fallback = "HTTP ${fav.code}")
                 }
                 // 阅读位置取自历史（与网页端同一份 _history.json）。
                 // 用**本页请求用的** source/comicId 匹配，而不是响应里回显的那两个字段：

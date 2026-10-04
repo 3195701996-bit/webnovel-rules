@@ -7,6 +7,8 @@ const vm = require('node:vm');
 const root = path.resolve(__dirname, '../..');
 const html = fs.readFileSync(path.join(root, 'templates/library.html'), 'utf8');
 const styles = html.match(/<style>([\s\S]*?)<\/style>/)?.[1] || '';
+const unreadFixture = JSON.parse(fs.readFileSync(path.join(root,
+  'android/app/src/test/resources/manga_favorite_unread_parity.json'), 'utf8'));
 
 function functionSource(name) {
   const match = html.match(new RegExp(`function ${name}\\([^)]*\\) \\{[\\s\\S]*?\\n\\}`));
@@ -165,6 +167,14 @@ assert.match(pendingCard, /role="status"[^>]*本地内容核验中/);
 assert.match(pendingCard, /正在核验本地内容/);
 assert.doesNotMatch(pendingCard, /<a href=/,
   'pending local identity must not send users into an empty local or online catalog');
+for (const item of unreadFixture.cases) {
+  const card = sandbox.__card({
+    source: item.source, comic_id: item.comic_id, title: item.name,
+    unread_count: item.expected_unread_count,
+  }, 'online');
+  assert.match(card, new RegExp(`未读 ${item.expected_unread_count} 话`),
+    `${item.name}: Web must display the unread count computed from the shared fixture`);
+}
 assert.match(styles, /\.favorite-cover-wrap img\[hidden\][^}]*display:\s*none/,
   'a failed cover image must respect its hidden state');
 assert.match(styles, /\.favorite-cover-wrap \.cover-placeholder\[hidden\][^}]*display:\s*none/,
@@ -229,6 +239,23 @@ failureContext.load().then(async () => {
     'an unavailable favorites API must produce an actionable error');
   assert.match(loadBox.innerHTML, /onclick="loadFavoriteManga\(\)"/,
     'the favorites error must offer a retry');
+
+  const schemaBox = {innerHTML: ''};
+  const schemaContext = vm.createContext({
+    URLSearchParams, Math, Number, String, Set,
+    document: {getElementById: id => id === 'favorite-manga-books' ? schemaBox : null},
+    fetch: async () => ({ok: true, status: 200, json: async () => ({ok: true})}),
+    esc: failureContext.esc,
+  });
+  vm.runInContext(`let _favoriteMangaSig = ''; let _favoriteMangaLoadSeq = 0;
+    let _favoriteMangaPendingTimer = 0; let _favoriteMangaPendingRetries = 0;
+    ${helpers}\n${loadSource}\nglobalThis.load = loadFavoriteManga;`, schemaContext);
+  assert.equal(await schemaContext.load(), null,
+    'an HTTP 200 response without a favorites array is not a valid empty shelf');
+  assert.match(schemaBox.innerHTML, /响应格式异常/,
+    'a malformed favorites envelope must show an actionable schema error');
+  assert.doesNotMatch(schemaBox.innerHTML, /还没有收藏漫画/,
+    'malformed favorites data must never be presented as a valid empty collection');
 
   const pending = [];
   const raceBox = {innerHTML: '', children: [], appendChild(node) { this.children.push(node); }};

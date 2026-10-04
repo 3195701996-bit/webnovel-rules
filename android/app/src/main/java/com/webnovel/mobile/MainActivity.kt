@@ -806,12 +806,15 @@ private fun ShelfScreen(gateway: EngineGateway, ep: EngineEndpoint, loader: Imag
             favoriteUpdateMessage = MangaFavoriteStartupCheck.statusMessage(state)
             if (!state.running) {
                 val latest = gateway.httpText(ep.port, "/api/manga/favorites")
-                if (latest.ok) {
-                    favorites = EngineData.mangaFavorites(latest.body)
+                val latestFavorites = if (latest.ok)
+                    EngineData.mangaFavoritesOrNull(latest.body) else null
+                if (latestFavorites != null) {
+                    favorites = latestFavorites
                     favoritesError = null
                 } else {
-                    favoritesError = EngineData.httpErrorMessage(latest.body,
-                        fallback = "HTTP ${latest.code}")
+                    favoritesError = if (latest.ok) "收藏列表响应格式异常，可重试"
+                        else EngineData.httpErrorMessage(latest.body,
+                            fallback = "HTTP ${latest.code}")
                     favoriteUpdateMessage = "更新检查已结束，但收藏列表刷新失败，可重试"
                     MangaFavoriteStartupCheck.release(ep.instanceId)
                 }
@@ -892,12 +895,15 @@ private fun ShelfScreen(gateway: EngineGateway, ep: EngineEndpoint, loader: Imag
                 }
                 novels = EngineData.novels(nb.body)
                 manga = EngineData.manga(mb.body)
-                if (fav.ok) {
-                    favorites = EngineData.mangaFavorites(fav.body)
+                val parsedFavorites = if (fav.ok)
+                    EngineData.mangaFavoritesOrNull(fav.body) else null
+                if (parsedFavorites != null) {
+                    favorites = parsedFavorites
                     favoritesError = null
                 } else {
-                    favoritesError = EngineData.httpErrorMessage(fav.body)
-                        .ifBlank { "HTTP ${fav.code}" }
+                    favoritesError = if (fav.ok) "收藏列表响应格式异常，可重试"
+                        else EngineData.httpErrorMessage(fav.body)
+                            .ifBlank { "HTTP ${fav.code}" }
                     if (checkFavoritesAtStartup) MangaFavoriteStartupCheck.release(ep.instanceId)
                 }
                 val shelfFailures = buildList {

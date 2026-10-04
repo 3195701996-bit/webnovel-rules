@@ -64,6 +64,18 @@ class MangaHistoryIdentityTest {
         assertNull(mangaFavoriteUnreadBadgeLabel(-1))
     }
 
+    @Test fun malformedFavoriteEnvelopeIsNotConfusedWithAValidEmptyShelf() {
+        assertNull(EngineData.mangaFavoritesOrNull("not-json"))
+        assertNull(EngineData.mangaFavoritesOrNull("""{"ok":true}"""))
+        assertNull(EngineData.mangaFavoritesOrNull("""{"favorites":[null]}"""))
+        assertNull(EngineData.mangaFavoritesOrNull("""{"favorites":[{}]}"""))
+        assertNull(EngineData.mangaFavoritesOrNull(
+            """{"favorites":[],"recoverable":true}""",
+        ))
+        assertEquals(emptyList<MangaFavorite>(),
+            EngineData.mangaFavoritesOrNull("""{"favorites":[]}"""))
+    }
+
     @Test fun readCacheSeparatesLocalOnlyAndOnlineMixedCatalogs() {
         val online = EngineData.mangaDetail(
             """{"source":"copy","comic_id":"series","title":"作品","chapters":[{"id":"old","name":"第1话"},{"id":"new","name":"第2话"}],"downloaded":["old"]}""",

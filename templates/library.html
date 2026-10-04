@@ -242,7 +242,10 @@ async function loadFavoriteManga(fromPendingRetry = false) {
     if (!favoriteResponse.ok || favoriteData.recoverable) {
       throw new Error(favoriteData.error || `收藏暂不可读取（HTTP ${favoriteResponse.status}）`);
     }
-    const favorites = Array.isArray(favoriteData.favorites) ? favoriteData.favorites : [];
+    if (!Array.isArray(favoriteData.favorites)) {
+      throw new Error('收藏响应格式异常；原有收藏未更改，请重试');
+    }
+    const favorites = favoriteData.favorites;
     // 手动刷新、更新检查完成回调和页面轮询可能并发；较早的慢响应不得覆盖新快照。
     if (loadSeq !== _favoriteMangaLoadSeq) return favorites;
     const localStates = favoriteMangaLocalStates(favorites);

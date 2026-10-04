@@ -128,6 +128,46 @@ def test_stats_count_unique_readable_pages_not_duplicate_file_formats(
     assert state._manga_scan_comic("statsfmt", "comic") == (2, 1, 1)
 
 
+def test_download_manifest_page_count_precedes_stale_cache_manifest(
+        tmp_path, monkeypatch):
+    """A stale cache count cannot make a complete download disappear from shelf stats."""
+    import server.state as state
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    fixture_path = os.path.join(
+        root, "android/app/src/test/resources/"
+        "manga_download_manifest_precedence.json")
+    with open(fixture_path, encoding="utf-8") as handle:
+        cases = json.load(handle)["cases"]
+    assert cases, "shared download-manifest fixture must not be empty"
+
+    downloads, cache = tmp_path / "downloads", tmp_path / "cache"
+    monkeypatch.setattr(state, "MANGA_DOWNLOADS_DIR", str(downloads))
+    monkeypatch.setattr(state, "MANGA_CACHE_DIR", str(cache))
+    for case in cases:
+        source, comic_id, chapter_id = (
+            case["source"], case["comic_id"], case["chapter_id"])
+        download_comic = downloads / source / comic_id
+        chapter_dir = download_comic / chapter_id
+        chapter_dir.mkdir(parents=True)
+        for index in case["page_indices"]:
+            (chapter_dir / f"{index:04d}.jpg").write_bytes(
+                b"\xff\xd8\xff" + bytes([index]) * 128)
+        (download_comic / "_info.json").write_text(json.dumps({"chapters": [{
+            "id": chapter_id, "name": case["chapter_name"],
+            "download_page_count": case["downloads_expected_page_count"],
+        }]}), encoding="utf-8")
+        cache_comic = cache / source / comic_id
+        cache_comic.mkdir(parents=True)
+        (cache_comic / "_info.json").write_text(json.dumps({"chapters": [{
+            "id": chapter_id, "name": case["chapter_name"],
+            "download_page_count": case["cache_expected_page_count"],
+        }]}), encoding="utf-8")
+
+        assert state._scan_downloaded_chapters(source, comic_id) == [chapter_id]
+        assert state._manga_scan_comic(source, comic_id) == (2, 1, 1)
+
+
 def test_old_physical_file_count_snapshot_is_invalidated_for_background_rebuild(
         tmp_path, monkeypatch):
     """Never serve a legacy file-count snapshot as the new logical page count."""

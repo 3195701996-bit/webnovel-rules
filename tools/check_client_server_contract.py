@@ -45,6 +45,7 @@ ENDPOINTS = {
     "bookSources":   ("GET", "/api/sources", "sources"),
     "mangaHistory":  ("GET", "/api/manga/history", ""),
     "mangaFavorites": ("GET", "/api/manga/favorites", "favorites"),
+    "mangaFavoritesOrNull": ("GET", "/api/manga/favorites", "favorites"),
     "mangaFavoriteCheckStart": ("POST", "/api/manga/favorites/check-updates", ""),
     "mangaFavoriteCheckStatus": ("GET", "/api/manga/favorites/check-updates/status", ""),
     "readProgress":  ("GET", "/api/books/{book}/progress", ""),
@@ -118,6 +119,9 @@ CONDITIONAL = {
     },
     "/api/manga/sources": {
         "sources[].failed_stage": "仅当最近一次实测**失败**时才有失败阶段",
+    },
+    "/api/manga/favorites": {
+        "recoverable": "仅在收藏或阅读历史文件损坏、服务端拒绝返回收藏列表时为 true；正常响应中省略",
     },
     "/api/manga/search": {
         "results[].id": "仅当 results[] 元素**没有** sources[] 数组时走旧形态兼容分支（客户端源码里那一段），"
