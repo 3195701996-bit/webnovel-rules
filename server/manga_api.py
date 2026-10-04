@@ -42,6 +42,7 @@ from server.state import (
     _manga_cached_chapters,
     manga_identity_source, manga_source_aliases,
     _manga_stats_get, _manga_stats_request, _manga_stats_note_change,
+    _invalidate_manga_download_scan,
     manga_library_revision,
     device_offline_hint,
 )
@@ -3011,6 +3012,7 @@ def api_manga_download_start(source, comic_id):
     data = request.get_json(silent=True) or {}
     title = data.get("title", comic_id)
     chapters = data.get("chapters") or []  # 章节选择下载（可选）
+    _invalidate_manga_download_scan(source, comic_id)
     # R68: 启动即带封面——避免书库/任务 cover 为空导致封面缺失
     key, status = _manga_dl.start(source, comic_id, title, chapters=chapters,
                                   cover=data.get("cover", ""))
@@ -3056,6 +3058,7 @@ def api_manga_download_resume():
     source = _safe_seg(request.args.get("source", ""), "漫画源")
     comic_id = _safe_comic_id(source, request.args.get("cid", ""))
     key = _manga_dl_key(source, comic_id)
+    _invalidate_manga_download_scan(source, comic_id)
     outcome = _manga_dl.resume_result(key)
     if outcome == "deleting":
         return _err_json("任务正在删除本地内容，暂时无法继续下载", 409)
@@ -3072,6 +3075,11 @@ def api_manga_download_resume_all():
     n = 0
     skipped = 0
     for key in _manga_dl.paused_keys():
+        try:
+            source, comic_id = key.split(":", 1)
+            _invalidate_manga_download_scan(source, comic_id)
+        except ValueError:
+            pass
         if _manga_dl.resume(key):
             n += 1
         else:
@@ -3177,6 +3185,7 @@ def api_manga_check_updates_download():
             continue
         if not _info.get("source"):
             continue
+        _invalidate_manga_download_scan(_info["source"], _cid)
         _, _status = _manga_dl.start(_info["source"], _cid,
                                      _info.get("title") or _cid, chapters=_miss)
         if _status == "deleting":
@@ -3205,6 +3214,7 @@ def api_manga_download_new(source, comic_id):
     new_chapters = data.get("new_chapters") or []
     if not new_chapters:
         return _err_json("无新章节")
+    _invalidate_manga_download_scan(source, comic_id)
     key, status = _manga_dl.start(source, comic_id, title, chapters=new_chapters,
                                   cover=data.get("cover", ""))
     if status == "deleting":

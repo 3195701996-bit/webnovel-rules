@@ -8,6 +8,7 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.LargeTest
+import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -27,7 +28,7 @@ class MangaDetailScaleTest {
 
     @Before
     fun setUp() {
-        comic = SelfTestComic(chapterCount = 1_000)
+        comic = SelfTestComic(chapterCount = 5_000)
         comic.create()
     }
 
@@ -42,7 +43,7 @@ class MangaDetailScaleTest {
     private fun waitForDetail(): Long {
         val startedAt = android.os.SystemClock.elapsedRealtime()
         rule.waitUntil(60_000) {
-            rule.onAllNodesWithText("共 1000 单元", substring = true)
+            rule.onAllNodesWithText("共 5000 单元", substring = true)
                 .fetchSemanticsNodes().isNotEmpty()
         }
         rule.onNodeWithTag("manga_detail_list").assertExists()
@@ -59,10 +60,32 @@ class MangaDetailScaleTest {
         return waitForDetail()
     }
 
+    private fun measureColdCatalogApi() {
+        val gateway = EngineGateway(rule.activity.applicationContext)
+        val ready = runBlocking { gateway.connect() } as? EngineState.Ready
+            ?: error("本机引擎未就绪，无法测量本地目录接口")
+        val endpointStarted = android.os.SystemClock.elapsedRealtime()
+        val response = runBlocking {
+            gateway.httpText(ready.endpoint.port, comic.detailUrl)
+        }
+        val endpointMs = android.os.SystemClock.elapsedRealtime() - endpointStarted
+        check(response.ok) { "本地目录接口失败：HTTP ${response.code}" }
+        val parseStarted = android.os.SystemClock.elapsedRealtime()
+        val detail = EngineData.mangaDetail(response.body)
+            ?: error("本地目录响应无法解析")
+        val parseMs = android.os.SystemClock.elapsedRealtime() - parseStarted
+        check(detail.readingChapters.size == 5_000) {
+            "本地目录解析数量异常：${detail.readingChapters.size}"
+        }
+        println("MANGA_DETAIL_SCALE chapters=5000 cold_api_ms=$endpointMs " +
+            "json_parse_ms=$parseMs response_bytes=${response.body.toByteArray().size}")
+    }
+
     @Test
-    fun thousandChapterLocalCatalogOpensAndCanBeReopened() {
+    fun fiveThousandChapterLocalCatalogOpensAndCanBeReopened() {
+        measureColdCatalogApi()
         val firstMs = openFromCachedShelf()
-        println("MANGA_DETAIL_SCALE chapters=1000 first_open_ms=$firstMs " +
+        println("MANGA_DETAIL_SCALE chapters=5000 warm_detail_render_ms=$firstMs " +
             "device=${android.os.Build.MODEL} api=${android.os.Build.VERSION.SDK_INT}")
 
         rule.onNodeWithContentDescription("返回").performClick()
@@ -70,7 +93,7 @@ class MangaDetailScaleTest {
             rule.onAllNodesWithText("已缓存").fetchSemanticsNodes().isNotEmpty()
         }
         val repeatedMs = openFromCachedShelf()
-        println("MANGA_DETAIL_SCALE chapters=1000 repeated_open_ms=$repeatedMs " +
+        println("MANGA_DETAIL_SCALE chapters=5000 repeated_open_ms=$repeatedMs " +
             "device=${android.os.Build.MODEL} api=${android.os.Build.VERSION.SDK_INT}")
 
         assertTrue("长目录首次打开超过 15 秒：${TimeUnit.MILLISECONDS.toSeconds(firstMs)}s",

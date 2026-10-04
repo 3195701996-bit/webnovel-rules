@@ -97,6 +97,78 @@ def test_download_scan_fingerprint_is_constant_cost_for_large_catalog(
     assert len(scanned) == scans_after_first
 
 
+def test_verified_download_scan_survives_memory_cache_restart(tmp_path, monkeypatch):
+    """A process restart should reuse strict verification, not rescan all pages."""
+    import server.state as state
+
+    downloads = tmp_path / "downloads"
+    monkeypatch.setattr(state, "MANGA_DOWNLOADS_DIR", str(downloads))
+    monkeypatch.setattr(state, "MANGA_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setattr(state, "MANGA_STATE_DIR", str(tmp_path / "state"))
+    for index in range(300):
+        _page(downloads / "jm" / "comic" / f"chapter-{index:04d}")
+    state._invalidate_manga_download_scan("jm", "comic")
+
+    original_check = state._is_manga_image_file
+    checks = 0
+
+    def count_checks(path):
+        nonlocal checks
+        checks += 1
+        return original_check(path)
+
+    monkeypatch.setattr(state, "_is_manga_image_file", count_checks)
+    expected = state._scan_downloaded_chapters("jm", "comic")
+    assert len(expected) == 300
+    assert checks == 300
+
+    # Simulate a server process restart: keep the private snapshot but discard
+    # all process-local scan cache entries.
+    with state._manga_download_scan_lock:
+        state._manga_download_scan_cache.clear()
+    checks = 0
+    assert state._scan_downloaded_chapters("jm", "comic") == expected
+    assert checks == 0
+
+    # Every in-process media mutation invalidates both memory and disk records.
+    state._invalidate_manga_download_scan("jm", "comic")
+    checks = 0
+    assert state._scan_downloaded_chapters("jm", "comic") == expected
+    assert checks == 300
+
+
+def test_download_manifest_is_parsed_once_for_large_catalog(tmp_path, monkeypatch):
+    """Chapter count must not multiply whole-manifest JSON parsing work."""
+    import builtins
+    import server.state as state
+
+    downloads = tmp_path / "downloads"
+    manifest = downloads / "jm" / "comic" / "_info.json"
+    monkeypatch.setattr(state, "MANGA_DOWNLOADS_DIR", str(downloads))
+    monkeypatch.setattr(state, "MANGA_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setattr(state, "MANGA_STATE_DIR", str(tmp_path / "state"))
+    rows = []
+    for index in range(250):
+        chapter_id = f"chapter-{index:04d}"
+        _page(downloads / "jm" / "comic" / chapter_id)
+        rows.append({"id": chapter_id, "download_page_count": 1})
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text(json.dumps({"chapters": rows}), encoding="utf-8")
+    state._invalidate_manga_download_scan("jm", "comic")
+
+    original_open = builtins.open
+    manifest_reads = 0
+
+    def count_manifest_reads(path, *args, **kwargs):
+        nonlocal manifest_reads
+        if str(path) == str(manifest):
+            manifest_reads += 1
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", count_manifest_reads)
+    assert len(state._scan_downloaded_chapters("jm", "comic")) == 250
+    assert manifest_reads == 1
+
 def test_partial_and_complete_scan_share_one_verified_snapshot(tmp_path, monkeypatch):
     import server.state as state
 
