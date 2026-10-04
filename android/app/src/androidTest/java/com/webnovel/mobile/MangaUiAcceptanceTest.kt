@@ -441,5 +441,37 @@ class MangaUiAcceptanceTest {
         }
         waitText(SelfTestComic.CH2_NAME, timeoutMs = 30_000, substring = true)
         ev("章节点选优先于历史：有第1话历史时，点第2话实际打开第2话")
+
+        // Reopening the same selected chapter is a distinct navigation session:
+        // change the live reader chapter through its TOC, return to detail, then select chapter 2 again.
+        rule.onNodeWithTag("manga_pages").performTouchInput {
+            click(androidx.compose.ui.geometry.Offset(width / 2f, height / 2f))
+        }
+        waitText("目录", timeoutMs = 10_000)
+        clickText("目录")
+        rule.waitUntil(10_000) {
+            rule.onAllNodesWithTag("manga_toc").fetchSemanticsNodes().isNotEmpty()
+        }
+        rule.onNodeWithTag("manga_toc").performScrollToNode(
+            hasText(SelfTestComic.CH1_NAME, substring = true))
+        rule.onNodeWithText(SelfTestComic.CH1_NAME, substring = true).performClick()
+        rule.onNodeWithTag("manga_pages").performTouchInput {
+            click(androidx.compose.ui.geometry.Offset(width / 2f, height / 2f))
+        }
+        waitReaderProgress("1 / 2 · 1/2页", timeoutMs = 30_000)
+        rule.onNodeWithContentDescription("返回").performClick()
+        waitText("继续阅读 ${SelfTestComic.CH1_NAME}", timeoutMs = 20_000)
+        rule.onNodeWithTag("manga_detail_list").performScrollToNode(
+            hasText(SelfTestComic.CH2_NAME, substring = true))
+        rule.onNodeWithText(SelfTestComic.CH2_NAME, substring = true).performClick()
+        rule.waitUntil(30_000) {
+            rule.onAllNodesWithTag("manga_pages").fetchSemanticsNodes().isNotEmpty()
+        }
+        rule.onNodeWithTag("manga_pages").performTouchInput {
+            click(androidx.compose.ui.geometry.Offset(width / 2f, height / 2f))
+        }
+        waitText(SelfTestComic.CH2_NAME, timeoutMs = 30_000, substring = true)
+        waitReaderProgress("2 / 2 · 1/1页")
+        ev("同一章节再次点开：不复用上次翻到第3话的阅读器状态")
     }
 }

@@ -4,7 +4,8 @@ set -euo pipefail
 # Verify an actual old-APK -> new-APK in-place upgrade on an explicitly selected
 # dedicated emulator/device. This script never builds, uninstalls, or publishes.
 if [[ $# -ne 3 || -z "${ANDROID_SERIAL:-}" ]]; then
-  echo "用法：ANDROID_SERIAL=<ReleaseUpgrade_API35 的模拟器序列号> $0 <1.6.4-release.apk> <2.0.0-release.apk> <匹配新版签名的测试APK>" >&2
+  echo "用法：ANDROID_SERIAL=<ReleaseUpgrade_API35 的模拟器序列号> $0 <上一版-release.apk> <候选-release.apk> <匹配新版签名的测试APK>" >&2
+  echo "环境变量：UPGRADE_OLD_VERSION_NAME/CODE（默认 1.6.4/154）、UPGRADE_NEW_VERSION_NAME（默认 2.0.0）" >&2
   echo "脚本默认只允许未安装本应用的专用 ReleaseUpgrade_API35/API 35 AVD；会在其上安装 APK。" >&2
   exit 2
 fi
@@ -41,6 +42,9 @@ package="com.webnovel.mobile"
 runner="com.webnovel.mobile.test/androidx.test.runner.AndroidJUnitRunner"
 test_class="com.webnovel.mobile.UpgradeConsistencyTest"
 expected_avd="${UPGRADE_AVD_NAME:-ReleaseUpgrade_API35}"
+expected_old_name="${UPGRADE_OLD_VERSION_NAME:-1.6.4}"
+expected_old_code="${UPGRADE_OLD_VERSION_CODE:-154}"
+expected_new_name="${UPGRADE_NEW_VERSION_NAME:-2.0.0}"
 run_id="$(date -u +%Y%m%dT%H%M%SZ)-$$"
 tmp_dir=""
 phase1_started=0
@@ -121,11 +125,11 @@ test_cert="$("$apksigner_bin" verify --print-certs "$test_apk" | sed -n 's/^Sign
 [[ "$old_pkg" == "$package" && "$new_pkg" == "$package" ]] || {
   echo "包名不匹配：旧=$old_pkg 新=$new_pkg 预期=$package" >&2; exit 2;
 }
-[[ "$old_code" == "154" && "$old_name" == "1.6.4" ]] || {
-  echo "旧版基线必须是 1.6.4/code 154：实际 $old_name/code $old_code" >&2; exit 2;
+[[ "$old_code" == "$expected_old_code" && "$old_name" == "$expected_old_name" ]] || {
+  echo "上一版基线必须是 ${expected_old_name}/code ${expected_old_code}：实际 $old_name/code $old_code" >&2; exit 2;
 }
-[[ "$new_name" == "2.0.0" ]] || {
-  echo "候选新版必须是 2.0.0：实际 $new_name" >&2; exit 2;
+[[ "$new_name" == "$expected_new_name" ]] || {
+  echo "候选新版必须是 ${expected_new_name}：实际 $new_name" >&2; exit 2;
 }
 [[ "$test_pkg" == "$package.test" ]] || {
   echo "测试 APK 包名不匹配：$test_pkg 预期=$package.test" >&2; exit 2;

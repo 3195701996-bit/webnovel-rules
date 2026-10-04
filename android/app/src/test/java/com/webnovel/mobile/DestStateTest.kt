@@ -3,6 +3,8 @@ package com.webnovel.mobile
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DestStateTest {
@@ -55,6 +57,28 @@ class DestStateTest {
         assertEquals(onlineDetail, decodeDest(encodeDest(onlineDetail)))
         assertEquals(localReader, decodeDest(encodeDest(localReader)))
         assertEquals(onlineReader, decodeDest(encodeDest(onlineReader)))
+    }
+
+    @Test
+    fun reopeningTheSameChapterGetsFreshReaderStateButRestorationKeepsSession() {
+        val firstLaunch = Dest.Manga("copymanga_web", "comic-1", index = 0, page = 0,
+            startChapterId = "chapter-1", startLabel = "第1话", localCatalog = true)
+        val reopened = Dest.Manga("copymanga_web", "comic-1", index = 0, page = 0,
+            startChapterId = "chapter-1", startLabel = "第1话", localCatalog = true)
+
+        assertNotEquals("each explicit tap must not reuse stale reader state",
+            destKey(firstLaunch), destKey(reopened))
+        assertEquals("restoring the same navigation stack must retain its reader state",
+            destKey(firstLaunch), destKey(decodeDest(encodeDest(firstLaunch))!!))
+        assertEquals(firstLaunch, decodeDest(encodeDest(firstLaunch)))
+    }
+
+    @Test
+    fun legacyReaderStackWithoutSessionIdRestoresSafely() {
+        val restored = decodeDest("""{"type":"manga","source":"source","comic":"comic", "index":0,"page":0,"chapter_id":"chapter-1"}""")
+        assertNotNull(restored)
+        assertTrue(restored is Dest.Manga)
+        assertTrue((restored as Dest.Manga).sessionId.isNotBlank())
     }
 
     @Test

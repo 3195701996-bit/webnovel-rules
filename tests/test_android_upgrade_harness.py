@@ -20,7 +20,8 @@ def _executable(path: Path, content: str) -> Path:
 
 def _fixture(tmp_path, *, avd="ReleaseUpgrade_API35", sdk="35", installed="",
              candidate_dirty="clean", test_revision=None, test_dirty="clean",
-             test_name=None, test_code=None):
+             test_name=None, test_code=None, old_name="1.6.4", old_code="154",
+             new_name="2.0.0", new_code="200"):
     tmp_path.mkdir(parents=True, exist_ok=True)
     apks = tuple(tmp_path / name for name in ("old.apk", "new.apk", "test.apk"))
     revision = "b" * 40
@@ -29,13 +30,13 @@ def _fixture(tmp_path, *, avd="ReleaseUpgrade_API35", sdk="35", installed="",
             if apk.name == "new.apk":
                 archive.writestr("assets/build-identity.properties", (
                     f"revision={revision}\ndirty={candidate_dirty}\n"
-                    "versionName=2.0.0\nversionCode=200\n"
+                    f"versionName={new_name}\nversionCode={new_code}\n"
                 ))
             elif apk.name == "test.apk":
                 archive.writestr("assets/build-identity.properties", (
                     f"revision={test_revision or revision}\ndirty={test_dirty}\n"
-                    f"versionName={test_name or '2.0.0'}\n"
-                    f"versionCode={test_code or '200'}\n"
+                    f"versionName={test_name or new_name}\n"
+                    f"versionCode={test_code or new_code}\n"
                 ))
 
     adb_log = tmp_path / "adb.log"
@@ -65,7 +66,7 @@ case "$1" in
         esac
         ;;
       dumpsys)
-        if [ -f "$MOCK_INSTALLED_STATE" ]; then echo 'versionCode=154'; fi
+        if [ -f "$MOCK_INSTALLED_STATE" ]; then echo "versionCode=$MOCK_OLD_CODE"; fi
         ;;
       pm)
         if [ "$3" = "list" ] && [ "$4" = "packages" ]; then
@@ -93,10 +94,10 @@ exit 0
 case "$2:$(basename "$3")" in
   application-id:old.apk|application-id:new.apk) echo com.webnovel.mobile ;;
   application-id:test.apk) echo com.webnovel.mobile.test ;;
-  version-code:old.apk) echo 154 ;;
-  version-code:new.apk) echo 200 ;;
-  version-name:old.apk) echo 1.6.4 ;;
-  version-name:new.apk) echo 2.0.0 ;;
+  version-code:old.apk) echo "$MOCK_OLD_CODE" ;;
+  version-code:new.apk) echo "$MOCK_NEW_CODE" ;;
+  version-name:old.apk) echo "$MOCK_OLD_NAME" ;;
+  version-name:new.apk) echo "$MOCK_NEW_NAME" ;;
   *) exit 2 ;;
 esac
 """)
@@ -116,6 +117,10 @@ echo 'Signer #1 certificate SHA-256 digest: {cert}'
         "MOCK_AVD": avd,
         "MOCK_SDK": sdk,
         "MOCK_PREINSTALLED": installed,
+        "MOCK_OLD_CODE": old_code,
+        "MOCK_NEW_CODE": new_code,
+        "MOCK_OLD_NAME": old_name,
+        "MOCK_NEW_NAME": new_name,
     })
     return apks, adb_log, env
 
@@ -215,6 +220,25 @@ def test_release_upgrade_avd_is_the_safe_default(tmp_path):
     # proves validation reached the isolated AVD while still failing closed.
     assert result.returncode != 0
     assert "目标设备：emulator-5554（ReleaseUpgrade_API35/API 35）" in result.stdout
+    calls = adb_log.read_text(encoding="utf-8")
+    assert "install -r " + str(apks[0]) in calls
+    assert "phase1_setupState" in calls
+    assert "install -r " + str(apks[1]) not in calls
+
+
+def test_explicitly_configured_v200_to_v201_upgrade_is_supported(tmp_path):
+    apks, adb_log, env = _fixture(
+        tmp_path, old_name="2.0.0", old_code="155", new_name="2.0.1", new_code="156")
+    env.update({
+        "UPGRADE_OLD_VERSION_NAME": "2.0.0",
+        "UPGRADE_OLD_VERSION_CODE": "155",
+        "UPGRADE_NEW_VERSION_NAME": "2.0.1",
+    })
+    result = _run(apks, env)
+
+    assert result.returncode != 0  # Fake instrumentation deliberately omits phase-1 proof.
+    assert "旧版基线必须是" not in result.stderr
+    assert "phase 1 intentionally missing completion evidence" in result.stdout
     calls = adb_log.read_text(encoding="utf-8")
     assert "install -r " + str(apks[0]) in calls
     assert "phase1_setupState" in calls

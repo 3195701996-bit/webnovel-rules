@@ -65,6 +65,7 @@ import kotlinx.coroutines.withContext
 import kotlin.coroutines.resume
 import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
+import java.util.UUID
 import org.json.JSONObject
 
 /**
@@ -280,7 +281,10 @@ internal sealed interface Dest {
                       */
                      val startChapterId: String = "",
                      val startLabel: String = "",
-                     val localCatalog: Boolean = false) : Dest
+                     val localCatalog: Boolean = false,
+                     /** A fresh identity for each explicit reader launch prevents stale
+                      * SaveableStateHolder state from overriding the selected chapter. */
+                     val sessionId: String = UUID.randomUUID().toString()) : Dest
     data object Explore : Dest
     data object MangaSources : Dest
     data class MangaSource(val key: String, val name: String) : Dest
@@ -311,7 +315,7 @@ internal fun destKey(d: Dest): String = when (d) {
     is Dest.MangaDetail -> "MangaDetail:${d.source}:${d.comicId}:${d.localCatalog}"
     // 每次明确选章都是一个新的导航意图；若共享 reader key，SaveableStateHolder
     // 会把上次章节恢复回来，覆盖用户刚从目录点选的章节。
-    is Dest.Manga -> "Manga:${d.source}:${d.comicId}:${d.localCatalog}:${d.startChapterId}:${d.index}"
+    is Dest.Manga -> "Manga:${d.source}:${d.comicId}:${d.localCatalog}:${d.startChapterId}:${d.index}:${d.sessionId}"
     Dest.Explore -> "Explore"
     Dest.MangaSources -> "MangaSources"
     is Dest.MangaSource -> "MangaSource:${d.key}"
@@ -340,7 +344,7 @@ internal fun encodeDest(dest: Dest): String {
             .put("comic", dest.comicId).put("index", dest.index).put("page", dest.page)
             .put("trusted", dest.trusted).put("note", dest.note)
             .put("chapter_id", dest.startChapterId).put("label", dest.startLabel)
-            .put("local", dest.localCatalog)
+            .put("local", dest.localCatalog).put("session_id", dest.sessionId)
         Dest.Explore -> value.put("type", "explore")
         Dest.MangaSources -> value.put("type", "manga_sources")
         is Dest.MangaSource -> value.put("type", "manga_source").put("key", dest.key)
@@ -372,7 +376,8 @@ internal fun decodeDest(encoded: String): Dest? = runCatching {
         "manga" -> Dest.Manga(value.getString("source"), value.getString("comic"),
             value.getInt("index"), value.getInt("page"), value.optBoolean("trusted", true),
             value.optString("note"), value.optString("chapter_id"), value.optString("label"),
-            value.optBoolean("local"))
+            value.optBoolean("local"),
+            value.optString("session_id").ifBlank { UUID.randomUUID().toString() })
         "explore" -> Dest.Explore
         "manga_sources" -> Dest.MangaSources
         "manga_source" -> Dest.MangaSource(value.getString("key"), value.getString("name"))
