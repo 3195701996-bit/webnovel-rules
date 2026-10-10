@@ -483,7 +483,7 @@ object OfflineStore {
     private fun mangaChapterSortKey(title: String): Triple<Int, Double, Double> {
         val name = title.trim()
         val numeral = "(?:\\d+(?:\\.\\d+)?|[零〇一二两兩三四五六七八九十百廿卅]+)"
-        val episode = Regex("第\\s*($numeral)\\s*(?:话|話|回|章|集|话数|話数)")
+        val episode = Regex("第\\s*($numeral)(?:\\s*[-–—－~～]\\s*$numeral)?\\s*(?:话|話|回|章|集|话数|話数)")
             .find(name)?.groupValues?.getOrNull(1)?.let(::parseMangaNumber)
         val volume = Regex("(?:第\\s*($numeral)\\s*[卷巻]|Vol\\.?\\s*(\\d+(?:\\.\\d+)?)|[卷巻]\\s*($numeral))", RegexOption.IGNORE_CASE)
             .find(name)?.groupValues?.drop(1)?.firstOrNull { it.isNotEmpty() }

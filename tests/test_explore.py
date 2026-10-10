@@ -58,6 +58,11 @@ def test_sources_with_explore_only_lists_real_ones():
     assert items[0]["categories"][0]["title"] == "榜单"
 
 
+def test_duplicate_sources_do_not_create_duplicate_lazy_list_keys():
+    source = _src(exploreUrl="分类::/comics")
+    assert len(ex.sources_with_explore([source, dict(source)])) == 1
+
+
 class _FakeEngine:
     def get_elements(self, rule, html):
         return ["el1", "el2"]

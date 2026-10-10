@@ -187,7 +187,7 @@ def _sort_chapters(chapters):
         name = ch.get("name") or ""
         # 话号（第X话/話/回/章/集；繁简都要识别，否则"第01話"被误判为附加）
         numeral = r"(?:\d+(?:\.\d+)?|[零〇一二两兩三四五六七八九十百廿卅]+)"
-        m = _re.search(r"第\s*(" + numeral + r")\s*(?:话|話|回|章|集|话数|話数)", name)
+        m = _re.search(r"第\s*(" + numeral + r")(?:\s*[-–—－~～]\s*" + numeral + r")?\s*(?:话|話|回|章|集|话数|話数)", name)
         ep = _number(m.group(1)) if m else None
         # 卷号（第X卷/Vol.X/卷X）
         m2 = _re.search(

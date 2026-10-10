@@ -1014,7 +1014,10 @@ def api_manga_browse():
         abort(404, "漫画源不存在")
     if not hasattr(ad, "categories") or not hasattr(ad, "browse"):
         return _err_json(f"该源未提供排行/分类：{source}", 404)
-    cats = ad.categories() or []
+    try:
+        cats = getattr(ad, "categories_snapshot", ad.categories)() or []
+    except Exception as e:
+        return _err_response(e, 502, "分类获取失败")
     if not cats:
         return _err_json(f"该源未提供排行/分类：{source}", 404)
     if category and category not in [c.get("key") for c in cats]:

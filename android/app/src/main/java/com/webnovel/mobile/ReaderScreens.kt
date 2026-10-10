@@ -188,6 +188,10 @@ fun BookDetailScreen(
                                         onClick = { confirmDelete = true },
                                         modifier = Modifier.weight(1f),
                                     ) { Text("从书架删除") }
+                                }
+                                Spacer(Modifier.height(WnSpace.sm))
+                                Row(Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(WnSpace.sm)) {
                                     OutlinedButton(
                                         onClick = {
                                             scope.launch {
