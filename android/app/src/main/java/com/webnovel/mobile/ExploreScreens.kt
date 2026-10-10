@@ -320,25 +320,10 @@ internal fun ExploreScreen(
                 else -> LazyColumn(Modifier.fillMaxSize().testTag("explore_sources"),
                     contentPadding = PaddingValues(WnSpace.md),
                     verticalArrangement = Arrangement.spacedBy(WnSpace.sm)) {
-                    item {
-                        Text(
-                            "漫画：" + (if (mangaNote.first) "见下方漫画分类"
-                                       else mangaNote.second.ifBlank { "当前不提供探索" }),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.outline,
-                        )
-                        Spacer(Modifier.height(WnSpace.xs))
-                        Text(
-                            "小说：${counts.second} / ${counts.first} 个内置源提供榜单或分类；" +
-                                "其余源不提供，不做假榜单。",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.outline,
-                        )
-                    }
                     if (mangaSources.isNotEmpty()) {
                         item {
                             Spacer(Modifier.height(WnSpace.xs))
-                            Text("漫画分类（来自适配器自己声明的排名/分类）",
+                            Text("漫画分类",
                                  style = MaterialTheme.typography.titleSmall,
                                  fontWeight = FontWeight.Bold)
                         }
@@ -372,6 +357,10 @@ internal fun ExploreScreen(
                                 }
                             }
                         }
+                    }
+                    if (sources.isNotEmpty()) {
+                        item { Text("小说榜单", style = MaterialTheme.typography.titleMedium,
+                            modifier = Modifier.padding(top = 24.dp)) }
                     }
                     items(sources, key = { it.uid + "|" + it.name }) { s ->
                         Card(Modifier.fillMaxWidth().clickable { currentUid = s.uid }) {
