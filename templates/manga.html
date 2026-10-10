@@ -36,6 +36,7 @@
     <button class="btn primary" id="tab-search" onclick="switchTab('search')">🔍 搜索</button>
     <button class="btn" id="tab-fav" onclick="switchTab('fav')">⭐ 收藏</button>
     <button class="btn" id="tab-hist" onclick="switchTab('hist')">🕐 历史</button>
+    <button class="btn" id="tab-browse" onclick="switchTab('browse')">分类</button>
     <button class="btn" id="refresh-favs" onclick="retryFavoriteUpdateCheck()" style="display:none;">🔄 检查收藏更新</button>
   </div>
   <div id="manga-search-panel">
@@ -64,6 +65,13 @@
   <div id="favorite-check-status" class="favorite-check-status" role="status" aria-live="polite" hidden></div>
   <div id="fav-list" class="grid-c" style="display:none;"></div>
   <div id="hist-list" style="display:none;"></div>
+  <section id="manga-browse-panel" style="display:none;" aria-label="漫画分类">
+    <div id="browse-sources" class="browse-source-tabs" aria-label="漫画源"></div>
+    <div id="browse-categories"></div>
+    <div id="browse-status" role="status" aria-live="polite"></div>
+    <div id="browse-results" class="grid-c"></div>
+    <button id="browse-more" class="btn" type="button" hidden>加载更多</button>
+  </section>
 </div>
 <script src="/static/js/common.js"></script>
 <script>
@@ -703,16 +711,18 @@ function switchTab(tab) {
   show('results', tab === 'search');
   show('fav-list', tab === 'fav');
   show('hist-list', tab === 'hist');
+  show('manga-browse-panel', tab === 'browse');
   show('refresh-favs', tab === 'fav');
   // 搜索栏区域显隐
   document.querySelector('.section-title').textContent =
     tab === 'fav' ? '⭐ 我的收藏' : (tab === 'hist' ? '🕐 阅读历史' : '🎨 漫画搜索');
-  ['tab-search','tab-fav','tab-hist'].forEach(id => {
+  ['tab-search','tab-fav','tab-hist','tab-browse'].forEach(id => {
     document.getElementById(id).className = id === ('tab-' + tab) ? 'btn primary' : 'btn';
   });
   syncFavoriteCheckStatusVisibility(tab);
   if (tab === 'fav') loadFavs();
   if (tab === 'hist') loadHist();
+  if (tab === 'browse') window.MangaBrowse.open();
 }
 function syncFavoriteCheckStatusVisibility(tab) {
   const status = document.getElementById('favorite-check-status');
@@ -864,7 +874,7 @@ async function loadHist() {
 let _initTab = 'search';
 try {
   const t = sessionStorage.getItem(TAB_KEY);
-  if (t === 'fav' || t === 'hist') _initTab = t;
+  if (t === 'fav' || t === 'hist' || t === 'browse') _initTab = t;
 } catch (e) {}
 loadSources().then(() => {
   // 每次打开漫画工作区检查一次收藏更新；检查完成后收藏页自动回读新状态。
@@ -878,5 +888,6 @@ loadSources().then(() => {
   }, 50);
 });
 </script>
+<script src="/static/js/manga_browse.js"></script>
 </body>
 </html>
