@@ -6,6 +6,9 @@ import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,6 +29,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -107,6 +111,7 @@ internal fun ExploreScreen(
     // 选中的漫画分类（源 + 分类）：同样按"标识"保存，非空时进入独立结果视图。
     // 不做成"结果追加在当前列表下方"——19 个分类按钮之后的结果等于没显示。
     var mangaSelSrc by rememberSaveable { mutableStateOf("") }
+    var categorySourceKey by rememberSaveable { mutableStateOf("") }
     var mangaSelCat by rememberSaveable { mutableStateOf("") }
     val mangaSel: Pair<EngineData.MangaBrowseSource, ExploreCategory>? =
         remember(mangaSources, mangaSelSrc, mangaSelCat) {
@@ -337,28 +342,33 @@ internal fun ExploreScreen(
                                  style = MaterialTheme.typography.titleSmall,
                                  fontWeight = FontWeight.Bold)
                         }
-                        items(mangaSources, key = { "manga_src_" + it.key }) { ms ->
+                        item {
+                            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                mangaSources.forEach { source ->
+                                    FilterChip(
+                                        selected = source.key == (categorySourceKey.ifBlank { mangaSources.first().key }),
+                                        onClick = { categorySourceKey = source.key },
+                                        label = { Text(source.name) },
+                                        modifier = Modifier.testTag("category_source_" + source.key),
+                                    )
+                                }
+                            }
+                        }
+                        val selectedSource = mangaSources.firstOrNull { it.key == categorySourceKey }
+                            ?: mangaSources.first()
+                        item(key = "manga_src_" + selectedSource.key) {
+                            val ms = selectedSource
                             Column(Modifier.fillMaxWidth().padding(top = 6.dp)) {
-                                Text("${ms.name} · ${ms.categories.size} 个入口",
-                                     style = MaterialTheme.typography.bodyMedium,
+                                Text(ms.name,
+                                     style = MaterialTheme.typography.titleLarge,
                                      fontWeight = FontWeight.Medium)
-                                // 分组标题由适配器自己声明（排行/分类），只在变化处显示
-                                ms.categories.forEachIndexed { idx, c ->
-                                    if (c.group.isNotBlank() &&
-                                        (idx == 0 || ms.categories[idx - 1].group != c.group)) {
-                                        Text(c.group,
-                                             style = MaterialTheme.typography.labelMedium,
-                                             color = MaterialTheme.colorScheme.outline,
-                                             modifier = Modifier.padding(top = 6.dp, bottom = 2.dp))
+                                ms.categories.groupBy { it.group.ifBlank { "分类" } }.forEach { (group, categories) ->
+                                    Text(group, style = MaterialTheme.typography.titleMedium,
+                                        modifier = Modifier.padding(top = 24.dp, bottom = 12.dp))
+                                    CategoryButtons(categories, ms.key) { c ->
+                                        mangaSelSrc = ms.key; mangaSelCat = c.url
                                     }
-                                    OutlinedButton(
-                                        onClick = { mangaSelSrc = ms.key; mangaSelCat = c.url },
-                                        // 分类按钮带稳定 testTag（<源key>_<分类key>）：
-                                        // 界面验收要能精确点到某个分类，而不是靠文字猜
-                                        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)
-                                            .testTag("manga_cat_" + ms.key + "_" + c.url),
-                                        contentPadding = PaddingValues(vertical = 6.dp),
-                                    ) { Text(c.title, maxLines = 1, overflow = TextOverflow.Ellipsis) }
                                 }
                             }
                         }
@@ -381,6 +391,23 @@ internal fun ExploreScreen(
                     }
                 }
             }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun CategoryButtons(categories: List<ExploreCategory>, source: String,
+                            onSelect: (ExploreCategory) -> Unit) {
+    FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        categories.forEach { category ->
+            androidx.compose.material3.FilledTonalButton(
+                onClick = { onSelect(category) },
+                shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+                modifier = Modifier.testTag("manga_cat_" + source + "_" + category.url),
+                contentPadding = PaddingValues(horizontal = 18.dp, vertical = 12.dp),
+            ) { Text(category.title) }
         }
     }
 }

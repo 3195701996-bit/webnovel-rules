@@ -2055,7 +2055,8 @@ def _manga_cached_chapters(source, comic_id):
                     except Exception:
                         # 兼容读取不可因分类辅助失败而丢失目录；数据仍按原顺序可见。
                         _volumes = []
-                chs = _volumes + _episodes
+                from engine.manga.download_manager import _sort_chapters
+                chs = _sort_chapters(_volumes) + _sort_chapters(_episodes)
             if not isinstance(chs, list):
                 chs = []
         except Exception:
