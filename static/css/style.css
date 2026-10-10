@@ -1680,3 +1680,11 @@ body.sources-page .source-row .ops .btn { min-height: 40px; }
   body.sources-page #check-all-status { display: block; margin: 6px 0 0; }
   body.sources-page .source-check-table { min-width: 520px; }
 }
+/* Shared category language: source selection, grouped wrapping controls. */
+.browse-source-tabs { display:flex; gap:12px; overflow-x:auto; padding:4px 0 12px; }
+.browse-source-tabs .btn { flex:0 0 auto; }
+.browse-category-buttons { display:flex; flex-wrap:wrap; gap:12px; margin-bottom:28px; }
+.browse-category-buttons .btn { min-height:44px; border-radius:12px; padding:12px 20px; }
+#browse-status { margin:16px 0; color:var(--text-dim); }
+#browse-more { margin:20px 0; }
+#browse-more[hidden] { display:none !important; }
