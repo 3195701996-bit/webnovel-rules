@@ -1,6 +1,16 @@
 {
   "cases": [
     {
+      "name": "combined_episode_range",
+      "chapters": [
+        {"id": "ep-3", "name": "第03話", "kind": "chapter"},
+        {"id": "ep-9", "name": "第09話", "kind": "chapter"},
+        {"id": "combined", "name": "第01-02话", "kind": "chapter"},
+        {"id": "ep-4", "name": "第04話", "kind": "chapter"}
+      ],
+      "expected": ["combined", "ep-3", "ep-4", "ep-9"]
+    },
+    {
       "name": "volume_chinese_numerals_and_appendix",
       "chapters": [
         {"id": "ep-10", "name": "第10话", "kind": "chapter"},

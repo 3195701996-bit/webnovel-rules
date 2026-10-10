@@ -465,7 +465,7 @@ def _manga_explore_info():
         if ad is None or not hasattr(ad, "categories"):
             continue
         try:
-            cats = ad.categories() or []
+            cats = getattr(ad, "categories_snapshot", ad.categories)() or []
         except Exception:
             cats = []
         if cats:
@@ -2171,4 +2171,3 @@ def api_book_progress_save(book_key):
         print(f"[error] 进度保存失败: {type(e).__name__}: {e}", flush=True)
         return jsonify({"ok": False, "error": "进度保存失败，请稍后重试"}), 500
     return jsonify({"ok": True})
-

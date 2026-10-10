@@ -1659,7 +1659,8 @@ object EngineData {
                 },
             )
         }
-        return out to (o.optInt("total_sources") to o.optInt("with_explore"))
+        return out.filter { it.uid.isNotBlank() }.distinctBy { it.uid } to
+            (o.optInt("total_sources") to o.optInt("with_explore"))
     }
 
     /** 探索书单（GET /api/explore?source=&url=&page=） */

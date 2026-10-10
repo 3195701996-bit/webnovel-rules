@@ -592,13 +592,35 @@ class Jm(MangaAdapter):
     # （最坏 15s 超时）拖住——源站抖一下整页都慢。
     _CATS_CACHE = {"at": 0.0, "data": []}
     _CATS_TTL = 900
+    _CATS_REFRESH = {"running": False, "retry_at": 0.0}
+    _CATS_REFRESH_LOCK = threading.Lock()
 
-    def categories(self):
+    def categories_snapshot(self):
+        """Serve discovery immediately; refresh remote categories off the request."""
+        cls = type(self)
+        now = time.time()
+        with cls._CATS_REFRESH_LOCK:
+            refresh = (not cls._CATS_REFRESH["running"]
+                       and now >= cls._CATS_REFRESH["retry_at"]
+                       and (not cls._CATS_CACHE["data"] or now - cls._CATS_CACHE["at"] >= cls._CATS_TTL))
+            if refresh and os.environ.get("WR_TEST") != "1":
+                cls._CATS_REFRESH.update(running=True, retry_at=now + 60)
+                def fetch():
+                    try:
+                        self._top_categories(timeout=5)
+                    finally:
+                        with cls._CATS_REFRESH_LOCK:
+                            cls._CATS_REFRESH["running"] = False
+                            cls._CATS_REFRESH["retry_at"] = time.time() + 60
+                threading.Thread(target=fetch, name="jm-category-refresh", daemon=True).start()
+        return self.categories(cache_only=True)
+
+    def categories(self, cache_only=False):
         """可浏览入口：全站排行（o=mr/mv/...）+ 顶层分类（c=<slug>）。"""
         cats = [{"key": f"o:{k}", "name": self.ORDER_PARAMS[k], "group": self.ORDER_GROUP}
                 for k in ("mr", "mv", "mp", "tf", "tr", "md")]
         seen = set()
-        for c in self._top_categories():
+        for c in (type(self)._CATS_CACHE["data"] if cache_only else self._top_categories()):
             slug = (c.get("slug") or "").strip()
             if not slug or slug in seen:
                 continue          # slug 为空的那条就是"最新A漫"（= o:mr），不重复列

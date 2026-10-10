@@ -222,6 +222,12 @@ class CopyManga(MangaAdapter):
     version = "1.4.1"
     concurrent = 2
 
+    def categories(self):
+        return copy_web.web_categories()
+
+    def browse(self, category="ordering=-datetime_updated", page=1):
+        return copy_web.web_browse(category, page)
+
     def __init__(self, state_dir=None, throttle=True):
         """throttle=False = 阅读通道实例：绕过令牌桶限流与 210 状态机升级，
         逐张读图不被 4s/请求 串行化（下载任务保持 throttle=True 防风控）"""

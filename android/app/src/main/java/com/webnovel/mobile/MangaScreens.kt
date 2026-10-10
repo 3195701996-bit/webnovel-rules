@@ -597,7 +597,7 @@ fun MangaDetailScreen(
                                     actionMsg = if (before) "正在取消收藏…" else "正在加入收藏…"
                                     try {
                                         val r = if (before) gateway.httpDelete(ep.port,
-                                            mangaPath(d.source, d.comicId, "/favorites"))
+                                            "/api/manga/favorites/${Uri.encode(d.source)}/${Uri.encode(d.comicId)}")
                                         else gateway.httpPost(ep.port, "/api/manga/favorites",
                                             JSONObject().put("source", d.source)
                                                 .put("comic_id", d.comicId).put("title", d.title)
@@ -710,7 +710,7 @@ fun MangaDetailScreen(
                                 },
                                 enabled = d.readingChapters.any { !d.downloaded.contains(it.id) },
                                 modifier = Modifier.weight(1f),
-                            ) { Text("下载 / 补齐未完成内容") }
+                            ) { Text("补齐下载") }
                         }
                         Spacer(Modifier.height(6.dp))
                         Row(Modifier.fillMaxWidth().padding(horizontal = WnSpace.lg),

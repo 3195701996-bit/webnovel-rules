@@ -49,6 +49,13 @@ def test_sort_chapters():
     assert s[1]["name"].startswith("第2话")
     assert s[-1]["name"] == "番外篇"
 
+
+def test_combined_episode_precedes_later_single_episodes():
+    from engine.manga.download_manager import _sort_chapters
+    chapters = [{"id": str(i), "name": f"第{i:02}話"} for i in range(3, 10)]
+    chapters.append({"id": "combined", "name": "第01-02话"})
+    assert [c["id"] for c in _sort_chapters(chapters)] == ["combined"] + [str(i) for i in range(3, 10)]
+
 def test_sort_chapters_volume():
     from engine.manga.download_manager import _sort_chapters
     chs = [{"id": "1", "name": "Vol.1 第3话"}, {"id": "2", "name": "第2话"}]
