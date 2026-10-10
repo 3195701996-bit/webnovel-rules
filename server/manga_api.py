@@ -1385,6 +1385,19 @@ def api_manga_detail(source, comic_id):
             _payload.setdefault("comic_id", comic_id)
             _payload.setdefault("identity_source", manga_identity_source(source))
             _payload.setdefault("source_aliases", list(manga_source_aliases(source)))
+            # Old full-detail caches already contain the former incorrect order.
+            # Canonicalize every response, including fresh/stale cache hits, so an
+            # upgrade fixes existing catalogs without deleting downloads or caches.
+            from engine.manga.download_manager import _sort_chapters
+            _old_ids = [str(c.get("id") or "") for c in
+                        list(_payload.get("volumes") or []) + list(_payload.get("chapters") or [])]
+            for field in ("volumes", "chapters"):
+                if field in _payload:
+                    _payload[field] = _sort_chapters(list(_payload.get(field) or []))
+            _new_ids = [str(c.get("id") or "") for c in
+                        list(_payload.get("volumes") or []) + list(_payload.get("chapters") or [])]
+            if _new_ids != _old_ids:
+                _payload.pop("resume", None)
             # downloaded 只反映当前可读的本地实盘，不能信任详情缓存里旧快照的
             # downloaded 字段；下载/删除后重新打开详情，状态必须即时与磁盘一致。
             _catalog = (list(_payload.get("volumes") or []) +

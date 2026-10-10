@@ -8,6 +8,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import kotlinx.coroutines.runBlocking
@@ -86,5 +87,33 @@ class Release203RegressionTest {
                 (bounds.right - bounds.left).value > 120 && (bounds.bottom - bounds.top).value < 80)
         }
         println("RELEASE203 novel_detail_actions_two_column_readable")
+    }
+
+    @Test fun categorySourceTabsSwitchAndThemeButtonsWrap() {
+        connect()
+        val result = runBlocking { gateway.httpText(endpoint.port, "/api/explore/sources") }
+        assertTrue(result.ok)
+        val sources = EngineData.exploreMangaSources(result.body)
+        val copy = sources.single { it.key == "copymanga" }
+        val alternative = sources.first { it.key != copy.key && it.categories.isNotEmpty() }
+        rule.waitUntil(60_000) { rule.onAllNodesWithText("浏览").fetchSemanticsNodes().isNotEmpty() }
+        rule.onAllNodesWithText("浏览")[0].performClick()
+        rule.onNodeWithText("探索（漫画分类 / 小说榜单）").performClick()
+        rule.waitUntil(60_000) { rule.onAllNodesWithTag("category_source_copymanga").fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithTag("category_source_copymanga").performClick()
+        val themes = copy.categories.filter { it.group == "题材" }.take(2)
+        assertTrue(themes.size == 2)
+        val bounds = themes.map { c ->
+            val tag = "manga_cat_copymanga_" + c.url
+            rule.onNodeWithTag("explore_sources").performScrollToNode(hasTestTag(tag))
+            rule.onNodeWithTag(tag).getUnclippedBoundsInRoot()
+        }
+        assertTrue("分类按钮应同排显示而非全宽竖列", bounds[0].top == bounds[1].top)
+        rule.onNodeWithTag("explore_sources").performScrollToNode(hasTestTag("category_source_" + alternative.key))
+        rule.onNodeWithTag("category_source_" + alternative.key).performClick()
+        val alternativeTag = "manga_cat_" + alternative.key + "_" + alternative.categories.first().url
+        rule.onNodeWithTag("explore_sources").performScrollToNode(hasTestTag(alternativeTag))
+        rule.onNodeWithTag(alternativeTag).assertIsDisplayed()
+        println("RELEASE203 category_tabs_switch_grouped_buttons_wrap")
     }
 }

@@ -700,6 +700,38 @@ def test_clearing_never_touches_history_or_library(client, library_comic, monkey
     assert mine and mine[0]["idx"] == 4, f"清理后进度必须还在：{mine}"
 
 # ── 其余三条返回路径也要带身份字段（四条路径各写一遍必然复发）────────
+def test_old_cached_combined_episode_order_is_repaired_without_deleting_data(
+        client, library_comic, monkeypatch):
+    import time
+    import server.state as state
+    mapi, root, dl, cache = library_comic
+    cached = cache / SRC / CID / "_info_full.json"
+    cached.parent.mkdir(parents=True, exist_ok=True)
+    cached.write_text(json.dumps({"ts": time.time(), "data": {
+        "title": "旧缓存", "source": SRC, "comic_id": CID,
+        "volumes": [{"id": "v2", "name": "第2卷"}, {"id": "v1", "name": "第1卷"}],
+        "chapters": [{"id": "c3", "name": "第03話"},
+                     {"id": "c9", "name": "第09話"},
+                     {"id": "combined", "name": "第01-02话"}],
+        "resume": {"index": 4, "matched_id": "combined"},
+    }}, ensure_ascii=False), encoding="utf-8")
+    before = cached.read_bytes()
+    expected = ["v1", "v2", "combined", "c3", "c9"]
+    monkeypatch.setattr(mapi, "_downloaded_ids_for_chapters", lambda src, cid, chapters: ["ch1"])
+    monkeypatch.setattr(mapi, "_partial_downloaded_ids_for_chapters", lambda src, cid, chapters: set())
+    monkeypatch.setattr(mapi, "_resume_payload", lambda src, cid, chapters, downloaded:
+                        {"index": 2, "matched_id": "combined"} if [c["id"] for c in chapters] == expected else None)
+    response = client.get(f"/api/manga/{SRC}/{CID}")
+    assert response.status_code == 200
+    data = response.get_json()
+    assert [c["id"] for c in data["volumes"] + data["chapters"]] == expected
+    assert data["resume"]["index"] == 2
+    state._manga_catalog_invalidate(SRC, CID)
+    assert [c["id"] for c in state._manga_cached_chapters(SRC, CID)] == expected
+    assert cached.read_bytes() == before
+    assert (dl / SRC / CID / "ch1" / "0000.jpg").is_file()
+
+
 def test_cached_path_detail_carries_identity(client, library_comic, monkeypatch, tmp_path):
     """缓存路径（_info_full.json 命中）→ 必须带 source/comic_id"""
     import server.manga_api as mapi
