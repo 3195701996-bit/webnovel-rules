@@ -11,6 +11,7 @@ import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
+import androidx.test.platform.app.InstrumentationRegistry
 import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
 import org.junit.After
@@ -128,6 +129,8 @@ class Release203RegressionTest {
         rule.onNodeWithTag("manga_source_list").performScrollToNode(hasText("拷贝漫画"))
         rule.onNodeWithText("拷贝漫画").performClick()
         rule.waitUntil(60_000) { rule.onAllNodesWithTag("manga_source_page").fetchSemanticsNodes().isNotEmpty() }
+        assertTrue("单源页面不得显示其他源切换按钮",
+            rule.onAllNodesWithText("MangaDex").fetchSemanticsNodes().isEmpty())
         assertTrue(rule.onAllNodesWithText("依赖判定：", substring = true).fetchSemanticsNodes().isEmpty())
         val bounds = copy.categories.filter { it.group == "题材" }.take(2).map { category ->
             val tag = "src_cat_" + category.url
@@ -138,6 +141,10 @@ class Release203RegressionTest {
         rule.onNodeWithTag("manga_source_info_toggle").performClick()
         rule.onNodeWithTag("manga_source_page").performScrollToNode(hasText("依赖判定：", substring = true))
         rule.onNodeWithText("依赖判定：", substring = true).assertIsDisplayed()
+        rule.onNodeWithTag("manga_source_info_toggle").performClick()
+        InstrumentationRegistry.getInstrumentation().uiAutomation.performGlobalAction(
+            android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK)
+        rule.waitUntil(30_000) { rule.onAllNodesWithTag("manga_source_list").fetchSemanticsNodes().isNotEmpty() }
         println("RELEASE203 single_source_grouped_diagnostics_collapsed")
     }
 }
