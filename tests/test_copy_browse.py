@@ -97,3 +97,13 @@ def test_empty_catalog_is_valid_but_missing_or_executable_catalog_is_failure(mon
         else:
             with pytest.raises(cw.WebError):
                 cw.web_browse("ordering=-datetime_updated")
+
+
+def test_catalog_long_entity_encoded_attribute_with_quotes():
+    rows = [{"path_word": f"comic-{n}", "name": "引号\"和单引号'＆" * 20,
+             "author": [{"name": "作者"}], "status": 0} for n in range(30)]
+    body = '<div class="exemptComic-box" total="300" list="' + html.escape(repr(rows), quote=True) + '"></div>'
+    assert len(body) > 10_000
+    page = cw.parse_browse_html(body)
+    assert len(page) == 30 and page.total == 300
+    assert page[0].title == rows[0]["name"]
