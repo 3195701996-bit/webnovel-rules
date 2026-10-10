@@ -3,8 +3,7 @@
 package com.webnovel.mobile
 
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.rememberScrollState
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -20,7 +19,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -174,7 +172,7 @@ internal fun MangaSourceScreen(
     // 仍停在原来的分类结果里，而不是被打回源清单。
     // 保存的是**原始响应**：恢复时复用同一套防御式解析，不需要自定义 Saver。
     var sourcesBody by rememberSaveable(sourceKey) { mutableStateOf("") }
-    var catsBody by rememberSaveable(sourceKey) { mutableStateOf("") }
+    var catsBody by rememberSaveable { mutableStateOf("") }
     var selUrl by rememberSaveable(sourceKey) { mutableStateOf("") }
     var loading by remember { mutableStateOf(true) }
     // 重建图片缓存（混淆源 jm 等）：算法修好后，旧缓存里的花图必须能少代价重建
@@ -184,7 +182,7 @@ internal fun MangaSourceScreen(
     var rebuildMsg by rememberSaveable(sourceKey) { mutableStateOf("") }
     val scope = rememberCoroutineScope()
 
-    val card: MangaSourceCard? = remember(sourcesBody) {
+    val card: MangaSourceCard? = remember(sourcesBody, sourceKey) {
         if (sourcesBody.isBlank()) null
         else EngineData.sources(sourcesBody).map {
             MangaSourceCard(it.key, it.name, it.status, it.reason, it.verifyLabel,
@@ -192,7 +190,7 @@ internal fun MangaSourceScreen(
                 it.failedStage)
         }.firstOrNull { it.key == sourceKey }
     }
-    val cats: List<EngineData.MangaBrowseSource> = remember(catsBody) {
+    val cats: List<EngineData.MangaBrowseSource> = remember(catsBody, sourceKey) {
         if (catsBody.isBlank()) emptyList()
         else EngineData.exploreMangaSources(catsBody).filter { it.key == sourceKey }
     }
@@ -245,6 +243,7 @@ internal fun MangaSourceScreen(
 
     // 选中分类后：同屏切到结果（返回先回到本页的分类列表）
     if (sel != null) {
+        BackHandler { selUrl = "" }
         val src = cats.firstOrNull()
         if (src != null) {
             Scaffold(topBar = {
@@ -323,17 +322,6 @@ internal fun MangaSourceScreen(
                 else -> LazyColumn(Modifier.fillMaxSize().testTag("manga_source_page"),
                     contentPadding = PaddingValues(WnSpace.md),
                     verticalArrangement = Arrangement.spacedBy(WnSpace.sm)) {
-                    item {
-                        val available = if (catsBody.isBlank()) emptyList() else EngineData.exploreMangaSources(catsBody)
-                        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            available.forEach { source ->
-                                FilterChip(selected = source.key == sourceKey,
-                                    onClick = { if (source.key != sourceKey) onOpen(Dest.MangaSource(source.key, source.name)) },
-                                    label = { Text(source.name) })
-                            }
-                        }
-                    }
                     if (showSourceInfo) item {
                         val c = card
                         WnHairlineCard {
