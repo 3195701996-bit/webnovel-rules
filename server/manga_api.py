@@ -1022,12 +1022,34 @@ def api_manga_browse():
         return _err_json(f"该源未提供排行/分类：{source}", 404)
     if category and category not in [c.get("key") for c in cats]:
         return _err_json(f"该源没有分类 {category}", 404)
+    browse_category = category or cats[0].get("key")
+    if source == "copymanga":
+        from urllib.parse import parse_qsl, urlencode
+        filters = {"region": {"", "0", "1", "2"}, "status": {"", "0", "1", "2"},
+                   "ordering": {"-datetime_updated", "datetime_updated", "-popular", "popular"}}
+        query = dict(parse_qsl(browse_category))
+        for key, allowed in filters.items():
+            if key not in request.args:
+                continue
+            value = request.args[key]
+            if value not in allowed:
+                return _err_json(f"无效筛选条件：{key}", 400)
+            if value:
+                query[key] = value
+            else:
+                query.pop(key, None)
+        browse_category = urlencode(query)
     try:
-        comics = ad.browse(category or cats[0].get("key"), page) or []
+        comics = ad.browse(browse_category, page)
     except Exception as e:
         return _err_response(e, 502, "浏览失败")
+    comics = comics if comics is not None else []
+    total_hits = getattr(comics, "total", None)
     return jsonify({"categories": cats, "category": category or cats[0].get("key"),
                     "page": page, "total": len(comics),
+                    "total_hits": total_hits,
+                    "total_pages": (total_hits + 29) // 30 if total_hits is not None else None,
+                    "has_more": page * 30 < total_hits if total_hits is not None else bool(comics),
                     "results": [{"id": c.id, "title": c.title, "author": c.author,
                                  "cover": c.cover, "tags": c.tags,
                                  "source": source, "source_name": ad.name}

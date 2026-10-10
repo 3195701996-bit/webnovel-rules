@@ -46,6 +46,7 @@ from .base import Chapter, Comic, ComicDetails, MangaError, decode_html, html_fr
 # HTTP 返回"格式正确、内容为空"的空壳，会伪装成"搜索无结果/章节为空"。
 WEB_DOMAINS = [
     "https://www.copy4000.com",
+    "https://2026copy.com",
     "https://www.mangacopy.com",
 ]
 
@@ -710,12 +711,24 @@ def web_categories(refresh=False):
 
 
 def web_browse(category, page=1):
+    params = urllib.parse.parse_qs(category)
+    query = {key: value[0] for key, value in params.items() if key in ("theme", "ordering", "region", "status")}
+    query.update(limit=30, offset=(max(1, int(page)) - 1) * 30)
+    return parse_browse_html(_get_path("/comics?" + urllib.parse.urlencode(query), budget=_Budget()).text)
+
+
+class BrowsePage(list):
+    """List-compatible page with the catalog's authoritative total."""
+    def __init__(self, items, total):
+        super().__init__(items)
+        self.total = total
+
+
+def parse_browse_html(body):
+    """Use the same real catalog parser for HTTP and desktop browser transport."""
     import ast
     from lxml import html as lhtml
-    params = urllib.parse.parse_qs(category)
-    query = {key: value[0] for key, value in params.items() if key in ("theme", "ordering")}
-    query.update(limit=30, offset=(max(1, int(page)) - 1) * 30)
-    root = html_fromstring_safe(lhtml, _get_path("/comics?" + urllib.parse.urlencode(query), budget=_Budget()).text)
+    root = html_fromstring_safe(lhtml, body)
     sections = root.xpath('//*[contains(concat(" ", normalize-space(@class), " "), " exemptComic-box ") and @list]')
     if not sections:
         raise WebError("分类页面缺少漫画列表，页面结构可能已变更")
@@ -730,7 +743,7 @@ def web_browse(category, page=1):
         raise WebError("分类数据格式已变更") from e
     if not isinstance(comics, list) or not all(isinstance(c, dict) for c in comics):
         raise WebError("分类数据不是漫画列表")
-    return _parse_search({"code": 200, "results": {"list": comics, "total": total}})[0]
+    return BrowsePage(_parse_search({"code": 200, "results": {"list": comics, "total": total}})[0], total)
 
 
 def web_search(kw, limit=30, offset=0, source_key="copymanga"):

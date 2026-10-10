@@ -425,22 +425,36 @@ internal fun MangaBrowseResultsScreen(
     var page by rememberSaveable(src.key, cat.url) { mutableIntStateOf(1) }
     var loading by remember { mutableStateOf(true) }
     var more by remember { mutableStateOf(false) }
+    var region by rememberSaveable(src.key, cat.url) { mutableStateOf("") }
+    var status by rememberSaveable(src.key, cat.url) { mutableStateOf("") }
+    var ordering by rememberSaveable(src.key, cat.url) {
+        mutableStateOf(Uri.parse("https://local/?${cat.url}").getQueryParameter("ordering") ?: "-datetime_updated")
+    }
+    val filterKey = "$region|$status|$ordering"
+    var currentFilter by remember { mutableStateOf(filterKey) }
+    currentFilter = filterKey
     val scope = rememberCoroutineScope()
 
-    val hits: List<MangaSearchHit> = remember(pages.size) {
+    val hits: List<MangaSearchHit> = remember(pages) {
         pages.fold(emptyList<MangaSearchHit>()) { acc, body ->
             val (h, _) = EngineData.mangaSearch(body)
             val seen = acc.map { it.source + ":" + it.comicId }.toSet()
             acc + h.filter { (it.source + ":" + it.comicId) !in seen }
         }
     }
+    val lastPage = pages.lastOrNull()?.let { runCatching { JSONObject(it) }.getOrNull() }
+    val totalPages = lastPage?.optInt("total_pages", 0) ?: 0
+    val hasMore = lastPage?.optBoolean("has_more", true) ?: true
 
     suspend fun load(nextPage: Int) {
+        val requestedFilter = currentFilter
         if (nextPage == 1) loading = true else more = true
         error = ""
         val r = gateway.httpText(ep.port,
             "/api/manga/browse?source=${Uri.encode(src.key)}" +
-                "&category=${Uri.encode(cat.url)}&page=$nextPage")
+                "&category=${Uri.encode(cat.url)}&page=$nextPage" +
+                if (src.key == "copymanga") "&region=$region&status=$status&ordering=${Uri.encode(ordering)}" else "")
+        if (requestedFilter != currentFilter) return
         if (!r.ok) {
             val why = runCatching { JSONObject(r.body).optString("error") }.getOrDefault("")
             error = "读取分类失败：HTTP ${r.code}" + if (why.isNotBlank()) " · $why" else ""
@@ -456,12 +470,49 @@ internal fun MangaBrowseResultsScreen(
     // 已有结果（从详情返回时）就不再重拉：否则"返回恢复"立刻被一次网络刷新盖掉
     LaunchedEffect(src.key, cat.url) { if (pages.isEmpty()) load(1) else loading = false }
 
+    fun changeFilter(key: String, value: String) {
+        when (key) {
+            "region" -> region = value
+            "status" -> status = value
+            else -> ordering = value
+        }
+        currentFilter = "$region|$status|$ordering"
+        pages = arrayListOf(); page = 1; error = ""; more = false
+        scope.launch { load(1) }
+    }
+
     Column(Modifier.fillMaxSize()) {
+        if (src.key == "copymanga") {
+            // Collapse controls into one menu so a small phone retains room for results.
+            var expanded by remember { mutableStateOf(false) }
+            Box(Modifier.padding(horizontal = WnSpace.md)) {
+                OutlinedButton(onClick = { expanded = !expanded }, modifier = Modifier.testTag("browse_filters")) {
+                    Text("筛选与排序")
+                }
+                androidx.compose.material3.DropdownMenu(expanded, onDismissRequest = { expanded = false }) {
+                    val groups = listOf(
+                        Triple("region", region, listOf("" to "全部地区", "0" to "日漫", "1" to "韩漫", "2" to "美漫")),
+                        Triple("status", status, listOf("" to "全部状态", "0" to "连载中", "1" to "已完结", "2" to "短篇")),
+                        Triple("ordering", ordering, listOf("-datetime_updated" to "时间倒序", "datetime_updated" to "时间正序", "-popular" to "热度倒序", "popular" to "热度正序")),
+                    )
+                    groups.forEach { (key, selected, options) ->
+                        options.forEach { (value, label) ->
+                            androidx.compose.material3.DropdownMenuItem(
+                                text = { Text((if (selected == value) "✓ " else "") + label) },
+                                onClick = { expanded = false; changeFilter(key, value) },
+                                modifier = Modifier.testTag("browse_filter_${key}_$value"),
+                            )
+                        }
+                        androidx.compose.material3.HorizontalDivider()
+                    }
+                }
+            }
+        }
         Text(
             listOfNotNull(
                 "${src.name} · ${cat.title}",
                 if (hits.isNotEmpty()) "${hits.size} 部" else null,
-                if (hits.isNotEmpty()) "第 $page 页" else null,
+                if (hits.isNotEmpty()) "第 $page${if (totalPages > 0) " / $totalPages" else ""} 页" else null,
             ).joinToString(" · "),
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.outline,
@@ -500,9 +551,9 @@ internal fun MangaBrowseResultsScreen(
                 item {
                     Row(horizontalArrangement = Arrangement.spacedBy(WnSpace.sm),
                         modifier = Modifier.padding(top = 6.dp)) {
-                        OutlinedButton(enabled = !more, onClick = {
+                        OutlinedButton(enabled = !more && hasMore, onClick = {
                             scope.launch { load(page + 1) }
-                        }) { Text(if (more) "加载中…" else "加载更多") }
+                        }) { Text(if (more) "加载中…" else if (!hasMore) "已到末页" else "加载更多") }
                     }
                 }
                 if (error.isNotBlank()) {

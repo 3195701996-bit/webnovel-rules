@@ -57,7 +57,21 @@ class CopyBrowseReleaseTest {
             rule.onNodeWithTag("manga_browse_list").performScrollToNode(hasText("加载更多"))
             rule.onNodeWithText("加载更多").performClick()
             rule.waitUntil(30_000) { rule.onAllNodesWithText("60 部", substring = true).fetchSemanticsNodes().isNotEmpty() }
-            rule.onNodeWithTag("manga_browse_caption").assertTextContains("第 2 页", substring = true)
+            rule.onNodeWithTag("manga_browse_caption").assertTextContains("第 2 /", substring = true)
+            rule.onNodeWithTag("browse_filters").performClick()
+            rule.onNodeWithTag("browse_filter_region_0").performClick()
+            rule.waitUntil(30_000) { rule.onAllNodesWithText("30 部", substring = true).fetchSemanticsNodes().isNotEmpty() }
+            rule.onNodeWithTag("manga_browse_caption").assertTextContains("第 1", substring = true)
+            rule.onNodeWithTag("browse_filters").performClick()
+            rule.onNodeWithTag("browse_filter_ordering_popular").performClick()
+            rule.waitUntil(30_000) { rule.onAllNodesWithText("30 部", substring = true).fetchSemanticsNodes().isNotEmpty() }
+            rule.onNodeWithTag("manga_browse_caption").assertTextContains("第 1", substring = true)
+            for (order in listOf("-datetime_updated", "datetime_updated", "-popular", "popular")) {
+                val filtered = gateway.httpText(ep.port, path + "1&region=0&status=1&ordering=$order")
+                assertTrue("Filter $order: ${filtered.code}", filtered.ok)
+                assertTrue(JSONObject(filtered.body).getInt("total_hits") > 0)
+                assertTrue(EngineData.mangaSearch(filtered.body).first.size == 30)
+            }
             println("COPY_BROWSE_RELEASE source_hidden categories=70 page1=30 page2=30 distinct=true ui=60")
         } finally {
             assertTrue(gateway.httpPost(ep.port, "/api/net/proxy", JSONObject().put("proxy", oldProxy).toString()).ok)
