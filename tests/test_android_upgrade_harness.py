@@ -334,3 +334,14 @@ def test_rejects_dirty_release_candidate_before_device_changes(tmp_path):
     assert result.returncode == 2
     assert "新版 APK 必须来自完整 Git SHA 且源码状态为 clean" in result.stderr
     assert "install " not in adb_log.read_text(encoding="utf-8")
+
+
+def test_explicit_upgrade_proxy_is_forwarded_and_restored(tmp_path):
+    apks, adb_log, env = _fixture(tmp_path)
+    env["UPGRADE_TEST_PROXY"] = "http://10.0.2.2:7900"
+    _run(apks, env)
+    assert "-e upgradeTestProxy http://10.0.2.2:7900" in adb_log.read_text(encoding="utf-8")
+    source = UPGRADE_TEST.read_text(encoding="utf-8")
+    assert 'checkpoint("test_proxy_previous"' in source
+    assert "restoreTestProxy(gateway, ep.port)" in source
+    assert "restoreTestProxy(gateway, endpoint!!.port)" in source

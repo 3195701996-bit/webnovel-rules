@@ -211,6 +211,7 @@ phase1_started=1
 "${adb_cmd[@]}" shell am instrument -w -r \
   -e class "$test_class#phase1_setupState" \
   -e upgradeHarness 1 \
+  -e upgradeTestProxy "${UPGRADE_TEST_PROXY:-}" \
   -e upgradeRunId "$run_id" \
   "$runner" | tee "$tmp_dir/phase1.log"
 "${adb_cmd[@]}" logcat -d -s System.out:I >>"$tmp_dir/phase1.log"
