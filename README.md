@@ -10,8 +10,8 @@
 | **Web 桌面端** | Flask 服务端 + 浏览器界面，在本机/局域网使用 | 电脑上看书、管理书库与任务 |
 | **独立 APK** | 引擎以 Chaquopy 打包进安卓 App，**不连电脑、不连云端**，装上即用 | 手机在线/离线阅读 |
 
-> 当前版本：**APK 2.0.3（versionCode 158）**。版本号以 `android/app/build.gradle` 为准；
-> [查看 2.0.3 发布页并下载 APK](https://github.com/3195701996-bit/webnovel-rules/releases/tag/v2.0.3)。
+> 当前版本：**APK 2.0.4（versionCode 159）**。版本号以 `android/app/build.gradle` 为准；
+> [查看 2.0.4 发布页并下载 APK](https://github.com/3195701996-bit/webnovel-rules/releases/tag/v2.0.4)。
 > 该版本已通过签名核验、GitHub CI 与专用 API 35 模拟器覆盖升级数据保全测试；目标手机实机体验仍待验收。
 
 ---

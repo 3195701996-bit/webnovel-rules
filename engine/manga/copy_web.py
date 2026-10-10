@@ -361,13 +361,27 @@ def _get_path(path, headers=None, dnt="", json_api=False, timeout=TIMEOUT,
             break                                # 预算用尽：不再换域，如实报超时
         try:
             base = _web_base(force=(i > 0), skip=skip, budget=_budget)
+        except WebUnreachable as e:
+            # Discovery has already exhausted the remaining domain pool.
+            last = e
+            break
+        except WebBlocked:
+            raise
+        except Exception as e:
+            last = e
+            _rotate_base()
+            continue
+        try:
             return _web_get(base + path, headers=headers or _headers(dnt, json_api),
                             timeout=timeout, budget=_budget)
         except WebBlocked:
             raise
-        except WebUnreachable as e:              # 域池整体不可达：立刻停（不换域硬撞）
+        except WebUnreachable as e:
+            # A failed cached host is not proof that all other hosts are down.
+            # Keep the existing shared budget and never retry this host again.
             last = e
-            break
+            skip = (skip or set()) | {base}
+            _rotate_base()
         except Exception as e:
             last = e
             skip = (skip or set()) | {(_BASE.get("base") or "")}
