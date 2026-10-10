@@ -116,4 +116,28 @@ class Release203RegressionTest {
         rule.onNodeWithTag(alternativeTag).assertIsDisplayed()
         println("RELEASE203 category_tabs_switch_grouped_buttons_wrap")
     }
+
+    @Test fun singleSourceUsesGroupedButtonsAndCollapsesDiagnostics() {
+        connect()
+        val result = runBlocking { gateway.httpText(endpoint.port, "/api/explore/sources") }
+        val copy = EngineData.exploreMangaSources(result.body).single { it.key == "copymanga" }
+        rule.waitUntil(60_000) { rule.onAllNodesWithText("浏览").fetchSemanticsNodes().isNotEmpty() }
+        rule.onAllNodesWithText("浏览")[0].performClick()
+        rule.onNodeWithText("内置漫画源").performClick()
+        rule.waitUntil(60_000) { rule.onAllNodesWithTag("manga_source_list").fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithTag("manga_source_list").performScrollToNode(hasText("拷贝漫画"))
+        rule.onNodeWithText("拷贝漫画").performClick()
+        rule.waitUntil(60_000) { rule.onAllNodesWithTag("manga_source_page").fetchSemanticsNodes().isNotEmpty() }
+        assertTrue(rule.onAllNodesWithText("依赖判定：", substring = true).fetchSemanticsNodes().isEmpty())
+        val bounds = copy.categories.filter { it.group == "题材" }.take(2).map { category ->
+            val tag = "src_cat_" + category.url
+            rule.onNodeWithTag("manga_source_page").performScrollToNode(hasTestTag(tag))
+            rule.onNodeWithTag(tag).getUnclippedBoundsInRoot()
+        }
+        assertTrue(bounds.size == 2 && bounds[0].top == bounds[1].top)
+        rule.onNodeWithTag("manga_source_info_toggle").performClick()
+        rule.onNodeWithTag("manga_source_page").performScrollToNode(hasText("依赖判定：", substring = true))
+        rule.onNodeWithText("依赖判定：", substring = true).assertIsDisplayed()
+        println("RELEASE203 single_source_grouped_diagnostics_collapsed")
+    }
 }

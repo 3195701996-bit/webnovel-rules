@@ -3,6 +3,8 @@
 package com.webnovel.mobile
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -18,6 +20,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -177,6 +180,7 @@ internal fun MangaSourceScreen(
     // 重建图片缓存（混淆源 jm 等）：算法修好后，旧缓存里的花图必须能少代价重建
     var rebuildBusy by remember { mutableStateOf(false) }
     var rebuildDialog by remember { mutableStateOf(false) }
+    var showSourceInfo by rememberSaveable(sourceKey) { mutableStateOf(false) }
     var rebuildMsg by rememberSaveable(sourceKey) { mutableStateOf("") }
     val scope = rememberCoroutineScope()
 
@@ -308,6 +312,9 @@ internal fun MangaSourceScreen(
                 IconButton(onClick = onBack) {
                     Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                 }
+            }, actions = {
+                TextButton(onClick = { showSourceInfo = !showSourceInfo },
+                    modifier = Modifier.testTag("manga_source_info_toggle")) { Text("源信息") }
             })
     }) { pad ->
         Box(Modifier.padding(pad).fillMaxSize()) {
@@ -317,6 +324,17 @@ internal fun MangaSourceScreen(
                     contentPadding = PaddingValues(WnSpace.md),
                     verticalArrangement = Arrangement.spacedBy(WnSpace.sm)) {
                     item {
+                        val available = if (catsBody.isBlank()) emptyList() else EngineData.exploreMangaSources(catsBody)
+                        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            available.forEach { source ->
+                                FilterChip(selected = source.key == sourceKey,
+                                    onClick = { if (source.key != sourceKey) onOpen(Dest.MangaSource(source.key, source.name)) },
+                                    label = { Text(source.name) })
+                            }
+                        }
+                    }
+                    if (showSourceInfo) item {
                         val c = card
                         WnHairlineCard {
                             Column(Modifier.padding(WnSpace.md)) {
@@ -368,7 +386,7 @@ internal fun MangaSourceScreen(
                             Text("在「$sourceName」里搜漫画")
                         }
                     }
-                    if (card?.scrambled == true) {
+                    if (showSourceInfo && card?.scrambled == true) {
                         item {
                             Text("图片块还原：本源图片由服务器按块倒序还原后才可读" +
                                 "（当前算法版本 v${card.processVersion}）。" +
@@ -406,12 +424,12 @@ internal fun MangaSourceScreen(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     } else {
-                        items(catList, key = { it.url }) { c ->
-                            OutlinedButton(
-                                onClick = { selUrl = c.url },
-                                modifier = Modifier.fillMaxWidth().testTag("src_cat_" + c.url),
-                                contentPadding = PaddingValues(vertical = 6.dp),
-                            ) { Text(c.title, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                        catList.groupBy { it.group.ifBlank { "分类" } }.forEach { (group, categories) ->
+                            item(key = "category_group_" + group) {
+                                Text(group, style = MaterialTheme.typography.titleMedium,
+                                    modifier = Modifier.padding(top = 18.dp, bottom = 12.dp))
+                                CategoryButtons(categories, sourceKey, tagPrefix = "src_cat_") { c -> selUrl = c.url }
+                            }
                         }
                     }
                 }

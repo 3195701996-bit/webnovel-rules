@@ -386,7 +386,8 @@ internal fun ExploreScreen(
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun CategoryButtons(categories: List<ExploreCategory>, source: String,
+internal fun CategoryButtons(categories: List<ExploreCategory>, source: String,
+                            tagPrefix: String = "manga_cat_" + source + "_",
                             onSelect: (ExploreCategory) -> Unit) {
     FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -394,7 +395,7 @@ private fun CategoryButtons(categories: List<ExploreCategory>, source: String,
             androidx.compose.material3.FilledTonalButton(
                 onClick = { onSelect(category) },
                 shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
-                modifier = Modifier.testTag("manga_cat_" + source + "_" + category.url),
+                modifier = Modifier.testTag(tagPrefix + category.url),
                 contentPadding = PaddingValues(horizontal = 18.dp, vertical = 12.dp),
             ) { Text(category.title) }
         }
