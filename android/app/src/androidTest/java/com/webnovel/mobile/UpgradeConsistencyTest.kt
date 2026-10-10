@@ -70,6 +70,14 @@ class UpgradeConsistencyTest {
         writeAtomic(file, journal.toString().toByteArray(Charsets.UTF_8))
     }
 
+    private suspend fun restoreTestProxy(gateway: EngineGateway, port: Int) {
+        if (!journalFile().isFile) return
+        val journal = JSONObject(journalFile().readText(Charsets.UTF_8))
+        if (!journal.has("test_proxy_previous")) return
+        assertTrue("测试代理设置应还原", gateway.httpPost(port, "/api/net/proxy",
+            JSONObject().put("proxy", journal.getString("test_proxy_previous")).toString()).ok)
+    }
+
     private fun writeAtomic(file: File, bytes: ByteArray) {
         file.parentFile?.mkdirs()
         val atomic = AtomicFile(file)
@@ -174,6 +182,15 @@ class UpgradeConsistencyTest {
         val st = gateway.connect()
         assertTrue("引擎未就绪：$st", st is EngineState.Ready)
         val ep = (st as EngineState.Ready).endpoint
+
+        val testProxy = InstrumentationRegistry.getArguments().getString("upgradeTestProxy")
+        if (upgradeHarness && !testProxy.isNullOrBlank()) {
+            val previous = gateway.httpText(ep.port, "/api/net/proxy")
+            assertTrue("应读取原代理设置", previous.ok)
+            checkpoint("test_proxy_previous", JSONObject(previous.body).getJSONObject("data").optString("proxy", ""))
+            assertTrue("显式测试代理应生效", gateway.httpPost(ep.port, "/api/net/proxy",
+                JSONObject().put("proxy", testProxy).toString()).ok)
+        }
 
         // 1) 真实源：搜索 → 详情 → 建下载任务（真实链路，不用夹具）
         // 夹具解析：优先缓存、失败才搜索（源站限流不再让本用例成片失败）
@@ -601,6 +618,7 @@ class UpgradeConsistencyTest {
         removeObjectIdentity(File(OfflineStore.runtimeDir(ctx), "manga/_favorites.json"),
             "$source:$comicId")
         removeLibraryIdentity(source, comicId)
+        restoreTestProxy(gateway, ep.port)
         evidenceFile().delete()
         journalFile().delete()
         phase1CompleteFile().delete()
@@ -638,6 +656,10 @@ class UpgradeConsistencyTest {
         val gateway = EngineGateway(ctx)
         val state = runCatching { gateway.connect() }.getOrNull()
         val endpoint = (state as? EngineState.Ready)?.endpoint
+        if (journal.has("test_proxy_previous")) {
+            assertTrue("还原测试代理需要引擎可用", endpoint != null)
+            restoreTestProxy(gateway, endpoint!!.port)
+        }
         if (endpoint != null && safeIdentityPart(cleanupSource) &&
             safeIdentityPart(cleanupComic)) {
             runCatching {
