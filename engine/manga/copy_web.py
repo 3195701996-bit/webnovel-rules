@@ -727,18 +727,28 @@ class BrowsePage(list):
 def parse_browse_html(body):
     """Use the same real catalog parser for HTTP and desktop browser transport."""
     import ast
-    from lxml import html as lhtml
-    root = html_fromstring_safe(lhtml, body)
-    sections = root.xpath('//*[contains(concat(" ", normalize-space(@class), " "), " exemptComic-box ") and @list]')
-    if not sections:
+    from html.parser import HTMLParser
+
+    class CatalogParser(HTMLParser):
+        catalog = None
+
+        def handle_starttag(self, tag, attrs):
+            attrs = dict(attrs)
+            if self.catalog is None and "exemptComic-box" in attrs.get("class", "").split() and "list" in attrs:
+                self.catalog = attrs
+
+    parser = CatalogParser(convert_charrefs=True)
+    parser.feed(body)
+    section = parser.catalog
+    if section is None:
         raise WebError("分类页面缺少漫画列表，页面结构可能已变更")
-    raw = sections[0].get("list", "")
+    raw = section.get("list", "")
     try:
         try:
             comics = json.loads(raw)
         except ValueError:
             comics = ast.literal_eval(raw)
-        total = int(sections[0].get("total", "0"))
+        total = int(section.get("total", "0"))
     except (ValueError, SyntaxError, TypeError) as e:
         raise WebError("分类数据格式已变更") from e
     if not isinstance(comics, list) or not all(isinstance(c, dict) for c in comics):
