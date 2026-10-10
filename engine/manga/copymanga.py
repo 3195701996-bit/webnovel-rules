@@ -226,7 +226,16 @@ class CopyManga(MangaAdapter):
         return copy_web.web_categories()
 
     def browse(self, category="ordering=-datetime_updated", page=1):
-        return copy_web.web_browse(category, page)
+        try:
+            return copy_web.web_browse(category, page)
+        except copy_web.WebUnreachable:
+            from ..config import IS_MOBILE
+            if IS_MOBILE:
+                raise
+            # Desktop search can use the browser while plain HTTP is blocked.
+            # Reuse that existing desktop transport; never require it on Android.
+            from .copymanga_web import CopyMangaWeb
+            return CopyMangaWeb().browse(category, page)
 
     def __init__(self, state_dir=None, throttle=True):
         """throttle=False = 阅读通道实例：绕过令牌桶限流与 210 状态机升级，

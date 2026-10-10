@@ -1,7 +1,7 @@
 /* Category discovery and pagination share the production API with Android. */
 (function () {
   'use strict';
-  const state = { sources: [], source: '', category: '', page: 0, rows: [], exhausted: false };
+  const state = { sources: [], source: '', category: '', page: 0, rows: [], exhausted: false, filters: {} };
   let serial = 0, loading = false, controller;
   const el = id => document.getElementById(id);
   const storageKey = 'manga_browse_v203';
@@ -42,6 +42,7 @@
         const grid = document.createElement('div'); grid.className = 'browse-category-buttons';
         for (const c of items) grid.append(button(c.name, () => {
           cancel(); state.category = c.key; state.rows = []; state.page = 0; state.exhausted = false;
+          state.filters = { ordering: new URLSearchParams(c.key).get('ordering') || '-datetime_updated', region: '', status: '' };
           save(); render(); loadPage();
         }));
         section.append(heading, grid); categories.append(section);
@@ -53,6 +54,25 @@
       const heading = document.createElement('h3');
       heading.textContent = source.categories.find(c => c.key === state.category)?.name || '分类结果';
       categories.append(heading);
+      if (state.source === 'copymanga') {
+        const groups = [
+          ['region', [['', '全部地区'], ['0', '日漫'], ['1', '韩漫'], ['2', '美漫']]],
+          ['status', [['', '全部状态'], ['0', '连载中'], ['1', '已完结'], ['2', '短篇']]],
+          ['ordering', [['-datetime_updated', '时间倒序'], ['datetime_updated', '时间正序'], ['-popular', '热度倒序'], ['popular', '热度正序']]],
+        ];
+        for (const [key, options] of groups) {
+          const grid = document.createElement('div'); grid.className = 'browse-category-buttons';
+          for (const [value, label] of options) {
+            const active = (state.filters[key] || '') === value;
+            const control = button(label, () => {
+              cancel(); state.filters[key] = value; state.rows = []; state.page = 0; state.exhausted = false;
+              save(); render(); loadPage();
+            }, active ? 'btn primary' : 'btn');
+            control.setAttribute('aria-pressed', String(active)); grid.append(control);
+          }
+          categories.append(grid);
+        }
+      }
       for (const row of state.rows) results.append(makeMangaCard(row));
     }
     el('browse-more').hidden = !state.category || state.exhausted;
@@ -65,6 +85,7 @@
     const next = state.page + 1;
     try {
       const params = new URLSearchParams({ source: state.source, category: state.category, page: next });
+      if (state.source === 'copymanga') for (const [key, value] of Object.entries(state.filters)) params.set(key, value);
       const response = await fetch('/api/manga/browse?' + params, { signal: controller.signal });
       const data = await response.json();
       if (run !== serial) return;
@@ -74,8 +95,8 @@
         const key = row.source + ':' + row.id;
         if (!seen.has(key)) { state.rows.push(row); seen.add(key); }
       }
-      state.page = next; state.exhausted = data.results.length === 0; save();
-      status(state.rows.length ? `${state.rows.length} 部 · 第 ${state.page} 页${state.exhausted ? ' · 已到末页' : ''}` : '该分类暂无漫画');
+      state.page = next; state.exhausted = data.has_more === false || data.results.length === 0; save();
+      status(state.rows.length ? `${state.rows.length} 部 · 第 ${state.page}${data.total_pages ? ' / ' + data.total_pages : ''} 页${state.exhausted ? ' · 已到末页' : ''}` : '该分类暂无漫画');
     } catch (error) {
       if (run !== serial || error.name === 'AbortError') return;
       status('加载失败：' + (error.message || '网络错误') + '，可点击加载更多重试。');
@@ -100,6 +121,7 @@
           if (source.categories.some(c => c.key === saved.category) && Array.isArray(saved.rows)) {
             state.category = saved.category; state.page = Number(saved.page) || 0;
             state.rows = saved.rows; state.exhausted = saved.exhausted === true;
+            state.filters = saved.filters || { ordering: new URLSearchParams(saved.category).get('ordering') || '-datetime_updated', region: '', status: '' };
           }
         }
       } catch (_) { /* corrupt storage must not prevent browsing */ }
