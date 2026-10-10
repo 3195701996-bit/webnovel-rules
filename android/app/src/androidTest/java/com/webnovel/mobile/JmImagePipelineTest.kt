@@ -85,6 +85,7 @@ class JmImagePipelineTest {
         rule.waitUntil(60_000) { texts("禁漫", substring = true) > 0 }
         rule.onAllNodesWithText("禁漫", substring = true)[0].performClick()
         rule.waitUntil(120_000) { nodes("manga_source_page") > 0 }
+        rule.onNodeWithTag("manga_source_info_toggle").performClick()
         rule.waitUntil(60_000) { nodes("manga_rebuild_cache") > 0 }
         assertTrue("混淆源页面必须有「重建图片缓存」入口", nodes("manga_rebuild_cache") > 0)
         ev("jm 源页出现「重建图片缓存（修复块错乱）」入口")
