@@ -319,6 +319,67 @@ def test_unread_identity_set_counts_skips_after_legacy_catalog_normalization(
     assert sum(c["id"] not in resolved for c in catalog) == 2
 
 
+def test_existing_read_id_does_not_also_mark_old_label_as_read():
+    import server.manga_api as mapi
+    catalog = [{"id": "stable", "name": "第2话"},
+               {"id": "other", "name": "第1话"}]
+    history = {"chapter_id": "stable", "chapter_label": "第1话",
+               "read_chapters": [{"id": "stable", "label": "第1话"}]}
+    assert mapi._manga_read_id_set(history, catalog) == {"stable"}
+
+
+@pytest.mark.parametrize("old_label,new_label", [
+    ("第1话", "第01-02話"), ("第01-02话", "第1話"),
+    ("第1卷", "第1～2卷"), ("第一至二话", "第1话"),
+    ("第1-2话", "第1-3话"),
+])
+def test_read_label_migration_keeps_combined_ranges_distinct(old_label, new_label):
+    import server.manga_api as mapi
+    history = {"read_chapters": [{"id": "old", "label": old_label}]}
+    resolved = mapi._manga_read_id_set(history, [{"id": "new", "name": new_label}])
+    assert "new" not in resolved
+
+
+@pytest.mark.parametrize("old_label,new_label", [
+    ("第01-02话", "第1～2話"), ("第一至二卷", "第1-2卷"),
+])
+def test_same_combined_range_can_migrate_after_id_change(old_label, new_label):
+    import server.manga_api as mapi
+    resolved = mapi._manga_read_id_set(
+        {"read_chapters": [{"id": "old", "label": old_label}]},
+        [{"id": "new", "name": new_label}])
+    assert "new" in resolved
+
+
+@pytest.mark.parametrize("renamed", [True, False])
+def test_favorites_and_history_agree_without_false_read_migration(
+        client, library_comic, monkeypatch, renamed):
+    mapi, root, _dl, _cache = library_comic
+    catalog = ([{"id": "stable", "name": "第2话"},
+                {"id": "other", "name": "第1话"}] if renamed else
+               [{"id": "merged", "name": "第1-2话"},
+                {"id": "other", "name": "第3话"}])
+    old_id = "stable" if renamed else "old-single"
+    key = f"{SRC}:{CID}"
+    fav_file, history_file = root / "favorites.json", root / "history.json"
+    fav_file.write_text(json.dumps({key: {"title": "身份核验"}}))
+    history_file.write_text(json.dumps({key: {
+        "chapter_id": old_id, "chapter_label": "第1话",
+        "read_chapter_ids": [old_id],
+        "read_chapters": [{"id": old_id, "label": "第1话"}],
+    }}))
+    before = history_file.read_bytes()
+    monkeypatch.setattr(mapi, "MANGA_FAV_FILE", str(fav_file))
+    monkeypatch.setattr(mapi, "MANGA_HISTORY_FILE", str(history_file))
+    monkeypatch.setattr(mapi, "_manga_cached_chapters", lambda *_: catalog)
+    monkeypatch.setattr(mapi, "_manga_stats_get", lambda *_: {"verified_chapters": 0})
+    favorite = client.get("/api/manga/favorites").get_json()["favorites"][0]
+    history = client.get("/api/manga/history").get_json()["history"][0]
+    assert favorite["unread_count"] == (1 if renamed else 2)
+    assert history["read_chapter_ids"] == (["stable"] if renamed else [])
+    assert history_file.read_bytes() == before, "读取核验不能重写用户原始记录"
+
+
 def test_legacy_episode_read_does_not_migrate_to_same_numbered_volume(
         client, library_comic, monkeypatch):
     """A read episode and volume with ordinal 1 are distinct identities."""

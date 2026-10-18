@@ -1207,12 +1207,29 @@ def _manga_read_id_set(history, chapters):
             # only an exact normalized compound label is safe to carry forward.
             compound = _LABEL_STRIP_RE.sub("", text).casefold()
             return f"compound:{compound}" if compound else ""
+        # A combined issue is not its first episode/volume. Keep both bounds
+        # when migrating labels, and do not infer that reading one constituent
+        # means the combined unit (or a differently sized range) was read.
+        numeral = r"(?:\d+(?:\.\d+)?|[零〇一二两兩三四五六七八九十]+)"
+        bounds = re.search(
+            rf"({numeral})\s*[-–—~～至到]\s*({numeral})\s*"
+            r"(?:话数|話数|话|話|章|回|集|卷|巻)", text)
+        if bounds is None and is_volume:
+            bounds = re.search(
+                rf"\bvol(?:ume)?\.?\s*({numeral})\s*[-–—~～至到]\s*({numeral})",
+                text, re.I)
+        if bounds is not None:
+            start, end = (_label_number(token) for token in bounds.groups())
+            if start is not None and end is not None:
+                kind = "volume" if is_volume else "episode"
+                return f"range:{kind}:{start:g}:{end:g}"
         if number is not None and is_volume:
             return f"volume:{number:g}"
         if number is not None and is_episode:
             return f"episode:{number:g}"
         return f"label:{key}" if key else ""
 
+    current_ids = {str(chapter.get("id") or "") for chapter in chapters}
     by_label = {}
     for chapter in chapters:
         label_key = _identity_label(chapter.get("name") or chapter.get("label") or "")
@@ -1222,6 +1239,10 @@ def _manga_read_id_set(history, chapters):
         old_id = str(record.get("id") or "")
         if old_id:
             known.add(old_id)
+            if old_id in current_ids:
+                # A renamed/reordered chapter with a stable ID must not also
+                # mark another chapter carrying its former label as read.
+                continue
         label_key = _identity_label(record.get("label") or "")
         matches = by_label.get(label_key, []) if label_key else []
         if len(matches) == 1 and matches[0]:
