@@ -209,6 +209,8 @@ data class MangaUpdateCheck(
     val error: String,
     val missingIds: List<String>,
     val missingNames: List<String> = emptyList(),
+    val catalogSummary: String = "",
+    val catalogWarning: String = "",
 ) {
     val label: String
         get() = when {
@@ -1601,6 +1603,15 @@ object EngineData {
             if (it is JSONObject) (it.optString("id").ifBlank { it.optString("chapter_id") })
             else it as? String
         }.filter { it.isNotBlank() }
+        val diff = o.optJSONObject("catalog_diff")
+        val summary = if (diff?.optBoolean("baseline_available") == true)
+            "目录新增 ${diff.optInt("added_missing_count")} 项，原目录待补 ${diff.optInt("existing_missing_count")} 项"
+            else ""
+        val warnings = mutableListOf<String>()
+        o.optString("catalog_warning").takeIf { it.isNotBlank() }?.let { warnings += it }
+        diff?.optInt("renamed_count")?.takeIf { it > 0 }?.let { warnings += "$it 项章节名称变更" }
+        diff?.optInt("same_name_new_id_count")?.takeIf { it > 0 }?.let { warnings += "$it 项同名新身份" }
+        diff?.optInt("duplicate_name_count")?.takeIf { it > 0 }?.let { warnings += "$it 组同名章节" }
         return MangaUpdateCheck(
             ok = ok,
             hasUpdate = o.optBoolean("has_update"),
@@ -1611,6 +1622,9 @@ object EngineData {
             missingNames = (0 until (arr?.length() ?: 0)).mapNotNull { i ->
                 arr?.optJSONObject(i)?.optString("name")?.takeIf { it.isNotBlank() }
             },
+            catalogSummary = summary,
+            catalogWarning = if (warnings.isEmpty()) "" else
+                warnings.joinToString("；") + "。请核对清单，不会自动合并或删除本地内容。",
         )
     }
 

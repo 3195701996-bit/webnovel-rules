@@ -33,4 +33,17 @@ class MangaUpdatePreviewTest {
         assertTrue(result.label.contains("检查失败"))
         assertFalse(result.label.contains("已是最新"))
     }
+
+    @Test
+    fun catalogChangesWarnWithoutClaimingEveryMissingItemIsNew() {
+        val result = EngineData.mangaUpdateCheck("""{
+            "ok":true,"missing_count":3,"missing":[],"catalog_diff":{
+                "baseline_available":true,"added_missing_count":1,"existing_missing_count":2,
+                "renamed_count":1,"same_name_new_id_count":1,"duplicate_name_count":1
+            }
+        }""")
+        assertEquals("目录新增 1 项，原目录待补 2 项", result.catalogSummary)
+        assertTrue(result.catalogWarning.contains("同名新身份"))
+        assertTrue(result.catalogWarning.contains("不会自动合并或删除"))
+    }
 }

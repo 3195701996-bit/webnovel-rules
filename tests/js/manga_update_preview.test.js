@@ -30,6 +30,12 @@ class Node {
   await download.onclick();
   assert.deepEqual(submitted[0].chapters,['new-42']);
   assert.equal(download.disabled,true,'成功提交后不得重复提交同一清单');
+  result = {ok:true,missing_count:3,missing:[],catalog_diff:{baseline_available:true,
+    added_missing_count:1,existing_missing_count:2,same_name_new_id_count:1}};
+  await check.onclick();
+  assert.match(status.textContent,/目录新增 1 项，原目录待补 2 项/);
+  assert.match(status.textContent,/同名新身份/);
+  assert.match(status.textContent,/不会自动合并或删除/);
   result = {ok:true,missing_count:3,missing:[]};
   await check.onclick();
   assert.match(status.textContent,/不会自动下载整本/);

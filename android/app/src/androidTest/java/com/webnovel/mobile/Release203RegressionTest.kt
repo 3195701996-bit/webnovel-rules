@@ -6,6 +6,9 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.click
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.hasTestTag
@@ -25,6 +28,14 @@ class Release203RegressionTest {
     private var book: SelfTestBook? = null
     private lateinit var gateway: EngineGateway
     private lateinit var endpoint: EngineEndpoint
+    private var updateFixtureInstalled = false
+    private var updateFixtureNamespace: com.chaquo.python.PyObject? = null
+
+    private fun execUpdateFixture(code: String) {
+        val builtins = com.chaquo.python.Python.getInstance().getModule("builtins")
+        if (updateFixtureNamespace == null) updateFixtureNamespace = builtins.callAttr("dict")
+        builtins.callAttr("exec", code, updateFixtureNamespace)
+    }
 
     private fun connect() {
         gateway = EngineGateway(rule.activity.applicationContext)
@@ -32,6 +43,14 @@ class Release203RegressionTest {
     }
 
     @After fun cleanup() {
+        if (updateFixtureInstalled) {
+            execUpdateFixture("""
+                import server.manga_api as _qa_api
+                if hasattr(_qa_api, '_qa_original_update_check'):
+                    _qa_api._manga_check_one = _qa_api._qa_original_update_check
+                    del _qa_api._qa_original_update_check
+            """.trimIndent())
+        }
         comic?.let { c ->
             runBlocking { gateway.httpDelete(endpoint.port, "/api/manga/favorites/${c.sourceKey}/${c.comicIdValue}") }
             c.cleanup()
@@ -80,6 +99,73 @@ class Release203RegressionTest {
         rule.onNodeWithText("全选本地内容").assertIsDisplayed()
         rule.onNodeWithText("删除选中（0）").assertIsDisplayed()
         assertTrue("选择与取消选择不能删除本地文件", c.exists())
+        rule.onNodeWithTag("manga_detail_list").performScrollToNode(hasTestTag("copy_catalog_report"))
+        rule.onNodeWithTag("copy_catalog_report").performClick()
+        rule.waitUntil(10_000) {
+            rule.onAllNodesWithText("章节核对信息已复制", substring = true).fetchSemanticsNodes().isNotEmpty()
+        }
+        rule.runOnIdle {
+            val clipboard = rule.activity.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
+                as android.content.ClipboardManager
+            val report = JSONObject(clipboard.primaryClip!!.getItemAt(0).text.toString())
+            assertTrue(report.getString("comic_id") == c.comicIdValue)
+            assertTrue(report.getJSONArray("chapters").length() == 2)
+            assertTrue(!report.has("cover") && !report.has("images"))
+        }
+    }
+
+    @Test fun updatePreviewCanBeExpandedAndCollapsedFromLocalDetail() {
+        connect()
+        val c = SelfTestComic().also { comic = it; it.create() }
+        updateFixtureInstalled = true
+        execUpdateFixture("""
+            import server.manga_api as _qa_api
+            _qa_api._qa_original_update_check = _qa_api._manga_check_one
+            def _qa_update_check(source, comic_id, force_refresh=False):
+                if comic_id == '${c.comicIdValue}':
+                    return {'ok': True, 'has_update': True, 'missing_count': 1,
+                            'latest': '第42话', 'missing': [{'id': 'qa-new-42', 'name': '第42话'}]}
+                return _qa_api._qa_original_update_check(source, comic_id, force_refresh=force_refresh)
+            _qa_api._manga_check_one = _qa_update_check
+        """.trimIndent())
+        rule.openCachedShelf()
+        val tag = "manga_cached:${c.sourceKey}:${c.comicIdValue}"
+        rule.waitUntil(60_000) { rule.onAllNodesWithTag(tag).fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithTag(tag).performClick()
+        rule.waitUntil(30_000) { rule.onAllNodesWithTag("manga_detail_list").fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithTag("manga_detail_list").performScrollToNode(hasTestTag("check_update"))
+        rule.onNodeWithTag("check_update").performClick()
+        rule.waitUntil(30_000) { rule.onAllNodesWithTag("update_preview").fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithTag("manga_detail_list").performScrollToNode(hasTestTag("update_preview"))
+        rule.onNodeWithTag("update_preview").performClick()
+        rule.onNodeWithText("第42话", substring = false).assertIsDisplayed()
+        rule.onNodeWithTag("update_preview").performClick()
+        assertTrue(rule.onAllNodesWithText("第42话", substring = false).fetchSemanticsNodes().isEmpty())
+        rule.onNodeWithText("下载缺失章节（1）").assertIsDisplayed()
+    }
+
+    @Test fun chapterFinderOpensChosenChapterInsteadOfPreviousProgress() {
+        connect()
+        val c = SelfTestComic(resumeAtChapter = 1).also { comic = it; it.create() }
+        rule.openCachedShelf()
+        val tag = "manga_cached:${c.sourceKey}:${c.comicIdValue}"
+        rule.waitUntil(60_000) { rule.onAllNodesWithTag(tag).fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithTag(tag).performClick()
+        rule.waitUntil(30_000) { rule.onAllNodesWithTag("manga_detail_list").fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithTag("manga_detail_list").performScrollToNode(hasTestTag("open_chapter_finder"))
+        rule.onNodeWithTag("open_chapter_finder").performClick()
+        rule.onNodeWithTag("chapter_finder_query").performTextInput("2")
+        rule.onNodeWithTag("find_chapter_${SelfTestComic.CH2_ID}").performClick()
+        rule.waitUntil(30_000) { rule.onAllNodesWithTag("manga_pages").fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithTag("manga_pages").performTouchInput {
+            click(androidx.compose.ui.geometry.Offset(width / 2f, height / 2f))
+        }
+        rule.waitUntil(20_000) {
+            rule.onAllNodesWithTag("reader_progress_label").fetchSemanticsNodes()
+                .any { it.config.toString().contains("2 / 2 · 1/1页") }
+        }
+        rule.onNodeWithText("${SelfTestComic.TITLE} · ${SelfTestComic.CH2_NAME}", substring = true)
+            .assertIsDisplayed()
     }
 
     @Test fun exploreSourcesScrollPastDuplicateBundledNovelSource() {

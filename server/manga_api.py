@@ -40,6 +40,7 @@ from server.state import (
     _CHAPTER_IMAGES_CACHE, _CHAPTER_IMAGES_TTL, _known_chapter_pages,
     _local_cover_path, _save_cover_bytes, _manga_total_chapters,
     _manga_cached_chapters,
+    _manga_newer_checked_catalog,
     manga_identity_source, manga_source_aliases,
     _manga_stats_get, _manga_stats_request, _manga_stats_note_change,
     _invalidate_manga_download_scan,
@@ -1617,6 +1618,14 @@ def api_manga_detail(source, comic_id):
                 _cached = json.load(_f)
             _cdata = _cached.get("data") or {}
             if _has_detail_content(_cdata):
+                if not _local_catalog:
+                    checked = _manga_newer_checked_catalog(
+                        source, comic_id, float(_cached.get("ts") or 0))
+                    if checked:
+                        _cdata = dict(_cdata)
+                        _cdata["chapters"] = list(checked.get("chapters") or [])
+                        _cdata["volumes"] = list(checked.get("volumes") or [])
+                        _cdata.pop("resume", None)
                 _age = time.time() - _cached.get("ts", 0)
                 if _age < MANGA_DETAIL_CACHE_TTL:
                     _cdata = dict(_cdata)

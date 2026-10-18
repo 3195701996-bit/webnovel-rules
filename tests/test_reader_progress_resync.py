@@ -118,9 +118,9 @@ def test_manga_restore_sets_ready_only_on_success():
 
 
 def test_manga_explicit_chapter_restores_page():
-    """显式点章进入时，同话要恢复章内页码（否则每次都从 P1 开始并写回 P1）"""
-    assert re.search(r"else if \(rec\.idx === chIdx0 && _pg > 1\) \{\s*\n\s*pg0 = _pg;",
-                     MANGA_READER), "显式章节未恢复同话页码"
+    """Legacy ch-only entries resume; explicit page choices must win over history."""
+    assert re.search(r"else if \(!params\.has\('pg'\) && rec\.idx === chIdx0 && _pg > 1\) \{\s*\n\s*pg0 = _pg;",
+                     MANGA_READER), "旧链接应恢复同话页码，但不能覆盖明确的页码选择"
     assert re.search(r"addEventListener\('online'", MANGA_READER), "缺少 online 补读"
 
 

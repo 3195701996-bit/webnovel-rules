@@ -2003,6 +2003,37 @@ def _manga_catalog_invalidate(source, comic_id):
         _manga_chapters_cache.pop(key, None)
 
 
+def _manga_save_checked_catalog(source, comic_id, chapters):
+    """Persist a verified chapter generation without marking old detail metadata fresh."""
+    from engine.manga.base import Chapter
+    episodes, volumes = _sort_split_chapters([
+        Chapter(id=str(row["id"]), name=str(row.get("name") or ""),
+                group=str(row.get("group") or ""))
+        for row in chapters if isinstance(row, dict) and row.get("id")])
+    if not episodes and not volumes:
+        return
+    timestamp = time.time()
+    atomic_write(os.path.join(MANGA_CACHE_DIR, source, comic_id, "_favorites_catalog.json"),
+                 {"ts": timestamp, "data": {"chapters": episodes, "volumes": volumes}})
+    _manga_catalog_publish(source, comic_id, volumes + episodes, timestamp)
+
+
+def _manga_newer_checked_catalog(source, comic_id, timestamp):
+    candidates = []
+    for alias in manga_source_aliases(source):
+        try:
+            with open(os.path.join(MANGA_CACHE_DIR, alias, comic_id,
+                                   "_favorites_catalog.json"), encoding="utf-8") as stream:
+                snapshot = json.load(stream)
+            stamp = float(snapshot.get("ts") or 0)
+            data = snapshot.get("data") or {}
+            if stamp > timestamp and (data.get("chapters") or data.get("volumes")):
+                candidates.append((stamp, data))
+        except (OSError, ValueError, TypeError, AttributeError):
+            continue
+    return max(candidates, key=lambda row: row[0])[1] if candidates else None
+
+
 def _manga_cached_chapters(source, comic_id):
     """详情缓存里的章节列表 `[{id, name, group}, …]`；没有缓存返回 []。
 
@@ -3312,7 +3343,8 @@ def _manga_check_one(source, comic_id, force_refresh=False):
             # R57: 统一网页渲染(copy4000 域, 稳定); copymanga 与 web 同库
             d = ad.comic_info(comic_id)
             _update_time = str(getattr(d, "update_time", "") or "")
-            cur_chapters = [{"id": c.id, "name": c.name} for c in d.chapters]
+            cur_chapters = [{"id": c.id, "name": c.name,
+                             "group": getattr(c, "group", "")} for c in d.chapters]
             if source in ("copymanga", "copymanga_web"):
                 _web_chlist_set("copymanga_web", comic_id, cur_chapters)
         # 卷是有效阅读单元，更新比较也必须保留；未读数按真实目录身份差集计算。
@@ -3335,6 +3367,19 @@ def _manga_check_one(source, comic_id, force_refresh=False):
                     downloaded |= set(_scan_downloaded_chapters(_alt, comic_id))
         # 缺失 = 源站全部 - 已下载
         missing = [c for c in cur_chapters if c["id"] not in downloaded]
+        # The download manifest is the pre-refresh baseline. Never infer "new
+        # episodes" just from missing files or merge distinct IDs by title.
+        previous = []
+        for alias in manga_source_aliases(source):
+            try:
+                with open(os.path.join(MANGA_DOWNLOADS_DIR, alias, comic_id,
+                                       "_info.json"), encoding="utf-8") as stream:
+                    previous.extend(json.load(stream).get("chapters") or [])
+            except (OSError, ValueError, TypeError, AttributeError):
+                pass
+        from engine.manga.catalog_diff import compare_catalogs
+        catalog_diff = compare_catalogs(cur_chapters, previous, missing,
+                                        name_key=_manga_chapter_name_key)
         # 已下载过（说明下载过本漫画）但当前源无章节 → 无记录
         has_dl = bool(downloaded)
         # **下载中/排队中的漫画不算"有更新"**：缺失章节是任务还没下完，
@@ -3349,6 +3394,13 @@ def _manga_check_one(source, comic_id, force_refresh=False):
             _integrity = _integrity_summary(source, comic_id)
         except Exception:
             _integrity = None
+        catalog_warning = ""
+        if force_refresh:
+            try:
+                _manga_save_checked_catalog(source, comic_id, cur_chapters)
+            except Exception as exc:
+                print(f"[manga-check] 目录快照保存失败: {type(exc).__name__}", flush=True)
+                catalog_warning = "源站检查成功，但新目录未能保存，请检查存储后重试。"
         return {
             "ok": True,
             "has_update": bool(missing) and has_dl and not _dl_active,
@@ -3357,6 +3409,8 @@ def _manga_check_one(source, comic_id, force_refresh=False):
             "new_total": len(cur_chapters),
             "missing_count": len(missing),
             "missing": missing[:200],
+            "catalog_diff": catalog_diff,
+            "catalog_warning": catalog_warning,
             # 收藏更新需要按“实际已读章节集合”计算未读，不能只返回本地缺失数。
             # 公共响应保留有界列表；内部追更 worker 必须获得完整目录，不能让
             # 长篇在 5000 话处静默截断收藏快照和未读计数。

@@ -206,6 +206,32 @@ def test_legacy_chapter_route_marks_offline_images_local_only(
         f"/api/manga/{SRC}/{CID}/chapter/ch1/img/0?catalog=local"]
 
 
+def test_checked_update_replaces_online_catalog_not_detail_metadata_or_local_catalog(
+        client, library_comic, monkeypatch):
+    import time
+    import server.state as state
+    monkeypatch.setattr(state, "_manga_chapters_cache", {})
+    mapi, _root, _dl, cache = library_comic
+    full = cache / SRC / CID / "_info_full.json"
+    full.parent.mkdir(parents=True, exist_ok=True)
+    original = json.dumps({"ts": time.time() - 5, "data": {
+        "source": SRC, "comic_id": CID, "title": "保留原详情",
+        "description": "不应丢失的简介", "cover": "https://example.test/cover.jpg",
+        "chapters": [{"id": "ch1", "name": "第01話"}]}})
+    full.write_text(original, encoding="utf-8")
+    monkeypatch.setattr(mapi, "_downloaded_ids_for_chapters", lambda *_: ["ch1"])
+    state._manga_save_checked_catalog(SRC, CID, [
+        {"id": "ch1", "name": "第01話"}, {"id": "ch2", "name": "第02話"}])
+    payload = client.get(f"/api/manga/{SRC}/{CID}").get_json()
+    assert [row["id"] for row in payload["chapters"]] == ["ch1", "ch2"]
+    assert payload["description"] == "不应丢失的简介"
+    assert payload["title"] == "保留原详情"
+    assert payload["cover"] == "https://example.test/cover.jpg"
+    assert full.read_text(encoding="utf-8") == original, "章节检查不得续期旧详情缓存"
+    local = client.get(f"/api/manga/{SRC}/{CID}?catalog=local").get_json()
+    assert [row["id"] for row in local["chapters"]] == ["ch1"]
+
+
 def test_cached_catalog_keeps_volumes_before_chapters(tmp_path, monkeypatch):
     """书库续读/未读目录缓存必须计入整卷，并保持统一的卷优先顺序。"""
     import server.state as st

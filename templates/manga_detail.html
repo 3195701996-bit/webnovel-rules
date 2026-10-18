@@ -8,9 +8,10 @@
 <link rel="stylesheet" href="/static/css/style.css">
 <style>
 /* ── 详情页：封面/继续阅读/目录的阅读优先层级 ── */
-.detail-wrap { max-width: 960px; margin: 0 auto; }
+.detail-wrap { max-width: 960px; margin: 0 auto; padding-top:8px; }
+.detail-nav { padding-bottom:4px; }
 /* 1. 顶部导航栏 */
-.manga-topbar { display:flex; align-items:center; gap:10px; padding:10px 4px; }
+.manga-topbar { display:flex; align-items:center; gap:10px; padding:10px 4px; position:relative; z-index:2001; }
 .manga-topbar .back { font-size:1.3rem; cursor:pointer; background:none; border:none; color:var(--text); padding:6px 10px; border-radius:8px; }
 .manga-topbar .back:hover { background:var(--bg-2); }
 .manga-topbar .sp { flex:1; }
@@ -27,7 +28,7 @@
 .op-btn { display:flex; align-items:center; gap:6px; padding:10px 16px; border-radius:10px; border:1px solid var(--border); background:var(--bg-elevated); cursor:pointer; font-size:.9rem; font-weight:600; color:var(--text-secondary); transition:background .15s,border-color .15s,color .15s; }
 .op-btn:hover { filter:brightness(1.1); transform:translateY(-1px); }
 .op-read { background:var(--accent); border-color:var(--accent); color:var(--on-accent); }
-.op-like:hover, .op-cmt:hover { border-color:var(--accent-2); color:var(--text-primary); }
+.op-like:hover { border-color:var(--accent-2); color:var(--text-primary); }
 .op-fav { border-color:color-mix(in srgb,var(--accent) 45%,transparent); color:var(--accent); }
 .op-btn:disabled { opacity:.62; cursor:wait; }
 /* 4. 功能按钮区（下载/继续阅读） */
@@ -44,10 +45,16 @@
 #local-catalog-note[hidden], #catalog-empty[hidden] { display:none !important; }
 #dl-btn[hidden], .batch-dl[hidden] { display:none !important; }
 #update-preview [hidden] { display:none !important; }
+#cover[hidden], #metadata-section[hidden] { display:none !important; }
+#metadata-section .info-item[hidden] { display:none !important; }
 #update-preview { padding:14px; border:1px solid var(--border); border-radius:12px; background:var(--bg-elevated); }
 #update-preview p { margin:10px 0; font-size:.85rem; line-height:1.6; overflow-wrap:anywhere; }
 #update-preview summary { cursor:pointer; color:var(--accent); font-size:.85rem; }
 #update-preview ol { padding-inline-start:24px; margin:10px 0; font-size:.85rem; line-height:1.8; overflow-wrap:anywhere; }
+#chapter-finder { margin:12px 0; }
+#chapter-finder input { display:block; width:100%; box-sizing:border-box; margin:8px 0; padding:10px 12px; border:1px solid var(--border); border-radius:10px; background:var(--bg-elevated); color:var(--text-primary); }
+#chapter-finder p { font-size:.82rem; color:var(--text-secondary); }
+.finder-results { display:flex; flex-direction:column; gap:6px; max-height:320px; overflow:auto; }
 /* 6. 信息区（标签+内容框） */
 .info-sec { background:var(--bg-elevated); border:1px solid var(--border); border-radius:14px; padding:16px; margin-bottom:16px; }
 .info-sec .sec-title { font-size:.95rem; font-weight:700; margin-bottom:10px; }
@@ -143,10 +150,10 @@
 <div id="loading-hint" class="loading-hint">⏳ 正在加载漫画详情…</div>
 <div id="mid-loading" class="mid-loading">
   <div class="ring"></div>
-  <div class="pct" id="mid-pct">0%</div>
+  <div class="pct" id="mid-pct">加载中</div>
   <div class="hint" id="mid-hint">正在加载漫画详情…</div>
 </div>
-<div class="container">
+<div class="container detail-nav">
   <!-- 1. 顶部导航栏（始终可点，不受加载遮罩影响） -->
   <div class="manga-topbar">
     <button class="back" onclick="history.back()">←</button>
@@ -190,7 +197,6 @@
     <button class="op-btn op-read" id="start-btn" onclick="startRead()">▶ 开始</button>
     <button class="op-btn op-like" id="like-btn">♥ <span id="like-num"></span></button>
     <button class="op-btn op-fav" onclick="toggleFav()" disabled>🔖 读取收藏状态…</button>
-    <button class="op-btn op-cmt" onclick="toast('评论功能开发中')">💬 评</button>
   </div>
 
   <!-- 4. 功能按钮区（下载/继续阅读） -->
@@ -217,7 +223,7 @@
   </div>
 
   <!-- 6. 漫画信息区（作者/标签/浏览量/更新时间） -->
-  <div class="info-sec">
+  <div class="info-sec" id="metadata-section">
     <div class="sec-title">信息</div>
     <div id="info-author" class="info-item"></div>
     <div id="info-tags" class="info-item"></div>
@@ -233,6 +239,7 @@
       <div class="sec-title">章节 <span id="chap-count" style="font-weight:400;color:var(--text-dim);font-size:.8rem;"></span></div>
       <button class="batch-dl" onclick="downloadAll()">↓ 批量下载</button>
     </div>
+    <div id="chapter-finder"></div>
     <div class="chap-list" id="chapters"></div>
     <div class="catalog-empty" id="catalog-empty" hidden></div>
   </div>
@@ -242,6 +249,7 @@
 <script src="/static/js/common.js"></script>
 <script src="/static/js/manga_local_manager.js"></script>
 <script src="/static/js/manga_update_preview.js"></script>
+<script src="/static/js/manga_chapter_tools.js"></script>
 <script>
 const params = new URLSearchParams(location.search);
 const SOURCE = params.get('source');
@@ -301,9 +309,7 @@ function updateCatalogActions(unitCount, title) {
     : '';
 }
 
-let loadingTimer = null;
 function setLoading(on) {
-  clearInterval(loadingTimer);
   document.getElementById('loading-bar-wrap').classList.toggle('show', on);
   document.getElementById('loading-hint').classList.toggle('show', on);
   const mid = document.getElementById('mid-loading');
@@ -312,17 +318,10 @@ function setLoading(on) {
   if (sk) sk.style.display = on ? '' : 'none';
   if (on) {
     mid.classList.add('show');
-    let pct = 3;
-    document.getElementById('mid-pct').textContent = pct + '%';
+    document.getElementById('mid-pct').textContent = '加载中';
     document.getElementById('mid-hint').textContent = '正在加载漫画详情…';
-    // 模拟递增进度（真实 fetch 完成后跳到 100%）
-    loadingTimer = setInterval(() => {
-      pct = Math.min(92, pct + Math.max(1, Math.round((92 - pct) * 0.08)));
-      document.getElementById('mid-pct').textContent = pct + '%';
-    }, 300);
   } else {
     mid.classList.remove('show');
-    document.getElementById('mid-pct').textContent = '100%';
     if (wrap) wrap.classList.remove('loading-fade');
   }
   if (wrap) wrap.classList.toggle('loading-fade', on);
@@ -460,20 +459,24 @@ async function load() {
     }
     $('#desc').textContent = detail.description || '';
     const cover = $('#cover');
-    cover.src = detail.cover || '';
-    cover.onerror = () => { cover.style.display = 'none'; };
+    cover.hidden = !detail.cover;
+    cover.onerror = () => { cover.hidden = true; };
+    if (detail.cover) cover.src = detail.cover; else cover.removeAttribute('src');
     $('#like-num').textContent = detail.likes || '';
     $('#like-btn').style.display = detail.likes ? '' : 'none';
     // 信息区
-    $('#info-author').innerHTML = `<span class="info-label lbl-author">作者</span><span class="info-val">${esc(detail.author || '未知')}</span>`;
+    renderOptionalInfo($('#info-author'), detail.author, '作者', 'lbl-author');
     const tags = (detail.tags || []).map(t => `<span class="info-val clickable" data-tag="${esc(t)}">${esc(t)}</span>`).join('');
     $('#info-tags').innerHTML = `<span class="info-label lbl-tag">标签</span>${tags || '<span class="info-val">无</span>'}`;
+    $('#info-tags').hidden = !tags;
     // B1: 不再用 onclick 内联拼接（esc 的 &#39; 会被 HTML 解码回 ' 导致转义失效），
     // 改 data-tag + 事件绑定，dataset 读出的是未转义原值，searchTag 内自行 encodeURIComponent
     $('#info-tags').querySelectorAll('.info-val.clickable').forEach(el =>
       el.addEventListener('click', () => searchTag(el.dataset.tag)));
     renderOptionalInfo($('#info-views'), detail.views, '浏览量', 'lbl-views');
     renderOptionalInfo($('#info-time'), detail.update_time, '更新时间', 'lbl-time');
+    $('#metadata-section').hidden = ![detail.author, tags, detail.views, detail.update_time]
+      .some(value => String(value || '').trim());
     // 章节（话）
     const chs = detail.chapters || [];
     const vols = detail.volumes || [];
@@ -537,6 +540,7 @@ async function load() {
       ...chs.map((item, sourceIndex) => ({item, sourceIndex, kind:'chapter'})),
     ];
     chapters.push(...units.map(entry => entry.item));
+    mangaChapterTools.mount(document.getElementById('chapter-finder'), chapters, openReader);
     if (readingUnits.length === 0 && !LOCAL_CATALOG) {
       const empty = document.getElementById('catalog-empty');
       empty.hidden = false;
@@ -628,10 +632,13 @@ async function continueRead() {
   openReader(idx, pg);
 }
 function openReader(idx, pg) {
+  const chapter = chapters[idx];
+  if (!chapter || !chapter.id) return;
   location.href = '/manga_reader?source=' + SOURCE + '&cid=' + encodeURIComponent(CID)
     + '&ch=' + idx + '&title=' + encodeURIComponent(detail.title)
+    + '&chapter_id=' + encodeURIComponent(chapter.id)
     + (LOCAL_CATALOG ? '&catalog=local' : '')
-    + (pg > 1 ? '&pg=' + pg : '');
+    + '&pg=' + (pg > 1 ? pg : 1);
 }
 async function toggleFav() {
   const btn = document.querySelector('.op-fav');
@@ -678,10 +685,21 @@ async function loadFavState() {
   }
 }
 function showMore() {
-  const menu = ['复制标题', '复制链接'];
-  const pick = prompt('更多操作：\n1. 复制标题\n2. 复制链接');
+  if (!detail) return;
+  const pick = prompt('更多操作：\n1. 复制标题\n2. 复制链接\n3. 导出章节核对信息（含作品名和章节 ID，无图片）');
   if (pick === '1') { navigator.clipboard.writeText(detail.title); alert('已复制'); }
   if (pick === '2') { navigator.clipboard.writeText(location.href); alert('已复制'); }
+  if (pick === '3') {
+    const report = mangaChapterTools.report(detail, SOURCE, CID, LOCAL_CATALOG);
+    const url = URL.createObjectURL(new Blob([JSON.stringify(report,null,2)], {type:'application/json'}));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'comic-catalog-check.json';
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),1000);
+  }
 }
 function searchTag(t) { location.href = '/manga?q=' + encodeURIComponent(t); }
 function downloadAll() {

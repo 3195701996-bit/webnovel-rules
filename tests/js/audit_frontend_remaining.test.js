@@ -695,6 +695,7 @@ let _urlChExplicit = false;
 let settings = {mode:'scroll'};
 let window = {_curImgs: [], _nextChImgs: null, scrollY: 0, innerHeight: 800};
 const SOURCE = 'src', CID = 'cid', TITLE = 'T';
+const params = new URLSearchParams('');
 let _jumped = [];
 function jumpChapter(i) { _jumped.push(i); chIdx = i; }
 let _mpSent = [];
@@ -760,6 +761,7 @@ vm.runInContext(MP_DECL + '\n' + MP_RESTORE + '\n' + MP_PAGE + '\n' + MP_BEACON 
      get pg0(){return pg0;}, set pg0(v){pg0=v;},
      get fallback(){return _fallbackChIdx;}, set fallback(v){_fallbackChIdx=v;},
      get explicit(){return _urlChExplicit;}, set explicit(v){_urlChExplicit=v;},
+     set pageExplicit(v){if(v) params.set('pg','1'); else params.delete('pg');},
      setChapters(a){chapters=a;}, jumped(){return _jumped;}, clearJumped(){_jumped=[];},
      // 0.64.0：写进度前要求"当前渲染的章节 == 要写的章节"，沙箱要能设置它
      get curChId(){return _curChId;}, set curChId(v){_curChId=v;},
@@ -815,6 +817,14 @@ async function testMangaProgressSync() {
   await MP.restoreProgress(0);
   assert.strictEqual(MP.pg0, 37, '显式点进同一话时应恢复章内页码，而不是从 P1 开始');
   assert.strictEqual(MP.chIdx0, 5, '显式章节不得被历史改写');
+
+  // New entry links explicitly request page 1; unlike legacy ch-only links,
+  // a deliberate first-page choice must not inherit the old page37 position.
+  MP.pageExplicit = true; MP.pg0 = 1;
+  mpQueue = [{ json: { history: [{ source: 'src', comic_id: 'cid', idx: 5, pos: '第6話 P37' }] } }];
+  await MP.restoreProgress(0);
+  assert.strictEqual(MP.pg0, 1, '显式页码优先于同话历史页码');
+  MP.pageExplicit = false;
 
   // (d) 显式点章到别的话：不得套用其它话的页码
   MP.ready = false; MP.explicit = true; MP.chIdx0 = 2; MP.pg0 = 1;

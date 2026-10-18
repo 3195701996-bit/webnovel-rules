@@ -207,7 +207,8 @@ const TITLE = params.get('title') || '';
 // → 优先; 只有完全不带 ch 参数(如书库直开)才恢复上次位置。
 // 修复: 原实现 ch=0 被当"待恢复", 点"第 01 话"会跳到历史章节(如第02话)
 let chIdx0 = parseInt(params.get('ch') || '0', 10);
-const _urlChExplicit = params.has('ch');
+const _entryChapterId = params.get('chapter_id') || '';
+const _urlChExplicit = params.has('ch') || !!_entryChapterId;
 // 页码进度（详情页"继续阅读"传入）：首次进入该章节时滚动到对应页
 let pg0 = parseInt(params.get('pg') || '0', 10);
 
@@ -238,14 +239,14 @@ async function restoreProgress(attempt = 0) {
       if (!_urlChExplicit) {
         chIdx0 = _resume.index;
         if (_resume.page > 1) pg0 = _resume.page;
-      } else if (_resume.index === chIdx0 && _resume.page > 1) {
+      } else if (!params.has('pg') && _resume.index === chIdx0 && _resume.page > 1) {
         pg0 = _resume.page;
       }
-      if (!_resume.exact) _resumeInexact = true;
+      if (!_resume.exact && !_urlChExplicit) _resumeInexact = true;
       _histReady = true;
       return;
     }
-    if (_resume && _resume.record_label && (_resume.index < 0)) {
+    if (!_urlChExplicit && _resume && _resume.record_label && (_resume.index < 0)) {
       // 有记录但当前目录里找不到那一话：如实提示，且不自动写回
       _resumeInexact = true;
       _histReady = true;
@@ -272,7 +273,7 @@ async function restoreProgress(attempt = 0) {
           chIdx0 = rec.idx;               // 无显式章节：章节+页码都用历史
           if (_pg > 1) pg0 = _pg;
         }
-      } else if (rec.idx === chIdx0 && _pg > 1) {
+      } else if (!params.has('pg') && rec.idx === chIdx0 && _pg > 1) {
         pg0 = _pg;                        // 显式章节与历史同话：只恢复页码
       }
     }
@@ -589,7 +590,7 @@ async function loadDetail() {
       await restoreProgress();
       setReadingCatalog(d);
       if (!chapters.length) { $('#stage').innerHTML = '<div class="chap-banner">无章节</div>'; return; }
-      _fallbackChIdx = Math.min(chIdx0, chapters.length - 1);
+      _fallbackChIdx = resolveEntryChapter(chapters, '', chIdx0);
       gotoChapter(_fallbackChIdx, false);
     } else {
       // 显式章节（书库/详情带 ?ch=N 进入）**同样要读历史**：
@@ -602,12 +603,25 @@ async function loadDetail() {
       await restoreProgress();
       setReadingCatalog(d);
       if (!chapters.length) { $('#stage').innerHTML = '<div class="chap-banner">无章节</div>'; return; }
-      _fallbackChIdx = Math.min(chIdx0, chapters.length - 1);
+      const selected = resolveEntryChapter(chapters, _entryChapterId, chIdx0);
+      if (selected < 0) {
+        $('#stage').innerHTML = '<div class="chap-banner">所选章节已不在当前目录中，请返回刷新目录后重新选择；没有打开其他章节。</div>';
+        return;
+      }
+      chIdx0 = selected;
+      _fallbackChIdx = selected;
       gotoChapter(_fallbackChIdx, true);
     }
   } catch (e) {
     $('#stage').innerHTML = '<div class="chap-banner">加载失败: ' + esc(e.message || e) + '</div>';
   }
+}
+
+function resolveEntryChapter(catalog, chapterId, fallbackIndex) {
+  if (chapterId) return catalog.findIndex(row => String(row.id) === String(chapterId));
+  if (!catalog.length) return -1;
+  const index = Number.isFinite(fallbackIndex) ? Math.trunc(fallbackIndex) : 0;
+  return Math.max(0, Math.min(index, catalog.length - 1));
 }
 
 function detailApiUrl() {

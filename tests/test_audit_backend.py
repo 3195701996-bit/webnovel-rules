@@ -631,6 +631,10 @@ def test_forced_copy_update_bypasses_short_catalog_cache(monkeypatch, client, tm
     monkeypatch.setenv("WR_PROFILE", "mobile")
     monkeypatch.setattr(state, "MANGA_DOWNLOADS_DIR", str(tmp_path / "downloads"))
     monkeypatch.setattr(state, "MANGA_CACHE_DIR", str(tmp_path / "cache"))
+    manifest = tmp_path / "downloads" / "copymanga" / "fixture-series" / "_info.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(json.dumps({"chapters": [
+        {"id": "old-41", "name": "第41话"}]}), encoding="utf-8")
     monkeypatch.setattr(state, "_web_chlist_get", lambda *_: [
         {"id": "old-41", "name": "第41话"}])
     monkeypatch.setattr(state, "_web_chlist_set", lambda *_: None)
@@ -647,6 +651,9 @@ def test_forced_copy_update_bypasses_short_catalog_cache(monkeypatch, client, tm
     assert checked["ok"]
     assert checked["latest"] == "第42话"
     assert checked["missing_count"] == 1
+    assert checked["catalog_diff"]["baseline_available"]
+    assert checked["catalog_diff"]["added_missing_count"] == 1
+    assert checked["catalog_diff"]["existing_missing_count"] == 0
 
 
 def test_favorite_update_keeps_full_catalog_beyond_public_limit(

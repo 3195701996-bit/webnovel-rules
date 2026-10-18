@@ -280,6 +280,7 @@ fun MangaDetailScreen(
     var confirmDelete by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf(false) }
     var checking by remember { mutableStateOf(false) }
+    var showChapterFinder by remember { mutableStateOf(false) }
     var update by remember { mutableStateOf<MangaUpdateCheck?>(null) }
     var favoritedState by remember(source, comicId) { mutableStateOf<Boolean?>(null) }
     var favoriteBusy by remember(source, comicId) { mutableStateOf(false) }
@@ -773,6 +774,15 @@ fun MangaDetailScreen(
                                     modifier = Modifier.padding(horizontal = WnSpace.lg),
                                 )
                             }
+                            if (u.ok && u.catalogSummary.isNotBlank()) {
+                                Text(u.catalogSummary, style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.padding(horizontal = WnSpace.lg))
+                            }
+                            if (u.ok && u.catalogWarning.isNotBlank()) {
+                                Text(u.catalogWarning, style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.padding(horizontal = WnSpace.lg))
+                            }
                             if (u.ok && u.missingNames.isNotEmpty()) {
                                 var previewExpanded by remember(u) { mutableStateOf(false) }
                                 TextButton(
@@ -874,6 +884,27 @@ fun MangaDetailScreen(
                                 }
                             }
                         }
+                        if (d.readingChapters.isNotEmpty()) {
+                            TextButton(onClick = { showChapterFinder = true },
+                                modifier = Modifier.padding(horizontal = WnSpace.lg)
+                                    .testTag("open_chapter_finder")) { Text("查找章节") }
+                        }
+                        TextButton(
+                            onClick = {
+                                runCatching {
+                                    val clipboard = ctx.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
+                                        as android.content.ClipboardManager
+                                    clipboard.setPrimaryClip(android.content.ClipData.newPlainText(
+                                        "漫画章节核对", mangaCatalogReport(d, update)))
+                                }.onSuccess {
+                                    actionMsg = "章节核对信息已复制（含作品名与章节 ID，无图片）；请确认后分享。"
+                                }.onFailure {
+                                    actionMsg = "复制章节核对信息失败，请重试。"
+                                }
+                            },
+                            modifier = Modifier.padding(horizontal = WnSpace.lg)
+                                .testTag("copy_catalog_report"),
+                        ) { Text("复制章节核对信息") }
                         actionMsg?.let {
                             Spacer(Modifier.height(6.dp))
                             Text(it, style = MaterialTheme.typography.labelMedium,
@@ -1135,6 +1166,15 @@ fun MangaDetailScreen(
                     }
                 }
             }
+        }
+    }
+    if (showChapterFinder) {
+        detail?.let { d ->
+            MangaChapterFinder(d.readingChapters, onDismiss = { showChapterFinder = false },
+                onSelect = { index, chapter ->
+                    showChapterFinder = false
+                    onRead(index, 1, true, "", chapter.id, chapter.label)
+                })
         }
     }
     // 删除选中话/整卷的确认弹窗：写清删什么、不删什么
