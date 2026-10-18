@@ -1010,6 +1010,14 @@ def test_tasks_exposes_pending_count_separately_from_current_batch(monkeypatch, 
     assert task["progress"]["done"] == 1 and task["progress"]["total"] == 3
 
 
+def test_resume_waits_for_old_worker_before_merging_pending_chapters(monkeypatch, client):
+    import server.manga_api as mapi
+    monkeypatch.setattr(mapi._manga_dl, "resume_result", lambda key: "stopping")
+    response = client.post("/api/manga/download/resume?source=copymanga&cid=demo")
+    assert response.status_code == 409
+    assert "待补章节已保留" in response.get_json()["error"]
+
+
 def test_favorite_unread_count_uses_read_chapter_set_not_last_index(
         monkeypatch, client, tmp_path):
     import server.manga_api as mapi

@@ -200,7 +200,7 @@ internal fun DownloadsScreen(
                                 org.json.JSONObject(r.body).optInt("skipped_busy")
                             }.getOrDefault(0)
                             actionMsg = if (r.ok) {
-                                "已创建更新下载任务：$n 部（见上方队列）" +
+                                "已提交更新下载：$n 部（见上方队列）" +
                                     (if (favoriteFailures > 0)
                                         "；$favoriteFailures 部自动收藏失败，请手动收藏" else "") +
                                     (if (skippedBusy > 0)

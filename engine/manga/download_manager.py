@@ -710,7 +710,7 @@ class DownloadManager:
     def resume_result(self, key):
         """Resume atomically and classify refusal for the HTTP boundary.
 
-        Return ``resumed``, ``deleting``, ``no_task`` or ``not_resumable``. The
+        Return ``resumed``, ``deleting``, ``stopping``, ``no_task`` or ``not_resumable``. The
         classification and state transition share the same lock so a concurrent
         media-delete reservation cannot be confused with an absent task.
         """
@@ -720,6 +720,11 @@ class DownloadManager:
             t = self._tasks.get(key)
             if not t:
                 return "no_task"
+            if key in self._worker_alive and (t.get("paused") or
+                    t.get("status") in ("paused", "stopped", "cancel", "error")):
+                # 旧 worker 仍持有章节快照，不能提前清掉暂停并合并待补选择。
+                # 否则旧快照完成时会误报整项 done，刚合并的新章不会执行。
+                return "stopping"
             if t.get("status") in ("running", "queued"):
                 return "resumed"
             # cancel：用户点了取消但 worker 还没到检查点（旧 worker 存活时

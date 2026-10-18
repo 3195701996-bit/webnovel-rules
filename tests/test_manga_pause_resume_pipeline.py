@@ -156,6 +156,9 @@ def test_running_download_accepts_new_identity_once_and_preserves_it_after_resta
         assert original._active == 1
         if restart:
             assert original.pause(key)
+            assert original.resume_result(key) == "stopping"
+            assert original.status(key)["paused"] is True
+            assert original.status(key)["pending_chapters"] == ["ch42"]
     finally:
         release.set()
     if restart:

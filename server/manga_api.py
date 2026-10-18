@@ -3111,6 +3111,8 @@ def api_manga_download_resume():
     outcome = _manga_dl.resume_result(key)
     if outcome == "deleting":
         return _err_json("任务正在删除本地内容，暂时无法继续下载", 409)
+    if outcome == "stopping":
+        return _err_json("下载线程正在暂停或停止，请等待任务停稳后再继续；待补章节已保留", 409)
     if outcome == "no_task":
         return jsonify({"ok": True, "resumed": False, "reason": "no_task"})
     if outcome == "not_resumable":
