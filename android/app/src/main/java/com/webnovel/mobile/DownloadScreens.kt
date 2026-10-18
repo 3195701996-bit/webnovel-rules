@@ -196,10 +196,15 @@ internal fun DownloadsScreen(
                             val favoriteFailures = runCatching {
                                 org.json.JSONObject(r.body).optInt("favorite_failures")
                             }.getOrDefault(0)
+                            val skippedBusy = runCatching {
+                                org.json.JSONObject(r.body).optInt("skipped_busy")
+                            }.getOrDefault(0)
                             actionMsg = if (r.ok) {
                                 "已创建更新下载任务：$n 部（见上方队列）" +
-                                    if (favoriteFailures > 0)
-                                        "；$favoriteFailures 部自动收藏失败，请手动收藏" else ""
+                                    (if (favoriteFailures > 0)
+                                        "；$favoriteFailures 部自动收藏失败，请手动收藏" else "") +
+                                    (if (skippedBusy > 0)
+                                        "；$skippedBusy 部任务忙，未提交；请暂停并等待停稳后重试" else "")
                             } else "下载更新失败：HTTP ${r.code} ${r.body.take(80)}"
                             refresh()
                         }
@@ -397,6 +402,11 @@ private fun TaskCard(
                 Text("图片 ${t.imagesDone}/${t.imagesTotal}",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.outline)
+            }
+            if (t.isManga && t.pendingChapters > 0) {
+                Text("待补 ${t.pendingChapters} 章 · 当前批完成后继续",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary)
             }
             // P1-1：为什么停了 —— 服务端给的结构化原因（用户停的 / 系统停的服务 /
             // 进程被结束 / 任务出错），不显示"未知状态"让用户猜

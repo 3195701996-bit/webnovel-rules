@@ -74,7 +74,7 @@
       try {
         const result = await requestJSON(base + '/download', {method:'POST',
           body:{title:detail.title, cover:detail.cover || '', chapters:ids.slice()}, timeout:60000});
-        if (!result.ok || ['deleting', 'stopping'].includes(result.status))
+        if (!result.ok || ['deleting', 'stopping', 'selection_busy'].includes(result.status))
           throw new Error(result.error || '任务正在变更，请稍后重试');
         status.textContent = '已提交 ' + ids.length + ' 个章节，请到下载页查看进度。';
         ids = [];

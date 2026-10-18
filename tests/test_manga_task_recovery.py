@@ -194,6 +194,81 @@ def test_user_pause_is_persisted_and_survives_restart(tmp_path, status):
     assert "继续" in restored["stop_reason"]
 
 
+@pytest.mark.parametrize("status", ["queued", "paused"])
+@pytest.mark.parametrize(("previous", "incoming"), [
+    ([], ["v2"]), (["v1"], []), ([], []),
+])
+def test_queue_scope_union_never_narrows_full_download(tmp_path, status, previous, incoming):
+    manager, path = _manager(tmp_path, {})
+    task = _running_task()["copymanga:demo"]
+    task.update(status=status, chapters=previous, images_done=4)
+    manager._tasks["copymanga:demo"] = task
+    manager._kick_workers = lambda: None
+    key, _ = manager.start("copymanga", "demo", "演示", chapters=incoming)
+    assert manager.status(key)["chapters"] == []
+    assert manager.status(key)["images_done"] == 4
+    assert json.loads(path.read_text())[key]["chapters"] == []
+
+
+@pytest.mark.parametrize(("previous", "incoming", "expected"), [
+    (["v1"], ["v2"], "running"),
+    (["v1"], [], "selection_busy"),
+    ([], ["new-v2"], "running"),
+    (["v1", {"id": "v2"}], ["v2"], "running"),
+    ([], [], "running"),
+])
+def test_running_task_does_not_acknowledge_unaccepted_selection(
+        tmp_path, previous, incoming, expected):
+    manager, _ = _manager(tmp_path, {})
+    task = _running_task()["copymanga:demo"]
+    task.update(chapters=previous)
+    manager._tasks["copymanga:demo"] = task
+    manager._kick_workers = lambda: None
+    key, status = manager.start("copymanga", "demo", "演示", chapters=incoming)
+    assert status == expected
+    assert manager.status(key)["chapters"] == previous
+    assert manager.status(key)["images_done"] == 4
+    existing_ids = {c.get("id") if isinstance(c, dict) else c for c in previous}
+    incoming_ids = {c.get("id") if isinstance(c, dict) else c for c in incoming}
+    if incoming_ids - existing_ids:
+        assert manager.status(key)["pending_chapters"] == incoming
+
+
+@pytest.mark.parametrize("status", ["error", "stopped"])
+@pytest.mark.parametrize("incoming", [["v3"], []])
+def test_restarting_task_retains_previously_accepted_pending_selection(
+        tmp_path, status, incoming):
+    manager, path = _manager(tmp_path, {})
+    task = _running_task()["copymanga:demo"]
+    task.update(status=status, pending_chapters=["v2"])
+    manager._tasks["copymanga:demo"] = task
+    manager._kick_workers = lambda: None
+    key, _ = manager.start("copymanga", "demo", "演示", chapters=incoming)
+    saved = json.loads(path.read_text())[key]
+    if incoming:
+        assert saved["chapters"] == ["v3", "v2"]
+        assert saved["pending_chapters"] == []
+    else:
+        assert saved["chapters"] == [] and saved["pending_chapters"] == ["v2"]
+
+
+@pytest.mark.parametrize(("flag", "expected"), [("paused", "paused"), ("cancel", "stopped")])
+def test_finishing_batch_does_not_autostart_pending_after_user_pause_or_stop(
+        tmp_path, flag, expected):
+    manager, path = _manager(tmp_path, {})
+    task = _running_task()["copymanga:demo"]
+    task.update(pending_chapters=["v3"])
+    if flag == "paused":
+        task["paused"] = True
+    else:
+        task["status"] = "cancel"
+    manager._tasks["copymanga:demo"] = task
+    manager._mark_done("copymanga:demo", "done")
+    saved = json.loads(path.read_text())["copymanga:demo"]
+    assert saved["status"] == expected
+    assert saved["pending_chapters"] == ["v3"]
+
+
 def test_load_is_idempotent(tmp_path):
     """重复装载不得重复任务、也不得把已收敛的 stopped 再改一次"""
     m, _p = _manager(tmp_path, _running_task())

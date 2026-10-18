@@ -3065,6 +3065,8 @@ def api_manga_download_start(source, comic_id):
                                   cover=data.get("cover", ""))
     if status == "deleting":
         return _err_json("正在删除本地漫画内容，请稍后重新发起下载", 409)
+    if status in ("selection_busy", "stopping"):
+        return _err_json("当前下载仍在运行或停止中；请先暂停并等待任务停稳，再提交需要合并的章节", 409)
     try:
         _manga_auto_favorite(source, comic_id, title, data.get("cover", ""))
         return jsonify({"ok": True, "status": status, "favorited": True})
@@ -3219,6 +3221,7 @@ def api_manga_check_updates_download():
     """一键补充下载：下载最近一次批量检查发现有更新的漫画缺失章节"""
     started = 0
     favorite_failures = 0
+    skipped_busy = 0
     _now = time.time()
     # 与 _manga_check_worker 的增删同锁：避免读到半构造条目
     with _manga_check_lock:
@@ -3235,7 +3238,8 @@ def api_manga_check_updates_download():
         _invalidate_manga_download_scan(_info["source"], _cid)
         _, _status = _manga_dl.start(_info["source"], _cid,
                                      _info.get("title") or _cid, chapters=_miss)
-        if _status == "deleting":
+        if _status in ("deleting", "selection_busy", "stopping"):
+            skipped_busy += 1
             continue
         try:
             _manga_auto_favorite(_info["source"], _cid,
@@ -3247,6 +3251,7 @@ def api_manga_check_updates_download():
                   f"{type(e).__name__}", flush=True)
         started += 1
     return jsonify({"ok": True, "started": started,
+                    "skipped_busy": skipped_busy,
                     "favorite_failures": favorite_failures})
 
 
@@ -3266,6 +3271,8 @@ def api_manga_download_new(source, comic_id):
                                   cover=data.get("cover", ""))
     if status == "deleting":
         return _err_json("正在删除本地漫画内容，请稍后重新发起下载", 409)
+    if status in ("selection_busy", "stopping"):
+        return _err_json("当前下载仍在运行或停止中；请先暂停并等待任务停稳，再提交需要合并的章节", 409)
     try:
         _manga_auto_favorite(source, comic_id, title, data.get("cover", ""))
         return jsonify({"ok": True, "status": status, "favorited": True})

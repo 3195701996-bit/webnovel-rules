@@ -1254,6 +1254,7 @@ object EngineData {
         /** 图片级进度（漫画任务）：服务端 images_done/images_total */
         val imagesDone: Int = 0,
         val imagesTotal: Int = 0,
+        val pendingChapters: Int = 0,
     ) {
         val isManga: Boolean get() = type == "manga"
         val pausable: Boolean get() = running || status == "paused"
@@ -1336,6 +1337,7 @@ object EngineData {
                 checkpointFailed = o.optJSONObject("checkpoint")?.optInt("failed") ?: 0,
                 imagesDone = p.optInt("images_done"),
                 imagesTotal = p.optInt("images_total"),
+                pendingChapters = p.optInt("pending_chapters").coerceAtLeast(0),
             )
         }
     }

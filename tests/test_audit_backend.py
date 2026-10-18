@@ -968,6 +968,48 @@ def test_batch_update_download_also_favorites(monkeypatch, client, tmp_path):
         "copymanga:comic2"]["cover"] == "cover-url"
 
 
+@pytest.mark.parametrize("route,body", [
+    ("download", {"chapters": ["ch42"]}),
+    ("download-new", {"new_chapters": ["ch42"]}),
+])
+@pytest.mark.parametrize("status", ["selection_busy", "stopping"])
+def test_unaccepted_chapter_request_is_conflict_not_false_success(
+        monkeypatch, client, route, body, status):
+    import server.manga_api as mapi
+    monkeypatch.setattr(mapi._manga_dl, "start", lambda *a, **k: ("key", status))
+    monkeypatch.setattr(mapi, "_manga_auto_favorite",
+                        lambda *a, **k: pytest.fail("rejected request must not favorite"))
+    response = client.post(f"/api/manga/copymanga/comic1/{route}", json=body)
+    assert response.status_code == 409
+    assert not response.get_json().get("ok", False)
+    assert "暂停" in response.get_json()["error"]
+
+
+@pytest.mark.parametrize("status", ["selection_busy", "stopping", "deleting"])
+def test_batch_update_counts_busy_requests_as_not_started(monkeypatch, client, status):
+    import server.manga_api as mapi
+    monkeypatch.setattr(mapi, "_mcache", {("copymanga", "comic2"): {
+        "ts": time.time(), "missing": ["ch42"], "source": "copymanga",
+    }})
+    monkeypatch.setattr(mapi._manga_dl, "start", lambda *a, **k: ("key", status))
+    monkeypatch.setattr(mapi, "_manga_auto_favorite",
+                        lambda *a, **k: pytest.fail("rejected request must not favorite"))
+    response = client.post("/api/manga/check-updates-download").get_json()
+    assert response["started"] == 0 and response["skipped_busy"] == 1
+
+
+def test_tasks_exposes_pending_count_separately_from_current_batch(monkeypatch, client):
+    import server.novel_api as napi
+    monkeypatch.setattr(napi._manga_dl, "all_tasks", lambda: {"fake:demo": {
+        "status": "running", "source": "fake", "comic_id": "demo",
+        "done": 1, "total": 3, "pending_chapters": ["ch42", "ch43"],
+    }})
+    tasks = client.get("/api/tasks").get_json()["tasks"]
+    task = next(item for item in tasks if item["id"] == "manga_fake:demo")
+    assert task["progress"]["pending_chapters"] == 2
+    assert task["progress"]["done"] == 1 and task["progress"]["total"] == 3
+
+
 def test_favorite_unread_count_uses_read_chapter_set_not_last_index(
         monkeypatch, client, tmp_path):
     import server.manga_api as mapi

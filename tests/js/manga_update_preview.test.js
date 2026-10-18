@@ -12,13 +12,14 @@ class Node {
   let result = {ok:true, missing_count:1, latest:'第42话',
     missing:[{id:'new-42',name:'第42话'}]};
   const submitted = [];
+  let submitResult = {ok:true,status:'queued'};
   const host = new Node();
   const context = {window:{}, confirm:()=>true,
     document:{createElement:()=>new Node()},
     requestJSON:async (url, opts) => {
       if (url.endsWith('/check-update')) return result;
       submitted.push(JSON.parse(JSON.stringify(opts.body)));
-      return {ok:true,status:'queued'};
+      return submitResult;
     }};
   vm.runInNewContext(fs.readFileSync('static/js/manga_update_preview.js','utf8'), context);
   context.window.mountMangaUpdatePreview(host,{title:'演示'},'copy','comic');
@@ -47,5 +48,15 @@ class Node {
   assert.match(status.textContent,/检查失败/);
   assert.equal(check.disabled,false);
   assert.equal(download.hidden,true);
+  result = {ok:true,missing_count:1,missing:[{id:'new-43',name:'第43话'}]};
+  await check.onclick();
+  submitResult = {ok:false,error:'请先暂停当前任务'};
+  await download.onclick();
+  assert.match(status.textContent,/下载未启动.*暂停.*清单已保留/);
+  assert.equal(download.disabled,false);
+  submitResult = {ok:true,status:'queued'};
+  await download.onclick();
+  assert.deepEqual(submitted.at(-1).chapters,['new-43']);
+  assert.equal(download.disabled,true);
   console.log('manga_update_preview: exact chapter submission/no whole-book fallback/error recovery passed');
 })().catch(error=>{console.error(error);process.exitCode=1;});

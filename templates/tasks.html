@@ -119,6 +119,7 @@ function _taskRowParts(t) {
         return `<div style="display:flex;flex-direction:column;gap:3px;">
           <div style="display:flex;align-items:center;gap:8px;"><div class="mini-bar"><i style="width:${ipct}%"></i></div><span style="color:var(--text-dim);font-size:.78rem;">${progText}</span></div>
           <span style="color:var(--text-dim);font-size:.72rem;">📖 ${done}/${total || '?'} 话${failed}${p.current ? ' · ' + esc(String(p.current).slice(0,12)) : ''}</span>
+          ${Number(p.pending_chapters) > 0 ? `<span class="pending-chapters">待补 ${Number(p.pending_chapters)} 章 · 当前批完成后继续</span>` : ''}
           ${speedHtml}
           ${failureHtml}
         </div>`;

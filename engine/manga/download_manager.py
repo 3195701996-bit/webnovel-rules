@@ -63,6 +63,20 @@ SAVE_EVERY_CHAPTERS = 3   # 每 N 章持久化一次
 # 长期无恙；jm 下载取 6）。拷贝漫画有 IP 级 210 软限制前科 → 单独保守档 4。
 IMG_PARALLEL = 6          # 单任务图片并发下载数（同章内，默认档）
 _TASK_STATE_EMERGENCY_RESERVE_BYTES = 512 * 1024
+
+
+def _merge_selected_chapters(*selections):
+    """Union explicit identities, retaining first-seen metadata and order."""
+    result, seen = [], set()
+    for selection in selections:
+        for chapter in selection or []:
+            cid = chapter.get("id") if isinstance(chapter, dict) else chapter
+            if cid is not None and cid not in seen:
+                seen.add(cid)
+                result.append(copy.deepcopy(chapter))
+    return result
+
+
 def _record_download_page_count(info_path, chapter_id, page_count):
     """Atomically persist the source-confirmed page count for one chapter."""
     try:
@@ -530,7 +544,7 @@ class DownloadManager:
     # ── 任务管理 ──
     def start(self, source, comic_id, title, chapters=None, cover=""):
         """启动/排队下载（幂等：R11 Kimi 加固）。
-        - running：直接返回
+        - running：重复选择幂等；新单章持久化待补队列，当前批完成后继续
         - queued/paused：合并新章节、不丢进度、恢复排队
         - stopped/error/done：重置进度重启（保留封面）"""
         key = f"{source}:{comic_id}"
@@ -542,24 +556,35 @@ class DownloadManager:
             if exist:
                 status = exist.get("status")
                 if status == "running":
-                    return key, "running"
-                if status in ("queued", "paused"):
-                    if chapters:
-                        existing_chapters = exist.get("chapters")
-                        if not isinstance(existing_chapters, list):
-                            existing_chapters = []
-                            exist["chapters"] = existing_chapters
-
-                        def _chapter_id(chapter):
-                            return chapter.get("id") if isinstance(chapter, dict) else chapter
-
-                        old_ids = {chapter_id for chapter in existing_chapters
-                                   if (chapter_id := _chapter_id(chapter)) is not None}
-                        for c in chapters:
-                            cid = _chapter_id(c)
-                            if cid is not None and cid not in old_ids:
-                                existing_chapters.append(c)
-                                old_ids.add(cid)
+                    current = exist.get("chapters") or []
+                    current_ids = {c.get("id") if isinstance(c, dict) else c
+                                   for c in current}
+                    if not chapters and current:
+                        # 整本是扩大范围，不能在 worker 快照中悄悄替换子集。
+                        return key, "selection_busy"
+                    additions = [c for c in (chapters or [])
+                                 if (c.get("id") if isinstance(c, dict) else c)
+                                 not in current_ids]
+                    pending = _merge_selected_chapters(exist.get("pending_chapters"), additions)
+                    if pending == (exist.get("pending_chapters") or []):
+                        return key, "running"
+                    # 不修改在飞 worker 的选择快照；先持久化，成功收尾时原子
+                    # 转为下一批。暂停／进程重启后同样保留这些待补章节。
+                    exist["pending_chapters"] = pending
+                    _need_save = True
+                    _cur_status = "running"
+                elif status in ("queued", "paused"):
+                    if not chapters:
+                        # [] 是整本，不是空选择；整本与任意子集合并仍是整本。
+                        exist["chapters"] = []
+                    elif exist.get("chapters"):
+                        exist["chapters"] = _merge_selected_chapters(
+                            exist["chapters"], exist.pop("pending_chapters", []), chapters)
+                    else:
+                        # 保持整本范围，同时确保显式追加的新 ID 在旧目录缓存
+                        # 缺失时仍有单独一批进行严格身份校验。
+                        exist["pending_chapters"] = _merge_selected_chapters(
+                            exist.get("pending_chapters"), chapters)
                     exist["paused"] = False
                     exist["stop_kind"] = ""    # 重新跑起来了，旧停止原因作废
                     exist["stop_reason"] = ""
@@ -577,6 +602,9 @@ class DownloadManager:
                     if key in self._worker_alive:
                         return key, "stopping"
                     cover = cover or exist.get("cover", "")
+                    pending = exist.get("pending_chapters") or []
+                    if chapters and pending:
+                        chapters = _merge_selected_chapters(chapters, pending)
                     _need_save = True
                     _cur_status = "queued"
                     self._tasks[key] = {
@@ -588,6 +616,7 @@ class DownloadManager:
                         "failed_chapters": 0,
                         "started_at": time.time(), "type": "manga",
                         "chapters": chapters or [], "paused": False,
+                        "pending_chapters": pending if not chapters else [],
                         "stop_kind": "", "stop_reason": "",
                     }
             else:
@@ -697,6 +726,9 @@ class DownloadManager:
             # 分配器会跳过，等它退出再拉起）——这也是"可继续"的一种，
             # 此前 resume 对它直接返回 True 却什么都不做（界面点「继续」无反应）
             if t.get("status") in ("paused", "stopped", "error", "cancel"):
+                if t.get("chapters") and t.get("pending_chapters"):
+                    t["chapters"] = _merge_selected_chapters(
+                        t["chapters"], t.pop("pending_chapters"))
                 t["paused"] = False
                 t["status"] = "queued"
                 t["error"] = ""
@@ -854,7 +886,25 @@ class DownloadManager:
         with self._lock:
             t = self._tasks.get(key)
             if t:
+                next_batch = False
+                if status == "done" and t.get("pending_chapters"):
+                    if t.get("paused"):
+                        status = "paused"
+                    elif t.get("status") in ("cancel", "stopped"):
+                        status = "stopped"
+                    else:
+                        # 原子衔接：轮询者不能在追加批次前看到虚假的最终 done。
+                        # finally 仍是释放槽位并启动下一批的唯一入口。
+                        t["chapters"] = t.pop("pending_chapters")
+                        status = "queued"
+                        next_batch = True
                 t.update(status=status, **extra)
+                if next_batch:
+                    t.update(total=0, done=0, images_done=0, images_total=0,
+                             current="", speed=0, eta=0, error="", stop_kind="",
+                             stop_reason="", failed_chapters=0, failed_ids=[])
+                    t.pop("finished_at", None)
+                    t.pop("note", None)
                 if status != "running":
                     t["current_chapter_id"] = ""
                 # P1-1: 终态的结构化原因（与小说任务同字段同取值）。

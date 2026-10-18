@@ -1323,6 +1323,7 @@ def api_tasks():
                     "speed": job.get("speed", 0), "eta": job.get("eta", 0),
                     "images_done": job.get("images_done", 0),
                     "images_total": job.get("images_total", 0),
+                    "pending_chapters": len(job.get("pending_chapters") or []),
                 },
                 "error": job.get("error"), "running": job.get("status") == "running",
                 # P1-1: 漫画下载的停止原因/断点（与小说任务同字段，界面同一套渲染）

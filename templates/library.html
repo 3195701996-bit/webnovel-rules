@@ -919,9 +919,16 @@ function mangaShowResult(fd, quiet, pollFailed) {
         const dd = await dl.json().catch(() => ({}));
         if (dd.ok) {
           const warning = Number(dd.favorite_failures || 0);
+          const busy = Number(dd.skipped_busy || 0);
           dbtn.textContent = '✅ 已开始补下 ' + (dd.started || 0) + ' 部';
           toast('🔄 已开始补充下载 ' + (dd.started || 0) + ' 部'
-            + (warning ? '；' + warning + ' 部自动收藏失败' : ''), warning ? 'error' : 'ok');
+            + (warning ? '；' + warning + ' 部自动收藏失败' : '')
+            + (busy ? '；' + busy + ' 部任务忙，未提交，请暂停并等待停稳后重试' : ''),
+            warning || busy ? 'error' : 'ok');
+          if (busy) {
+            dbtn.disabled = false;
+            dbtn.textContent = '重试未提交的更新';
+          }
         }
         else { dbtn.textContent = '⚠ 启动失败'; toast('⚠ ' + (dd.error || '启动失败'), 'error'); }
       } catch (e) { dbtn.textContent = '⚠ 启动失败'; }
