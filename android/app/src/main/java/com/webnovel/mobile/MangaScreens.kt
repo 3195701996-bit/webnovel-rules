@@ -735,11 +735,10 @@ fun MangaDetailScreen(
                                 if (u.ok && (u.hasUpdate || u.missingCount > 0)) {
                                     Button(
                                         onClick = {
-                                            // 有新话：有明确章节 id 就下这些，否则退回"下载未下载话"
-                                            val ids = u.missingIds
-                                            val missing = if (ids.isNotEmpty()) ids
-                                                else d.readingChapters.filterNot { d.downloaded.contains(it.id) }
-                                                    .map { it.id }
+                                            // Only the checked source catalog is authoritative.
+                                            // An empty chapter selection means whole-book download
+                                            // to the API, so never synthesize it from old details.
+                                            val missing = u.missingIds.distinct()
                                             scope.launch {
                                                 val body = org.json.JSONObject()
                                                     .put("title", d.title).put("cover", d.cover)
@@ -749,11 +748,12 @@ fun MangaDetailScreen(
                                                     mangaPath(d.source, d.comicId, "/download"), body)
                                                 if (rr.ok) pollTick++
                                                 actionMsg = downloadStartMessage(
-                                                    rr, "已创建下载任务：新话 ${missing.size} 个（见下载页）")
+                                                    rr, "已创建下载任务：缺失章节 ${missing.size} 个（见下载页）")
                                             }
                                         },
+                                        enabled = u.missingIds.isNotEmpty(),
                                         modifier = Modifier.weight(1f),
-                                    ) { Text("下载新话") }
+                                    ) { Text("下载缺失章节（${u.missingIds.distinct().size}）") }
                                 }
                             }
                         }
@@ -766,6 +766,31 @@ fun MangaDetailScreen(
                                         else MaterialTheme.colorScheme.error,
                                 modifier = Modifier.padding(horizontal = WnSpace.lg),
                             )
+                            if (u.ok && u.missingCount > 0 && u.missingIds.isEmpty()) {
+                                Text(
+                                    "没有取得可下载的章节清单，请重新检查更新；不会自动下载整本。",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.padding(horizontal = WnSpace.lg),
+                                )
+                            }
+                            if (u.ok && u.missingNames.isNotEmpty()) {
+                                var previewExpanded by remember(u) { mutableStateOf(false) }
+                                TextButton(
+                                    onClick = { previewExpanded = !previewExpanded },
+                                    modifier = Modifier.padding(horizontal = WnSpace.lg)
+                                        .testTag("update_preview"),
+                                ) {
+                                    Text(if (previewExpanded) "收起待下载清单" else "查看待下载清单")
+                                }
+                                if (previewExpanded) {
+                                    Text(
+                                        u.missingNames.take(20).joinToString(" · ") +
+                                            if (u.missingCount > 20) "\n仅预览前 20 项，共 ${u.missingCount} 项待下载" else "",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        modifier = Modifier.padding(horizontal = WnSpace.lg),
+                                    )
+                                }
+                            }
                         }
                         if (selected.isNotEmpty()) {
                             Spacer(Modifier.height(6.dp))
@@ -804,7 +829,7 @@ fun MangaDetailScreen(
                             ) { Text("从书库移除") }
                         }
                         // 删除管理入口：已下载的话/整卷可勾选后删除（用户明确点名才删）
-                        if (d.downloadedCount > 0) {
+                        if (d.downloadedCount > 0 || d.partialDownloaded.isNotEmpty()) {
                             Spacer(Modifier.height(6.dp))
                             Row(Modifier.fillMaxWidth().padding(horizontal = WnSpace.lg),
                                 horizontalArrangement = Arrangement.spacedBy(WnSpace.sm)) {
@@ -830,6 +855,22 @@ fun MangaDetailScreen(
                                             else "删除选中（${deleteSel.size}）",
                                             color = WnColors.danger)
                                     }
+                                }
+                            }
+                            if (manageMode) {
+                                val deletableIds = d.downloaded + d.partialDownloaded
+                                val allSelected = deletableIds.isNotEmpty() &&
+                                    deleteSel.containsAll(deletableIds)
+                                TextButton(
+                                    onClick = {
+                                        deleteSel = if (allSelected) emptySet()
+                                            else deletableIds.toSet()
+                                    },
+                                    enabled = !deleting && deletableIds.isNotEmpty(),
+                                    modifier = Modifier.padding(horizontal = WnSpace.lg)
+                                        .testTag("select_all_downloaded"),
+                                ) {
+                                    Text(if (allSelected) "取消全选" else "全选本地内容")
                                 }
                             }
                         }

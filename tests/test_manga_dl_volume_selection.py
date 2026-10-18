@@ -308,8 +308,13 @@ def test_worker_publishes_done_only_after_library_index_is_written(
                for row in library)
 
 
+@pytest.mark.parametrize("first,second", [
+    (("v1", "第01卷"), ("v2", "第02卷")),
+    (("3b77390f-c4d7-11f1-8ff4-fa163e02432f", "第41話"),
+     ("be6236cb-c985-11f1-80bc-fa163e02432f", "第42話")),
+])
 def test_incremental_volume_worker_preserves_existing_page_count(
-        tmp_path, monkeypatch):
+        tmp_path, monkeypatch, first, second):
     """Refreshing the catalog for a new volume must retain old completeness data."""
     from engine.manga import download_manager as manager_module
     from engine.manga import downloader as downloader_module
@@ -318,9 +323,13 @@ def test_incremental_volume_worker_preserves_existing_page_count(
     root = tmp_path / "downloads"
 
     class _IncrementalAdapter(_VolAdapter):
+        expanded = False
+
         def _chs(self):
-            return [Chapter(id="v1", name="第01卷", group="默认"),
-                    Chapter(id="v2", name="第02卷", group="默认")]
+            chapters = [Chapter(id=first[0], name=first[1], group="默认")]
+            if self.expanded:
+                chapters.append(Chapter(id=second[0], name=second[1], group="默认"))
+            return chapters
 
     manager = manager_module.DownloadManager(
         state_file=str(tmp_path / "tasks.json"))
@@ -329,12 +338,17 @@ def test_incremental_volume_worker_preserves_existing_page_count(
         library_file=str(tmp_path / "library.json"))
     manager._adapter_pool = {source: _IncrementalAdapter()}
     monkeypatch.setattr(downloader_module, "ImageDownloader", _FakeImageDownloader)
-    monkeypatch.setattr(manager_module, "images_resolver",
-                        lambda _adapter, _source, _comic, chapter:
-                        [f"https://img.example/{chapter}/1.jpg"])
+    requested = []
+
+    def resolve(_adapter, _source, _comic, chapter):
+        requested.append(chapter)
+        return [f"https://img.example/{chapter}/1.jpg"]
+
+    monkeypatch.setattr(manager_module, "images_resolver", resolve)
     key = f"{source}:{comic_id}"
 
-    for chapter_id, chapter_name in (("v1", "第01卷"), ("v2", "第02卷")):
+    for chapter_id, chapter_name in (first, second):
+        manager._adapter_pool[source].expanded = chapter_id == second[0]
         manager._tasks[key] = {
             "status": "running", "source": source, "comic_id": comic_id,
             "title": "增量卷漫画", "cover": "", "chapters": [
@@ -349,7 +363,44 @@ def test_incremental_volume_worker_preserves_existing_page_count(
     manifest_path = root / source / comic_id / "_info.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert {row["id"]: row.get("download_page_count")
-            for row in manifest["chapters"]} == {"v1": 1, "v2": 1}
+            for row in manifest["chapters"]} == {first[0]: 1, second[0]: 1}
+    assert requested == [first[0], second[0]], "新增章节不得再次请求上一话"
+    assert [row["name"] for row in manifest["chapters"]] == [first[1], second[1]]
+
+
+@pytest.mark.parametrize("selection", [["missing"], ["v1", "missing"]])
+def test_worker_never_downloads_other_chapters_for_unresolved_selection(
+        tmp_path, monkeypatch, selection):
+    from engine.manga import download_manager as module
+    from engine.manga import downloader
+
+    manager = module.DownloadManager(state_file=str(tmp_path / "tasks.json"))
+    manager.configure(downloads_root=str(tmp_path / "downloads"),
+                      state_dir=str(tmp_path / "state"),
+                      library_file=str(tmp_path / "library.json"))
+    manager._adapter_pool = {"demovol": _VolAdapter()}
+    manifest = tmp_path / "downloads" / "demovol" / "unresolved-selection" / "_info.json"
+    manifest.parent.mkdir(parents=True)
+    original = json.dumps({"title": "旧本地目录", "chapters": [
+        {"id": "v1", "name": "第01卷", "download_page_count": 7}]})
+    manifest.write_text(original, encoding="utf-8")
+    monkeypatch.setattr(downloader, "ImageDownloader", _FakeImageDownloader)
+    requested = []
+    monkeypatch.setattr(module, "images_resolver",
+                        lambda *args: requested.append(args[-1]) or [])
+    key = "demovol:unresolved-selection"
+    manager._tasks[key] = {
+        "status": "running", "source": "demovol", "comic_id": "unresolved-selection",
+        "title": "选择失配", "cover": "", "chapters": selection,
+        "images_done": 0, "images_total": 0, "paused": False,
+    }
+    manager._active = 1
+    manager._worker_alive.add(key)
+    manager._worker(key)
+    assert manager.status(key)["status"] == "error"
+    assert "未回退全量下载" in manager.status(key)["error"]
+    assert requested == []
+    assert manifest.read_text(encoding="utf-8") == original
 
 
 def test_empty_list_is_untouched():

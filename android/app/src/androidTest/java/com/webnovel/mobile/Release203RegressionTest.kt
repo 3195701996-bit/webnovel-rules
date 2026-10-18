@@ -60,6 +60,28 @@ class Release203RegressionTest {
         println("RELEASE203 favorite_cancel_persisted_local_data_preserved")
     }
 
+    @Test fun localDeleteSelectAllCanBeReversedWithoutDeletingFiles() {
+        connect()
+        val c = SelfTestComic().also { comic = it; it.create() }
+        rule.openCachedShelf()
+        val tag = "manga_cached:${c.sourceKey}:${c.comicIdValue}"
+        rule.waitUntil(60_000) { rule.onAllNodesWithTag(tag).fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithTag(tag).performClick()
+        rule.waitUntil(30_000) {
+            rule.onAllNodesWithTag("manga_detail_list").fetchSemanticsNodes().isNotEmpty()
+        }
+        rule.onNodeWithTag("manga_detail_list").performScrollToNode(hasTestTag("manage_downloaded"))
+        rule.onNodeWithTag("manage_downloaded").performClick()
+        rule.onNodeWithTag("manga_detail_list").performScrollToNode(hasTestTag("select_all_downloaded"))
+        rule.onNodeWithTag("select_all_downloaded").performClick()
+        rule.onNodeWithText("取消全选").assertIsDisplayed()
+        rule.onNodeWithText("删除选中（2）").assertIsDisplayed()
+        rule.onNodeWithTag("select_all_downloaded").performClick()
+        rule.onNodeWithText("全选本地内容").assertIsDisplayed()
+        rule.onNodeWithText("删除选中（0）").assertIsDisplayed()
+        assertTrue("选择与取消选择不能删除本地文件", c.exists())
+    }
+
     @Test fun exploreSourcesScrollPastDuplicateBundledNovelSource() {
         connect()
         rule.waitUntil(60_000) { rule.onAllNodesWithText("浏览").fetchSemanticsNodes().isNotEmpty() }

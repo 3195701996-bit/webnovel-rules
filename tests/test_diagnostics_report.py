@@ -43,6 +43,19 @@ def test_report_has_all_sections(client):
         assert section in d["text"], f"报告缺少小节：{section}"
 
 
+def test_manga_diagnostics_distinguish_saved_checks_from_live_network(monkeypatch):
+    from engine.manga import manager, verify
+    from server import capabilities
+    monkeypatch.setattr(manager, "list_adapters", lambda: [
+        {"key": "fixture", "name": "测试源"}])
+    monkeypatch.setattr(capabilities, "source_status", lambda _: {"status": "supported"})
+    monkeypatch.setattr(verify, "results_payload", lambda: {"items": [
+        {"key": "fixture", "status": "failed", "tested_at": "2026-10-10 21:40:00"}]})
+    text = "\n".join(diag._manga_lines())
+    assert "不代表导出时重新联网验证" in text
+    assert "自检时间：2026-10-10 21:40:00" in text
+
+
 def test_report_records_failed_requests_without_query(client):
     client.get("/api/manga/browse?source=nhentai&q=私人搜索词")
     text = client.get("/api/diagnostics/report").get_json()["text"]

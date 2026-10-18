@@ -42,6 +42,12 @@
 .catalog-note a { color:var(--accent); font-weight:600; white-space:nowrap; }
 .catalog-empty { margin:8px 0; padding:14px; border:1px dashed var(--border); border-radius:10px; color:var(--text-secondary); font-size:.88rem; }
 #local-catalog-note[hidden], #catalog-empty[hidden] { display:none !important; }
+#dl-btn[hidden], .batch-dl[hidden] { display:none !important; }
+#update-preview [hidden] { display:none !important; }
+#update-preview { padding:14px; border:1px solid var(--border); border-radius:12px; background:var(--bg-elevated); }
+#update-preview p { margin:10px 0; font-size:.85rem; line-height:1.6; overflow-wrap:anywhere; }
+#update-preview summary { cursor:pointer; color:var(--accent); font-size:.85rem; }
+#update-preview ol { padding-inline-start:24px; margin:10px 0; font-size:.85rem; line-height:1.8; overflow-wrap:anywhere; }
 /* 6. 信息区（标签+内容框） */
 .info-sec { background:var(--bg-elevated); border:1px solid var(--border); border-radius:14px; padding:16px; margin-bottom:16px; }
 .info-sec .sec-title { font-size:.95rem; font-weight:700; margin-bottom:10px; }
@@ -220,6 +226,8 @@
   </div>
 
   <!-- 7. 章节列表区 -->
+  <div id="local-manager" style="margin-bottom:16px"></div>
+  <div id="update-preview" style="margin-bottom:16px"></div>
   <div class="chap-sec">
     <div class="chap-head">
       <div class="sec-title">章节 <span id="chap-count" style="font-weight:400;color:var(--text-dim);font-size:.8rem;"></span></div>
@@ -232,6 +240,8 @@
 <div id="cover-overlay" class="cover-overlay" style="display:none;" onclick="this.style.display='none'"></div>
 
 <script src="/static/js/common.js"></script>
+<script src="/static/js/manga_local_manager.js"></script>
+<script src="/static/js/manga_update_preview.js"></script>
 <script>
 const params = new URLSearchParams(location.search);
 const SOURCE = params.get('source');
@@ -471,6 +481,8 @@ async function load() {
     updateCatalogActions(readingUnits.length, detail.title);
     const downloaded = new Set(detail.downloaded || []);
     const partialDownloaded = new Set(detail.partial_downloaded || []);
+    mountMangaLocalManager(document.getElementById('local-manager'), detail, SOURCE, CID, load);
+    mountMangaUpdatePreview(document.getElementById('update-preview'), detail, SOURCE, CID);
     for (const id of downloaded) partialDownloaded.delete(id);
     const dlCount = readingUnits.filter(c => downloaded.has(c.id)).length;
     const partialCount = readingUnits.filter(c => partialDownloaded.has(c.id)).length;

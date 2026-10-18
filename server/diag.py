@@ -119,7 +119,7 @@ def _manga_lines():
     except Exception as e:
         record_error("manga.diag.import", e)
         return ["（漫画诊断不可用：%s）" % scrub_text(e, 120)]
-    out = []
+    out = ["  以下为已保存的自检结果，不代表导出时重新联网验证。"]
     try:
         adapters = list_adapters()
     except Exception as e:
@@ -141,6 +141,9 @@ def _manga_lines():
         rec = known.get(key) or {}
         out.append("  · %s（%s）依赖判定=%s 实测=%s" % (
             a.get("name") or key, key, st, rec.get("status") or "未实测"))
+        if rec:
+            out.append("      自检时间：%s" % scrub_text(
+                rec.get("tested_at") or "旧记录未保存时间，不能判断是否仍然有效", 100))
         if rec.get("reason"):
             out.append("      原因：%s" % scrub_text(rec.get("reason"), 140))
         for stage, info in (rec.get("stages") or {}).items():

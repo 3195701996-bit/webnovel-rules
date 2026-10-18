@@ -625,6 +625,30 @@ def test_favorites_update_status_and_completion(monkeypatch, client, tmp_path):
     assert saved["update_time"] == "2026-10-01"
 
 
+def test_forced_copy_update_bypasses_short_catalog_cache(monkeypatch, client, tmp_path):
+    import server.state as state
+
+    monkeypatch.setenv("WR_PROFILE", "mobile")
+    monkeypatch.setattr(state, "MANGA_DOWNLOADS_DIR", str(tmp_path / "downloads"))
+    monkeypatch.setattr(state, "MANGA_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setattr(state, "_web_chlist_get", lambda *_: [
+        {"id": "old-41", "name": "第41话"}])
+    monkeypatch.setattr(state, "_web_chlist_set", lambda *_: None)
+    monkeypatch.setattr(state, "_manga_adapter", lambda _: SimpleNamespace(
+        comic_info=lambda _: SimpleNamespace(update_time="", chapters=[
+            SimpleNamespace(id="old-41", name="第41话"),
+            SimpleNamespace(id="new-42", name="第42话")]))
+    )
+    monkeypatch.setattr(state, "_downloaded_ids_for_chapters", lambda *_: {"old-41"})
+    monkeypatch.setattr(state, "_scan_downloaded_chapters", lambda *_: [])
+    monkeypatch.setattr(state, "_integrity_summary", lambda *_: None)
+    monkeypatch.setattr(state._manga_dl, "status", lambda *_: {"status": "idle"})
+    checked = state._manga_check_one("copymanga", "fixture-series", force_refresh=True)
+    assert checked["ok"]
+    assert checked["latest"] == "第42话"
+    assert checked["missing_count"] == 1
+
+
 def test_favorite_update_keeps_full_catalog_beyond_public_limit(
         monkeypatch, client, tmp_path):
     """The response cap must not truncate the persisted unread baseline."""

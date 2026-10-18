@@ -208,12 +208,13 @@ data class MangaUpdateCheck(
     val latest: String,
     val error: String,
     val missingIds: List<String>,
+    val missingNames: List<String> = emptyList(),
 ) {
     val label: String
         get() = when {
             !ok -> "检查失败：" + error.ifBlank { "原因未知" }
             hasUpdate || missingCount > 0 ->
-                "发现 " + (if (missingCount > 0) missingCount else missingIds.size) + " 个新话" +
+                "有 " + (if (missingCount > 0) missingCount else missingIds.size) + " 个章节未下载" +
                     (if (latest.isNotBlank()) "（最新：$latest）" else "")
             else -> "已是最新" + (if (latest.isNotBlank()) "（最新：$latest）" else "")
         }
@@ -1607,6 +1608,9 @@ object EngineData {
             latest = o.optString("latest"),
             error = err,
             missingIds = ids,
+            missingNames = (0 until (arr?.length() ?: 0)).mapNotNull { i ->
+                arr?.optJSONObject(i)?.optString("name")?.takeIf { it.isNotBlank() }
+            },
         )
     }
 

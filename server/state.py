@@ -3303,7 +3303,8 @@ def _manga_check_one(source, comic_id, force_refresh=False):
                                         for c in _ci["chapters"]]
                 except Exception:
                     pass
-        if cur_chapters is None and source in ("copymanga", "copymanga_web"):
+        if (cur_chapters is None and not force_refresh and
+                source in ("copymanga", "copymanga_web")):
             # R58: 检查统一走网页渲染(copy4000)——放弃 APP 端后检查不再
             # 请求 APP API(210 触发源消除); 渲染结果 10 分钟短缓存复用
             cur_chapters = _web_chlist_get("copymanga_web", comic_id)

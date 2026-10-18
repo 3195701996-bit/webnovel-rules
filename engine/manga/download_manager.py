@@ -910,6 +910,8 @@ class DownloadManager:
                 comic_id = task["comic_id"]
                 title = task["title"]
                 sel_chapters = list(task.get("chapters") or [])
+                selected_ids = {c.get("id") if isinstance(c, dict) else c
+                                for c in sel_chapters}
             # 适配器复用（单例：避免每次下载 new 实例的初始化请求）
             if not hasattr(self, "_adapter_pool"):
                 self._adapter_pool = {}
@@ -947,6 +949,8 @@ class DownloadManager:
                             with open(info_p, encoding="utf-8") as _f:
                                 info = json.load(_f)
                             _cand = info.get("chapters") or []
+                            if selected_ids - {c.get("id") for c in _cand}:
+                                raise ValueError("缓存目录缺少选中章节，需要刷新源目录")
                             # R36: TTL 内复用前也校验与目录的重叠——被污染列表
                             # （降级通道 ID 体系）会导致已下载内容全量重下
                             _dir_ids = {n for n in os.listdir(cache_root)
@@ -1022,7 +1026,8 @@ class DownloadManager:
                             return sum(1 for c in lst if c.get("id") in _dir_ids)
                         _old_ov = _overlap(_old_chapters)
                         _new_ov = _overlap(chapters)
-                        if _dir_ids and _new_ov < _old_ov:
+                        if (_dir_ids and _new_ov < _old_ov and
+                                not (selected_ids - {c.get("id") for c in _old_chapters})):
                             print(f"[manga-dl] worker {key} 新章节列表与目录重叠 "
                                   f"({_new_ov} vs 旧列表 {_old_ov})，沿用旧列表避免全量重下",
                                   flush=True)
@@ -1041,23 +1046,27 @@ class DownloadManager:
                                 if old_count is not None:
                                     row.setdefault("download_page_count", old_count)
                     os.makedirs(cache_root, exist_ok=True)
+                    if selected_ids - {c.get("id") for c in chapters}:
+                        # Validate before replacing durable local metadata. A stale
+                        # or wrong upstream catalog must not erase the old manifest.
+                        self._mark_done(
+                            key, "error",
+                            error="源目录中找不到部分选中章节，请重新检查更新后重试；未回退全量下载")
+                        return
                     # 续传依赖的关键文件：原子写，避免半截 JSON；同时关闭句柄
                     atomic_write(info_p, {"chapters": chapters, "cover": cover,
                                           "title": title})
                 # 2) 章节选择
                 if sel_chapters:
                     # start() 允许传 {"id": ...} 字典章节，set() 会对 dict 抛 TypeError
-                    _sel_set = {c.get("id") if isinstance(c, dict) else c
-                                for c in sel_chapters}
+                    _sel_set = selected_ids
+                    if _sel_set - {c.get("id") for c in chapters}:
+                        self._mark_done(
+                            key, "error",
+                            error="源目录中找不到部分选中章节，请重新检查更新后重试；未回退全量下载")
+                        return
                     _filtered = [c for c in chapters if c["id"] in _sel_set]
-                    if _filtered:
-                        chapters = _filtered
-                    else:
-                        # 增量传入的章节 id 与源站最新章节全部不匹配
-                        # （详情缓存过期/源站章节变动）→ 回退全量下载。
-                        # 已下载章节的图片命中本地缓存不会重下（幂等），只补缺失的。
-                        print(f"[manga-dl] worker {key} 增量章节 id 均不匹配，回退全量下载 "
-                              f"({len(chapters)} 章)", flush=True)
+                    chapters = _filtered
                 # 3) 绝对顺序：按章节序号（第X话/卷X话）升序下载（前章节→后章节）
                 chapters = _sort_chapters(chapters)
                 # 卷是完整阅读/下载单元。混合目录也必须保留卷条目，由 adapter
