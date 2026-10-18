@@ -754,6 +754,11 @@ def sources_page():
     return render_template("sources.html")
 
 
+@app.route("/diagnostics")
+def diagnostics_page():
+    return render_template("diagnostics.html")
+
+
 @app.route("/library")
 def library_page():
     return render_template("library.html")
