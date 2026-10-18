@@ -328,6 +328,54 @@ def test_existing_read_id_does_not_also_mark_old_label_as_read():
     assert mapi._manga_read_id_set(history, catalog) == {"stable"}
 
 
+@pytest.mark.parametrize("with_records", [True, False])
+def test_stable_read_ids_do_not_build_unused_label_migration_index(monkeypatch, with_records):
+    import server.manga_api as mapi
+    catalog = [{"id": f"ch-{i}", "name": f"第{i}话"} for i in range(5000)]
+    history = {"read_chapter_ids": [row["id"] for row in catalog]}
+    if with_records:
+        history["read_chapters"] = [
+            {"id": row["id"], "label": row["name"]} for row in catalog]
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("稳定ID无需构建5000条标签迁移索引")
+    monkeypatch.setattr(mapi, "_label_key", forbidden)
+    assert mapi._manga_read_id_set(history, catalog) == set(history["read_chapter_ids"])
+
+
+def test_read_identity_alias_merge_preserves_first_seen_order_and_union():
+    import server.manga_api as mapi
+    first = [f"ch-{i}" for i in range(5000)]
+    second = [f"ch-{i}" for i in range(2500, 7500)]
+    merged = mapi._merge_identity_values([
+        ("copy:comic", {"read_chapter_ids": first + first, "pos": "old"}),
+        ("copy_web:comic", {"read_chapter_ids": second + first, "pos": "new"}),
+    ])
+    assert merged["read_chapter_ids"] == [f"ch-{i}" for i in range(7500)]
+    assert merged["pos"] == "new"
+
+
+def test_large_mixed_history_migrates_only_unique_unresolved_labels(monkeypatch):
+    import server.manga_api as mapi
+    stable = [{"id": f"ch-{i}", "name": f"第{i}话"} for i in range(5000)]
+    catalog = stable + [{"id": "migrated", "name": "第5000话"},
+                        {"id": "ambiguous-a", "name": "第5001话"},
+                        {"id": "ambiguous-b", "name": "第5001话"}]
+    history = {"read_chapter_ids": [r["id"] for r in stable],
+               "read_chapters": [{"id": r["id"], "label": r["name"]} for r in stable]
+                   + [{"id": "old-unique", "label": "第5000話"},
+                      {"id": "old-ambiguous", "label": "第5001話"}]}
+    original = mapi._label_key
+    normalized = []
+    def counted(label):
+        normalized.append(label)
+        return original(label)
+    monkeypatch.setattr(mapi, "_label_key", counted)
+    resolved = mapi._manga_read_id_set(history, catalog)
+    assert resolved == set(history["read_chapter_ids"]) | {
+        "old-unique", "old-ambiguous", "migrated"}
+    assert len(normalized) == len(catalog) + 2, "稳定记录不应再次进行标签迁移"
+
+
 @pytest.mark.parametrize("old_label,new_label", [
     ("第1话", "第01-02話"), ("第01-02话", "第1話"),
     ("第1卷", "第1～2卷"), ("第一至二话", "第1话"),

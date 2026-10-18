@@ -1126,6 +1126,7 @@ def _merge_identity_values(rows):
     """Merge aliases without dropping read identities or newer scalar fields."""
     merged = {}
     read_ids = []
+    read_ids_seen = set()
     read_rows = []
     read_keys = set()
     for _, value in rows:
@@ -1135,7 +1136,8 @@ def _merge_identity_values(rows):
             stored_ids = []
         for chapter_id in stored_ids:
             chapter_id = str(chapter_id or "")
-            if chapter_id and chapter_id not in read_ids:
+            if chapter_id and chapter_id not in read_ids_seen:
+                read_ids_seen.add(chapter_id)
                 read_ids.append(chapter_id)
         stored_rows = value.get("read_chapters") or []
         if not isinstance(stored_rows, list):
@@ -1230,19 +1232,27 @@ def _manga_read_id_set(history, chapters):
         return f"label:{key}" if key else ""
 
     current_ids = {str(chapter.get("id") or "") for chapter in chapters}
-    by_label = {}
-    for chapter in chapters:
-        label_key = _identity_label(chapter.get("name") or chapter.get("label") or "")
-        if label_key:
-            by_label.setdefault(label_key, []).append(str(chapter.get("id") or ""))
+    unresolved = []
     for record in records:
         old_id = str(record.get("id") or "")
         if old_id:
             known.add(old_id)
             if old_id in current_ids:
-                # A renamed/reordered chapter with a stable ID must not also
-                # mark another chapter carrying its former label as read.
+                # Exact identity remains authoritative even if its label changed.
                 continue
+        if record.get("label"):
+            unresolved.append(record)
+    if not unresolved:
+        return known
+
+    # Ordinary reading with stable IDs needs no title normalization. Construct
+    # this O(catalog) fallback only when a legacy record actually needs migration.
+    by_label = {}
+    for chapter in chapters:
+        label_key = _identity_label(chapter.get("name") or chapter.get("label") or "")
+        if label_key:
+            by_label.setdefault(label_key, []).append(str(chapter.get("id") or ""))
+    for record in unresolved:
         label_key = _identity_label(record.get("label") or "")
         matches = by_label.get(label_key, []) if label_key else []
         if len(matches) == 1 and matches[0]:
