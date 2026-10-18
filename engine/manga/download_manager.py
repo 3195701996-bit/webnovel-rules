@@ -985,11 +985,19 @@ class DownloadManager:
                 selected_ids = {c.get("id") if isinstance(c, dict) else c
                                 for c in sel_chapters}
             # 适配器复用（单例：避免每次下载 new 实例的初始化请求）
+            # Legacy mobile tasks keep their durable source/path identity, but
+            # must not restart the removed Playwright-based transport. Current
+            # CopyManga HTTP handles the same explicit upstream chapter UUIDs;
+            # existing selection validation still refuses unresolved identities.
+            from ..config import IS_MOBILE
+            transport_source = ("copymanga" if IS_MOBILE and source == "copymanga_web"
+                                else source)
             if not hasattr(self, "_adapter_pool"):
                 self._adapter_pool = {}
-            if source not in self._adapter_pool:
-                self._adapter_pool[source] = get_adapter(source, state_dir=self._get_state_dir())
-            ad = self._adapter_pool[source]
+            if transport_source not in self._adapter_pool:
+                self._adapter_pool[transport_source] = get_adapter(
+                    transport_source, state_dir=self._get_state_dir())
+            ad = self._adapter_pool[transport_source]
             if ad is None:
                 self._mark_done(key, "error", error="适配器不存在")
                 return

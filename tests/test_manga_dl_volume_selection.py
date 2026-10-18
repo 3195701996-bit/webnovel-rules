@@ -419,6 +419,52 @@ def test_refresh_keeps_withdrawn_local_identity_without_downloading_it(
     assert old_page.stat().st_mtime_ns == original_stat
 
 
+@pytest.mark.parametrize("mobile", [True, False])
+def test_legacy_copy_task_preserves_storage_identity_with_mobile_transport(
+        tmp_path, monkeypatch, mobile):
+    from engine import config
+    from engine.manga import download_manager as module
+    from engine.manga import downloader, manager as adapters
+
+    monkeypatch.setattr(config, "IS_MOBILE", mobile)
+    requested_adapters = []
+
+    def adapter(key, **_kwargs):
+        requested_adapters.append(key)
+        if mobile and key == "copymanga_web":
+            raise RuntimeError("browser is unavailable on mobile")
+        value = _VolAdapter()
+        value.key = key
+        return value
+
+    monkeypatch.setattr(adapters, "get_adapter", adapter)
+    monkeypatch.setattr(downloader, "ImageDownloader", _FakeImageDownloader)
+    resolved = []
+    monkeypatch.setattr(module, "images_resolver", lambda ad, source, cid, chapter:
+                        resolved.append((ad.key, source, chapter)) or
+                        [f"https://img.example/{chapter}.jpg"])
+    manager = module.DownloadManager(state_file=str(tmp_path / "tasks.json"))
+    root = tmp_path / "downloads"
+    manager.configure(downloads_root=str(root), state_dir=str(tmp_path / "state"),
+                      library_file=str(tmp_path / "library.json"))
+    key = "copymanga_web:legacy-copy-task"
+    manager._tasks[key] = {
+        "source": "copymanga_web", "comic_id": "legacy-copy-task",
+        "title": "旧下载", "status": "running", "chapters": ["v2"],
+        "cover": "https://img.example/cover.jpg", "paused": False,
+    }
+    manager._active = 1
+    manager._worker_alive.add(key)
+    manager._worker(key)
+    assert manager.status(key)["status"] == "done"
+    transport = "copymanga" if mobile else "copymanga_web"
+    assert requested_adapters == [transport]
+    assert resolved == [(transport, "copymanga_web", "v2")]
+    assert manager.status(key)["source"] == "copymanga_web"
+    assert (root / "copymanga_web" / "legacy-copy-task" / "v2" / "0000.webp").is_file()
+    assert not (root / "copymanga").exists(), "兼容传输不能搬迁或重建旧下载路径"
+
+
 @pytest.mark.parametrize("selection", [["missing"], ["v1", "missing"]])
 def test_worker_never_downloads_other_chapters_for_unresolved_selection(
         tmp_path, monkeypatch, selection):
