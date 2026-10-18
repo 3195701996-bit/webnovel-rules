@@ -16,7 +16,7 @@ from urllib.parse import urljoin
 from .fetcher import Fetcher, DeadlineExceeded
 from .cleaner import clean_text as _clean_text, html_to_text as _html_to_text
 from .app_utils import atomic_write as _atomic_write, \
-    atomic_write_text as _atomic_write_text, cache_key_of as _cache_key_of
+    atomic_write_text as _atomic_write_text, cache_key_of as _cache_key_of, chapter_cache_valid
 from .config import (CONTENT_DEADLINE, CONTENT_MAX_PAGES, TOC_PAGE_CAP,
                      CRAWL_DEFAULT_CONCURRENCY, CRAWL_MAX_CONCURRENCY,
                      CRAWL_RETRY_MAX, CRAWL_RETRY_DELAY, TOC_PAGE_SLEEP)
@@ -1007,11 +1007,7 @@ class CrawlTask:
             self._cache_set.add(url)
 
     def _has_cache(self, url):
-        path = self._cache_path(url)
-        try:
-            return os.path.isfile(path) and os.path.getsize(path) > 0
-        except OSError:
-            return False
+        return chapter_cache_valid(self._cache_path(url))
 
     def _mark_completed(self, url):
         """B06: completed 列表与运行时 set 镜像同步写入（O(1) 成员判断）"""

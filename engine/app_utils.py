@@ -4,6 +4,7 @@
 """
 from contextlib import suppress as _suppress
 from datetime import datetime
+from functools import lru_cache
 import hashlib
 import json
 import os
@@ -210,8 +211,37 @@ def cache_key_of(url):
     return re.sub(r"[^\w\u4e00-\u9fff-]", "_", url)[-60:]
 
 
+@lru_cache(maxsize=8192)
+def _valid_chapter_text(path, fingerprint):
+    """Stream UTF-8 validation; cache only the boolean, not chapter contents."""
+    nonblank = False
+    try:
+        with open(path, encoding="utf-8") as stream:
+            while True:
+                chunk = stream.read(65536)
+                if not chunk:
+                    break
+                nonblank = nonblank or bool(chunk.strip())
+        return nonblank
+    except (OSError, UnicodeError):
+        return False
+
+
+def chapter_cache_valid(path):
+    """Readable UTF-8 body, invalidated on replacement or in-place modification."""
+    import stat
+    try:
+        st = os.stat(path)
+        if not stat.S_ISREG(st.st_mode) or st.st_size == 0:
+            return False
+        fingerprint = (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+        return _valid_chapter_text(os.fspath(path), fingerprint)
+    except OSError:
+        return False
+
+
 def chapter_cache_keys(book_dir):
-    """Inventory nonempty regular chapter files; never trust completion history."""
+    """Inventory readable chapter files; never trust completion history."""
     keys = set()
     try:
         with os.scandir(book_dir) as entries:
@@ -219,7 +249,7 @@ def chapter_cache_keys(book_dir):
                 if not entry.name.endswith(".cache"):
                     continue
                 try:
-                    if entry.is_file() and entry.stat().st_size > 0:
+                    if chapter_cache_valid(entry.path):
                         keys.add(entry.name[:-6])
                 except OSError:
                     continue  # Concurrent deletion is an unavailable cache.

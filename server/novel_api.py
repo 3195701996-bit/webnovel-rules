@@ -19,6 +19,7 @@ from engine.crawler import (export_is_fresh as _export_is_fresh,
                             merge_book_txt as _merge_book_txt)
 from engine.app_utils import (now_iso, _norm, atomic_write, atomic_write_text,
                               load_json, _read_json, update_json, chapter_cache_keys,
+                              chapter_cache_valid,
                               cache_key_of as _cache_key)
 from engine.config import (TOC_CACHE_TTL, SLOW_COOLDOWN,
                            SEARCH_MAX_WORKERS, SEARCH_SOURCE_TIMEOUT,
@@ -1455,15 +1456,15 @@ def api_books():
 def _failed_live(book_dir, failed):
     """真正"还没拿到正文"的失败章节（本机已有非空缓存的不算失败）。
 
-    判据：`cache_key_of(url) + ".cache"` 存在且**非空** —— 与下载路径写缓存的口径
-    一致（`Crawler._save_cache` 非空才写、`_has_cache` 检查非空文件）。只读判断、不改盘。
+    判据：`cache_key_of(url) + ".cache"` 是有效 UTF-8 且包含非空白正文，
+    与续传 `_has_cache` 一致。只读判断、不改盘。
     """
     from engine.app_utils import cache_key_of
     out = {}
     for url, why in (failed or {}).items():
         try:
             p = os.path.join(book_dir, cache_key_of(url) + ".cache")
-            if os.path.isfile(p) and os.path.getsize(p) > 0:
+            if chapter_cache_valid(p):
                 continue                     # 本机已有正文 → 不算失败
         except OSError:
             pass
@@ -1606,7 +1607,8 @@ def api_book_chapter(book_key, idx):
         abort(404, "章节序号越界")
     entry = chapters[idx - 1]
     cp = os.path.join(d, _cache_key(entry.get("url", "")) + ".cache")
-    # B07: 先 stat 取文件指纹做条件校验，命中直接 304——不读正文。
+    # 先验证正文，再做条件请求；坏缓存不得凭 mtime/size 返回 304。
+    # 校验结果按文件指纹缓存，重复读取不重复扫描全文。
     # ETag 用 (mtime_ns, size) 高精度指纹：同秒重爬/修复（int(mtime) 不变）
     # 也会产生新标识，客户端不会拿到陈旧正文。
     try:
@@ -1614,7 +1616,7 @@ def api_book_chapter(book_key, idx):
     except OSError:
         st = None
     etag = None
-    if st is not None and st.st_size > 0:
+    if st is not None and chapter_cache_valid(cp):
         # R78: ETag 不得含 book_key——中文目录名(爱下书_/夜天连看_…)会触发
         # HTTP 头 latin-1 编码异常(UnicodeEncodeError → 连接被断 → 章节
         # 永远读不了, 而导出 txt 不走此 header 故正常)。URL 已含 book_key,

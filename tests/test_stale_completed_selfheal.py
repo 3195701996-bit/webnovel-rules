@@ -163,7 +163,7 @@ def test_large_book_download_count_matches_detail(client, total):
     assert detail["stale_completed"] == total - 2
 
 
-@pytest.mark.parametrize("cache_kind", ["empty", "directory"])
+@pytest.mark.parametrize("cache_kind", ["empty", "directory", "whitespace", "bad_utf8"])
 def test_invalid_cache_is_not_downloaded(client, cache_kind):
     from engine.app_utils import cache_key_of
     key = f"stale_invalid_{cache_kind}"
@@ -171,6 +171,12 @@ def test_invalid_cache_is_not_downloaded(client, cache_kind):
     path = os.path.join(d, cache_key_of(chapters[2]["url"]) + ".cache")
     if cache_kind == "directory":
         os.mkdir(path)
+    elif cache_kind == "bad_utf8":
+        with open(path, "wb") as f:
+            f.write(b"valid prefix\xff\xfe")
+    elif cache_kind == "whitespace":
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(" \n\t\u3000")
     else:
         with open(path, "w", encoding="utf-8"):
             pass
@@ -180,6 +186,11 @@ def test_invalid_cache_is_not_downloaded(client, cache_kind):
     assert detail["done"] == 2
     assert detail["chapters"][2]["downloaded"] is False
     assert client.get(f"/api/books/{key}/chapter/3").get_json()["downloaded"] is False
+    stat = os.stat(path)
+    conditional = client.get(f"/api/books/{key}/chapter/3", headers={
+        "If-None-Match": f'"3:{stat.st_mtime_ns}:{stat.st_size}"'})
+    assert conditional.status_code == 200
+    assert conditional.get_json()["downloaded"] is False
 
 
 @pytest.mark.parametrize("offline", [False, True])
@@ -217,7 +228,7 @@ def test_check_update_detects_missing_cache_without_opening_reader(monkeypatch, 
     assert st._check_missing[key]["chapters"] == chapters[2:]
 
 
-@pytest.mark.parametrize("cache_kind", ["missing", "empty", "directory"])
+@pytest.mark.parametrize("cache_kind", ["missing", "empty", "directory", "bad_utf8", "whitespace"])
 @pytest.mark.parametrize("stale_failure", [False, True])
 def test_crawl_prunes_completed_without_cache(monkeypatch, cache_kind, stale_failure):
     """开爬前 completed 与磁盘对齐：丢缓存的章节重新进入待下载队列"""
@@ -233,6 +244,12 @@ def test_crawl_prunes_completed_without_cache(monkeypatch, cache_kind, stale_fai
             pass
     elif cache_kind == "directory":
         os.mkdir(invalid_path)
+    elif cache_kind == "bad_utf8":
+        with open(invalid_path, "wb") as f:
+            f.write(b"\xff\xfe")
+    elif cache_kind == "whitespace":
+        with open(invalid_path, "w", encoding="utf-8") as f:
+            f.write(" \n\t")
 
     src = {"uid": "stale_src", "bookSourceName": "假源",
            "bookSourceUrl": "http://stale.example.com"}
