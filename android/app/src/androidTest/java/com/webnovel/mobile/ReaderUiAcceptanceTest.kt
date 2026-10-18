@@ -1,5 +1,10 @@
 package com.webnovel.mobile
 
+import android.os.Build
+import android.graphics.Bitmap
+import androidx.core.view.WindowCompat
+import androidx.test.platform.app.InstrumentationRegistry
+import java.io.File
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
@@ -14,6 +19,7 @@ import androidx.test.filters.LargeTest
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -38,6 +44,17 @@ class ReaderUiAcceptanceTest {
     private lateinit var book: SelfTestBook
 
     private fun ev(line: String) = println("READER_UI_EVIDENCE $line")
+
+    private fun assertChromeSystemBars() {
+        rule.runOnIdle {
+            val window = rule.activity.window
+            val controller = WindowCompat.getInsetsController(window, window.decorView)
+            assertTrue("浅色顶栏必须使用深色状态栏图标", controller.isAppearanceLightStatusBars)
+            if (Build.VERSION.SDK_INT >= 26) {
+                assertTrue("浅色底栏必须使用深色导航栏图标", controller.isAppearanceLightNavigationBars)
+            }
+        }
+    }
 
     private fun waitText(text: String, timeoutMs: Long = 150_000, substring: Boolean = false) {
         rule.waitUntil(timeoutMs) {
@@ -68,6 +85,7 @@ class ReaderUiAcceptanceTest {
 
     @Test
     fun shelfToDetailToNativeReader() {
+        assertChromeSystemBars()
         // 1) 冷启动落到书架，并列出合成书
         rule.openCachedShelf()
         waitText(SelfTestBook.BOOK_NAME)
@@ -89,6 +107,8 @@ class ReaderUiAcceptanceTest {
         // 3) 进入原生阅读器：渲染第一段正文
         clickText("开始阅读")
         waitText(SelfTestBook.CHAPTER1_BODY_1, substring = true)
+
+        assertChromeSystemBars()
         rule.onNodeWithText(SelfTestBook.CHAPTER1_BODY_2, substring = true).assertIsDisplayed()
         // 章节名出现在标题栏与正文标题两处（正文里的重复首行已去重），故取第一个节点
         rule.onAllNodesWithText(SelfTestBook.CHAPTER1_NAME, substring = true)[0].assertIsDisplayed()
@@ -131,6 +151,19 @@ class ReaderUiAcceptanceTest {
         ev("阅读设置：字号/行距/主题可见，切换到夜间正常")
         clickText("关闭")
         waitText(SelfTestBook.CHAPTER1_BODY_1, substring = true)
+        rule.waitUntil(5_000) {
+            rule.onAllNodesWithText("阅读设置").fetchSemanticsNodes().isEmpty()
+        }
+        // 夜间只改变正文，外壳仍为浅色：系统图标不可错误切回白色。
+        assertChromeSystemBars()
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        instrumentation.uiAutomation.waitForIdle(250, 5_000)
+        val screenshot = instrumentation.uiAutomation.takeScreenshot()
+        checkNotNull(screenshot)
+        File(rule.activity.cacheDir, "reader-system-bars-night.png").outputStream().use {
+            screenshot.compress(Bitmap.CompressFormat.PNG, 100, it)
+        }
+        screenshot.recycle()
 
         // 8) 返回详情：进度已写入引擎 → 按钮变为"继续阅读 第 1 章"
         rule.onNodeWithContentDescription("返回").performClick()

@@ -1,7 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.MobileServer" parent="android:Theme.Material.NoActionBar">
-        <item name="android:statusBarColor">#0f1115</item>
-        <item name="android:windowBackground">#0f1115</item>
+    <style name="Theme.MobileServer.Base" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">#FBF8F2</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowBackground">#F5F1E9</item>
+        <!-- API24/25 cannot draw dark navigation icons; retain a dark bar there. -->
+        <item name="android:navigationBarColor">#0F1115</item>
     </style>
+    <style name="Theme.MobileServer" parent="Theme.MobileServer.Base" />
 </resources>
