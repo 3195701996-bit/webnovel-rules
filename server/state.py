@@ -948,7 +948,7 @@ def _scan_books():
                           or key.split("_")[0],
             "total": total,
             "done": done,
-            "failed": len(failed),
+            "failed": sum(1 for url in failed if _cache_key(url) not in _cache_files),
             "percent": round(done / total * 100) if total else 0,
             "updated_at": state.get("updated_at", ""),
             "last_read_ts": _lr,        # 最近阅读（epoch 秒，0=未读）
