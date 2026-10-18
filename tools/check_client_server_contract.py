@@ -103,6 +103,8 @@ CONDITIONAL = {
         "tasks[].progress.images_done": "只有**漫画**任务的 progress 带图片级进度"
                                         "（下载管理器写的）；小说任务没有",
         "tasks[].progress.images_total": "同上（漫画下载才统计图片总数）",
+        "tasks[].progress.pending_chapters": "仅漫画任务有追加批次；小说没有此字段。"
+            "真实漫画响应另由 test_tasks_exposes_pending_count_separately_from_current_batch 核验",
     },
     "/api/backup/scope": {
         "include[].what": "include/exclude 数组元素键；由 inc/exclude 变量间接读出，工具按元素层核对",
