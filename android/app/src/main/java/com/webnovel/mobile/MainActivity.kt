@@ -1196,7 +1196,7 @@ private fun shelfTimeLabel(ts: Double): String {
 }
 
 /**
- * 书架小说行（对齐 web 端书库卡片）：封面占位 + 状态徽标（完结/失败/下载中）+
+ * 书架小说行（对齐 web 端书库卡片）：封面占位 + 实际下载状态徽标 +
  * 作者·章数 + 进度文案 + 阅读/下载双进度条。小说无封面数据源 → 灰底「暂无封面」。
  */
 @Composable
@@ -1216,11 +1216,12 @@ private fun ShelfNovelRow(n: NovelItem, onClick: () -> Unit) {
                         fontWeight = FontWeight.SemiBold, maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f, fill = false))
-                    // 状态徽标（与 web 端同口径）：完结 ≥100% / 有失败章 / 下载中
-                    val (badge, badgeColor) = when {
-                        n.percent >= 100 -> "完结" to WnColors.ok
-                        n.failed > 0 -> "${n.failed} 章失败" to WnColors.danger
-                        else -> "下载中" to WnColors.accent
+                    // 下载齐全不代表作品完结，也不能从部分下载推断任务正在运行。
+                    val badge = n.downloadBadge
+                    val badgeColor = when {
+                        n.downloadComplete -> WnColors.ok
+                        n.failed > 0 -> WnColors.danger
+                        else -> WnColors.accent
                     }
                     Text(badge, style = MaterialTheme.typography.labelSmall,
                         color = badgeColor,

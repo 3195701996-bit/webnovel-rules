@@ -434,6 +434,12 @@ function mangaLibraryCardCanOpen(comic) {
     && comic.status !== 'downloading' && !comic.missing_images;
 }
 
+function novelDownloadBadge(b) {
+  if (b.total > 0 && b.done >= b.total) return ['已下载全部', '--novel-done'];
+  if (b.failed > 0) return [b.failed + ' 章失败', '--novel-fail'];
+  return [b.done > 0 ? '部分下载' : '未下载', '--novel-running'];
+}
+
 async function loadMangaLibrary() {
   const box = document.getElementById('manga-books');
   const sel = document.getElementById('manga-sort');
@@ -703,8 +709,7 @@ async function loadBooks() {
       : (mobile ? '🔄 检查' : '🔄 检查更新');
     const delLabel = mobile ? '🗑' : '🗑 删除';
     // R8 小说状态徽标
-    const nb = b.percent >= 100 ? ['✓ 完结','--novel-done']
-      : (b.failed ? ['⚠ 失败','--novel-fail'] : ['⏳ 下载中','--novel-running']);
+    const nb = novelDownloadBadge(b);
     card.innerHTML = `
       <div class="ncard-top">
         <h3>${esc(b.name)}</h3>

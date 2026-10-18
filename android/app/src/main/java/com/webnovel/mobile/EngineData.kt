@@ -22,11 +22,18 @@ data class NovelItem(
     val failed: Int = 0,
 ) {
     val started: Boolean get() = readIdx > 0 || lastReadTs > 0
+    val downloadComplete: Boolean get() = total > 0 && done >= total
+    val downloadBadge: String get() = when {
+        downloadComplete -> "已下载全部"
+        failed > 0 -> "$failed 章失败"
+        done > 0 -> "部分下载"
+        else -> "未下载"
+    }
     val progressLabel: String
         get() = if (started) {
             val where = readName.ifBlank { "第 $readIdx 章" }
             "读到 $where" + if (readPct > 0) " · 本章 $readPct%" else ""
-        } else if (percent >= 100) "已下载 · $done/$total 章" else "已下载 $done/$total 章"
+        } else if (downloadComplete) "已下载 · $done/$total 章" else "已下载 $done/$total 章"
 }
 
 /** 漫画条目（/api/manga/library）：含阅读进度与封面展示地址 */
