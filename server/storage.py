@@ -418,11 +418,15 @@ def clear(target):
         elif isinstance(target.get("chapters"), (list, tuple)):
             for v in target["chapters"]:
                 try:
+                    if isinstance(v, bool) or not isinstance(v, (int, str)):
+                        raise ValueError("章节号必须是整数")
                     n = int(v)
-                except (TypeError, ValueError):
-                    continue
-                if 1 <= n <= len(chapters):
-                    wanted.add(n)
+                    if not 1 <= n <= len(chapters):
+                        raise ValueError("章节号越界")
+                except (TypeError, ValueError, OverflowError):
+                    return {"ok": False, "error": "章节列表含无效序号，未删除任何章节",
+                            "freed_bytes": 0}
+                wanted.add(n)
         else:
             return {"ok": False, "error": "缺少 only=failed 或 chapters 列表（防止误删全部）",
                     "freed_bytes": 0}

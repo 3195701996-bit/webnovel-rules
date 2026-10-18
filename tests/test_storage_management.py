@@ -286,14 +286,28 @@ def test_clear_rejects_bad_targets_without_deleting(store):
     # 不存在的书
     r = S.clear({"scope": "book_chapters", "key": "no_such_book", "chapters": [1]})
     assert r["ok"] is False and "不存在" in r["error"]
-    # 越界章节号被忽略，不会误删别的
+    # 任意无效章节号拒绝整个列表，不会部分删除。
     r = S.clear({"scope": "book_chapters", "key": "srcA_aaaa", "chapters": [99, -1, "x"]})
-    assert r["ok"] is True and r["freed_bytes"] == 0
+    assert r["ok"] is False and r["freed_bytes"] == 0
 
     assert S.usage()["total_bytes"] == before, "被拒绝的请求不得删掉任何东西"
 
 
 # ── 7) 删不掉就照实说：freed 只算真删掉的 ───────────────────────────
+@pytest.mark.parametrize("invalid", [True, False, 1.9, 1.0, None, {}, [], "1.2", "nan", "inf", 99, -1])
+def test_clear_chapter_list_rejects_entire_invalid_batch(store, invalid):
+    S, root, books, dl, cache, trash = store
+    d, chs = _mk_book(books, "invalid_batch", cached=(1,))
+    path = d / (cache_key_of(chs[0]["url"]) + ".cache")
+    before = path.read_bytes(), path.stat().st_mtime_ns
+    state_before = (d / "_state.json").read_bytes()
+    result = S.clear({"scope": "book_chapters", "key": "invalid_batch", "chapters": [1, invalid]})
+    assert result["ok"] is False
+    assert result["freed_bytes"] == 0
+    assert (path.read_bytes(), path.stat().st_mtime_ns) == before
+    assert (d / "_state.json").read_bytes() == state_before
+
+
 def test_clear_reports_kept_when_delete_fails(store, monkeypatch):
     S, root, books, dl, cache, trash = store
     _mk_manga(dl, cache, source="jm", cid="100", images=1, temp_works=1, temp_files=1)

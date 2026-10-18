@@ -75,7 +75,8 @@ class StorageUiTest {
                     put(JSONObject().put("name", "第三章").put("url", URL3))
                 })
                 put("completed", JSONArray().put(URL1).put(URL3))
-                put("failed", JSONObject().put(URL2, "自检：模拟抓取失败"))
+                put("failed", JSONObject().put(URL2, "自检：模拟抓取失败")
+                    .put(URL1, "自检：正文已恢复但历史失败仍在"))
                 put("updated_at", "2026-01-01T00:00:00")
             }.toString(), Charsets.UTF_8)
         File(bookDir, cacheKeyOf(URL1) + ".cache")
@@ -112,7 +113,7 @@ class StorageUiTest {
         assertEquals("总章数", 3, b.optInt("total"))
         // 第 1、3 章有缓存文件（第 3 章是空文件，也算"占用"），第 2 章没有
         assertEquals("已缓存章节数", 2, b.optInt("cached"))
-        assertEquals("失败章节数", 1, b.optInt("failed"))
+        assertEquals("历史失败记录数（含正文已恢复的旧记录）", 2, b.optInt("failed"))
         assertTrue("应有字节数（含空文件与 state）", b.optLong("bytes") > 0)
         ev("占用明细：${b.optString("name")} 已缓存 ${b.optInt("cached")}/${b.optInt("total")}，" +
             "失败 ${b.optInt("failed")}，${b.optLong("bytes")} 字节")
