@@ -132,8 +132,18 @@ function fmtWords(w) { if (!w) return ''; const n = parseInt(w); if (!n) return 
 // 长目录首屏只挂载当前章附近分段（200 章/段），上下「展开」按钮按需扩段；
 // 目录内搜索作用于全量章节数组，未挂载章节同样可被找到。
 let detailToc = null;
+let detailTocInteracted = false;
+const markDetailTocInteraction = () => { detailTocInteracted = true; };
+const detailTocContainer = $('#chap-list');
+if (detailTocContainer) {
+  ['pointerdown', 'keydown', 'scroll'].forEach(type =>
+    detailTocContainer.addEventListener(type, markDetailTocInteraction, {passive: true}));
+}
+['wheel', 'touchmove'].forEach(type =>
+  window.addEventListener(type, markDetailTocInteraction, {passive: true}));
 const chapSearch = $('#chap-search');
 if (chapSearch) chapSearch.oninput = () => {
+  markDetailTocInteraction();
   if (!detailToc) return;
   detailToc.setFilter(chapSearch.value);
   detailToc.render();
@@ -207,7 +217,7 @@ async function loadLibraryMode() {
       fetch('/api/books/' + encodeURIComponent(KEY) + '/progress')
         .then(r => r.json()).then(pd => {
           const idx = (pd && pd.ok) ? (parseInt(pd.idx, 10) || 0) : 0;
-          if (idx < 1 || idx > chs.length || !detailToc) return;
+          if (idx < 1 || idx > chs.length || !detailToc || detailTocInteracted) return;
           if (detailToc.locate(idx)) {
             detailToc.render();
             const el = list.querySelector('.chap-item[data-ch-idx="' + idx + '"]');
