@@ -15,4 +15,20 @@ assert.equal(context.resolve(rows,'',-4),0);
 assert.equal(context.resolve([], '', 0),-1);
 assert.match(html,/!params\.has\('pg'\) && _resume\.index === chIdx0/,
   'explicit page choice must not be overwritten by same-chapter resume');
+const chapterLink=html.match(/function readerChapterUrl\([^)]*\) \{[\s\S]*?\n\}/)[0];
+const links={encodeURIComponent,SOURCE:'copy%source',CID:'comic%2Fid',TITLE:'100%漫画',
+  LOCAL_CATALOG:true,chapters:[{id:'chapter%2F42',name:'第42话'},{}]};
+vm.runInNewContext(chapterLink+'; globalThis.href=readerChapterUrl;',links);
+let args=new URL(links.href(0),'http://reader.local').searchParams;
+assert.equal(args.get('source'),'copy%source');
+assert.equal(args.get('cid'),'comic%2Fid');
+assert.equal(args.get('chapter_id'),'chapter%2F42');
+assert.equal(args.get('catalog'),'local','in-reader chapter changes must preserve offline policy on reload');
+assert.equal(args.get('pg'),'1');
+assert.equal(args.get('title'),'100%漫画');
+links.LOCAL_CATALOG=false;
+args=new URL(links.href(0),'http://reader.local').searchParams;
+assert.equal(args.has('catalog'),false,'online chapter links must not be forced local');
+assert.equal(links.href(1),null);
+assert.equal(links.href(99),null);
 console.log('manga_reader_entry_identity: identity/reorder/missing/legacy/explicit-page contracts passed');

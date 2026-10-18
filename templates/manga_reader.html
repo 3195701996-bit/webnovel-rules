@@ -107,10 +107,12 @@ body { padding-top:0; }
   display:block; }
 .page-view .page-ph { color:var(--text-dim); font-size:.8rem; text-align:center; }
 /* 左右翻页点击区 */
-.page-zone { position:absolute; top:0; bottom:0; width:33%; cursor:pointer; z-index:2; }
+.page-zone { position:absolute; top:0; bottom:0; width:33%; cursor:pointer; z-index:2; border:0; padding:0; background:transparent; }
 .page-zone.left { left:0; }
 .page-zone.right { right:0; }
-.page-zone:hover { background:var(--accent-soft); }
+.page-zone:hover:not(:disabled) { background:var(--accent-soft); }
+.page-zone:disabled { cursor:default; }
+.page-zone:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
 /* 双页模式：两图并排（横屏/平板），窄屏自动退回单页 */
 .page-view.double { gap:4px; }
 .page-view.double .page-img { max-width:calc(50% - 4px); }
@@ -334,6 +336,9 @@ function readerProgressState() {
   const current = settings.mode === 'scroll' ? currentPage() : Math.floor(_pageIdx / per) + 1;
   return {current: Math.max(1, Math.min(total, current)), total};
 }
+function readerLastPageStart(count, per) {
+  return Math.max(0, Math.floor((count - 1) / per) * per);
+}
 function syncReaderProgress() {
   const slider = document.getElementById('reader-progress');
   const pageLabel = document.getElementById('reader-page-label');
@@ -358,7 +363,7 @@ function seekReaderProgress(value) {
     scrollToPage(target);
   } else {
     const per = settings.mode === 'double' && window.innerWidth >= 760 ? 2 : 1;
-    _pageIdx = Math.min(Math.max(0, imgs.length - per), (target - 1) * per);
+    _pageIdx = Math.min(readerLastPageStart(imgs.length, per), (target - 1) * per);
     const view = document.querySelector('.page-view');
     if (view) showPage(view, imgs, per, _curGen, _curChId);
     scheduleProgressSave();
@@ -574,11 +579,21 @@ window.addEventListener('resize', () => {
   // 进度条所代表的页码，避免 scrollY 不变却漂到另一页，并把漂移误存为进度。
   const slider = document.getElementById('reader-progress');
   const pageBeforeResize = Math.max(1, Number(slider && slider.value) || 1);
+  const generationBeforeResize = _curGen;
+  const modeBeforeResize = settings.mode;
+  const seekBeforeResize = _seekGeneration;
   if (_readerResizeTimer !== null) clearTimeout(_readerResizeTimer);
   _readerResizeTimer = setTimeout(() => {
     _readerResizeTimer = null;
+    if (loading) return;  // 新章仍在加载时不能把上一章的图片重绘成当前章。
+    if (generationBeforeResize !== _curGen || modeBeforeResize !== settings.mode) return;
     if (settings.mode === 'scroll' && (window._curImgs || []).length) {
+      if (seekBeforeResize !== _seekGeneration) return;
       seekReaderProgress(pageBeforeResize);
+    } else if ((window._curImgs || []).length) {
+      // 跨过双页断点时按实际图片位置重排，而不是仅改进度条的分母。
+      pg0 = _pageIdx + 1;
+      renderChapter(window._curImgs, chapters[chIdx]?.name || '');
     } else {
       syncReaderProgress();
     }
@@ -1162,16 +1177,9 @@ function renderPaged(imgs, chName, gen, chId) {
       ' onclick="jumpChapter(chIdx+1)">下一话 →</button>';
   stage.appendChild(nav);
   const per = double ? 2 : 1;
-  const max = Math.max(0, imgs.length - per);
+  const max = readerLastPageStart(imgs.length, per);
   // 恢复进度：目标页所在屏（首进章节或切换模式后重渲染）
   _pageIdx = Math.min(max, Math.max(0, Math.floor((pg0 - 1) / per) * per));
-  if (settings.flip === 'zone') {
-    const zl = document.createElement('div'); zl.className = 'page-zone left';
-    zl.onclick = () => flipPage(-per);
-    const zr = document.createElement('div'); zr.className = 'page-zone right';
-    zr.onclick = () => flipPage(per);
-    view.appendChild(zl); view.appendChild(zr);
-  }
   // 横滑翻页（touch 滑动，仅翻页模式）
   view.ontouchstart = e => { const t = e.touches[0]; _touchX = t.clientX; _touchY = t.clientY; };
   view.ontouchend = e => {
@@ -1222,6 +1230,8 @@ function showPage(view, imgs, per, gen, chId) {
     view.appendChild(img);
     img.src = u;
   });
+  // 每次换屏都会清空 view；点击区必须在这里重建，不能只在首次渲染前创建。
+  mountReaderPageZones(view, idx, imgs.length, per);
   // 相邻屏预加载
   preloadPaged(imgs, idx - per, per);
   preloadPaged(imgs, idx + per, per);
@@ -1234,13 +1244,28 @@ function showPage(view, imgs, per, gen, chId) {
   // 本章末屏 → 展示章节导航（滚动到底部）
   if (idx >= imgs.length - per && imgs.length > 0) {
     setTimeout(() => {
-      if (_gen !== _curGen) return;  // 已切章：旧屏不再滚动到底部
+      if (_gen !== _curGen || idx !== _pageIdx || !view.isConnected) return;
       window.scrollTo({top: document.body.scrollHeight, behavior: 'smooth'});
     }, 120);
   } else {
     window.scrollTo(0, 0);
   }
   syncReaderProgress();
+}
+
+function mountReaderPageZones(view, index, count, per) {
+  if (settings.flip !== 'zone') return;
+  const previous = document.createElement('button');
+  previous.type = 'button'; previous.className = 'page-zone left';
+  previous.setAttribute('aria-label', '上一页');
+  previous.disabled = index <= 0;
+  previous.onclick = () => flipPage(-per);
+  const next = document.createElement('button');
+  next.type = 'button'; next.className = 'page-zone right';
+  next.setAttribute('aria-label', '下一页');
+  next.disabled = index >= readerLastPageStart(count, per);
+  next.onclick = () => flipPage(per);
+  view.appendChild(previous); view.appendChild(next);
 }
 
 function preloadPaged(imgs, from, per) {
@@ -1265,7 +1290,7 @@ function flipPage(delta) {
   const imgs = window._curImgs || [];
   if (!imgs.length) return;
   const per = view.classList.contains('double') ? 2 : 1;
-  const max = Math.max(0, imgs.length - per);
+  const max = readerLastPageStart(imgs.length, per);
   const ni = Math.min(max, Math.max(0, _pageIdx + delta));
   if (ni === _pageIdx) return;
   _pageIdx = ni;
@@ -1280,18 +1305,25 @@ function flipPage(delta) {
 // 用 history.replaceState 同步地址栏章节参数（不压栈：返回键 history.back
 // 仍回到"进入阅读前的页面"，与原 location.replace 语义一致），
 // 保证刷新/分享链接指向当前话。
+function readerChapterUrl(i) {
+  const chapter = chapters[i];
+  if (!chapter || !chapter.id) return null;
+  return '/manga_reader?source=' + encodeURIComponent(SOURCE)
+    + '&cid=' + encodeURIComponent(CID) + '&ch=' + i
+    + '&chapter_id=' + encodeURIComponent(chapter.id) + '&pg=1'
+    + '&title=' + encodeURIComponent(TITLE || chapter.name || '')
+    + (LOCAL_CATALOG ? '&catalog=local' : '');
+}
 function jumpChapter(i) {
   if (i < 0 || i >= chapters.length || loading) return;
+  const chapterUrl = readerChapterUrl(i);
+  if (!chapterUrl) { showResumeNote('章节缺少可用标识，请返回刷新目录；未打开其他章节。'); return; }
   pg0 = 1;             // 新章从第 1 页开始：卷轴模式回顶部、翻页模式回第 1 屏，
                        // 与整页重载体验一致（避免命中 chIdx0/pg0 的"恢复进度"分支）
   _locateY = -1;       // 丢弃上一章的滚动定位锚点，避免旧校正逻辑干扰新章
   _userMoved = false;
   try {
-    const u = '/manga_reader?source=' + encodeURIComponent(SOURCE)
-      + '&cid=' + encodeURIComponent(CID)
-      + '&ch=' + i
-      + '&title=' + encodeURIComponent(TITLE || (chapters[i] || {}).name || '');
-    history.replaceState(null, '', u);
+    history.replaceState(null, '', chapterUrl);
   } catch (e) {}
   gotoChapter(i, true);      // 目录点选：用户明确选了这一话
 }

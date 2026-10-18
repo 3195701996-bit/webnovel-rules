@@ -39,7 +39,8 @@ function slice(src, start, end) {
 function makeEl(tag) {
   const el = {
     tagName: tag || 'div', className: '', textContent: '', value: '',
-    style: {}, dataset: {}, children: [], isConnected: true, checked: false,
+    style: {}, dataset: {}, children: [], attributes: {}, isConnected: true, checked: false,
+    setAttribute(name, value) { el.attributes[name] = String(value); },
     classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
     appendChild(c) { el.children.push(c); return c; },
     remove() { el._removed = true; },
@@ -343,6 +344,8 @@ const RC_CHAPTER = slice(READER,
   'function renderChapter(imgs, chName) {', '\nfunction renderPaged');
 const RC_SHOWPAGE = slice(READER,
   'function showPage(view, imgs, per, gen, chId) {', '\nfunction preloadPaged');
+const RC_PAGEBOUNDARY = slice(READER,
+  'function readerLastPageStart(count, per) {', '\nfunction syncReaderProgress');
 const RC_GOTO = slice(READER,
   'async function gotoChapter(i, explicit) {', "\ndocument.addEventListener('visibilitychange'");
 
@@ -414,7 +417,7 @@ const rcFetch = (u, opt) => {
 };
 vm.createContext(rcSandbox);
 vm.runInContext(RC_DECL + 'let loading = false;\nlet chIdx0 = 0;\nlet pg0 = 1;\n'
-  + RC_RENDERSCROLL + '\n' + RC_MOUNT + '\n' + RC_CHAPTER + '\n' + RC_SHOWPAGE + '\n' + RC_GOTO +
+  + RC_PAGEBOUNDARY + '\n' + RC_RENDERSCROLL + '\n' + RC_MOUNT + '\n' + RC_CHAPTER + '\n' + RC_SHOWPAGE + '\n' + RC_GOTO +
   `\n;globalThis.__r = { renderScroll, _mountImg, showPage, renderChapter, gotoChapter,
    get curGen(){return _curGen;}, set curGen(v){_curGen=v;},
    get renderGen(){return _renderGen;}, set renderGen(v){_renderGen=v;},
