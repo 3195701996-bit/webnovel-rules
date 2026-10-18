@@ -8,12 +8,14 @@
 """
 import builtins
 import errno
+import io
 import json
 import os
 import sys
 import tempfile
 
 import pytest
+from PIL import Image
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -271,8 +273,9 @@ def test_load_provisions_reserve_for_preexisting_task_snapshot(tmp_path):
     assert os.path.getsize(reserve) == manager_module._TASK_STATE_EMERGENCY_RESERVE_BYTES
 
 
+@pytest.mark.parametrize("offline_after_restart", [False, True])
 def test_enospc_task_survives_restart_and_resumes_only_missing_page(
-        tmp_path, monkeypatch):
+        tmp_path, monkeypatch, offline_after_restart):
     """写盘空间恢复后，重启任务应复用已有页并补齐缺页，而非重下整话。"""
     import server.state as manga_state
 
@@ -282,9 +285,15 @@ def test_enospc_task_survives_restart_and_resumes_only_missing_page(
     source, comic_id, chapter_id = "selftest", "resume-comic", "chapter-1"
     key = f"{source}:{comic_id}"
     info_path = root / source / comic_id / "_info.json"
-    page0 = b"\xff\xd8\xff" + b"page-zero" * 800
-    page1 = b"\xff\xd8\xff" + b"page-one" * 800
+    def image_bytes(color):
+        stream = io.BytesIO()
+        Image.new("RGB", (1200, 1800), color).save(stream, format="JPEG")
+        return stream.getvalue()
+
+    page0 = image_bytes((40, 80, 120))
+    page1 = image_bytes((120, 80, 40))
     fetches = []
+    network = {"offline": False}
     info_path.parent.mkdir(parents=True)
     info_path.write_text(json.dumps({
         "title": "恢复自检",
@@ -310,6 +319,8 @@ def test_enospc_task_survives_restart_and_resumes_only_missing_page(
 
     def fetch(url, _headers, timeout=20, **_kwargs):
         fetches.append(url)
+        if network["offline"]:
+            raise ConnectionError("offline after storage recovery")
         return _Response(page0 if url.endswith("0.jpg") else page1)
 
     monkeypatch.setattr("engine.manga.downloader.fetch_image_checked", fetch)
@@ -348,6 +359,8 @@ def test_enospc_task_survives_restart_and_resumes_only_missing_page(
     assert (root / source / comic_id / chapter_id / "0000.jpg").read_bytes() == page0
     assert not (root / source / comic_id / chapter_id / "0001.jpg").exists()
     assert json.loads(info_path.read_text(encoding="utf-8"))["chapters"][0]["id"] == chapter_id
+    preserved_page = root / source / comic_id / chapter_id / "0000.jpg"
+    preserved_mtime = preserved_page.stat().st_mtime_ns
 
     # Recreate the manager as a cold process would, recover its persisted task,
     # and suppress scheduling so the test can invoke the real worker deterministically.
@@ -365,6 +378,22 @@ def test_enospc_task_survives_restart_and_resumes_only_missing_page(
         recovered._active = 1
         recovered._worker_alive.add(key)
 
+    if offline_after_restart:
+        network["offline"] = True
+        recovered._worker(key)
+        assert recovered.status(key)["status"] == "error"
+        assert preserved_page.read_bytes() == page0
+        assert preserved_page.stat().st_mtime_ns == preserved_mtime
+        assert not (preserved_page.parent / "0001.jpg").exists()
+        assert json.loads((tmp_path / "tasks.json").read_text())[key]["status"] == "error"
+        network["offline"] = False
+        assert recovered.resume_result(key) == "resumed"
+        with recovered._lock:
+            recovered._tasks[key]["status"] = "running"
+            recovered._active = 1
+            recovered._worker_alive.add(key)
+
+    attempts_before_success = fetches.count("https://images.test/1.jpg")
     recovered._worker(key)
 
     task = recovered.status(key)
@@ -373,7 +402,11 @@ def test_enospc_task_survives_restart_and_resumes_only_missing_page(
     assert (root / source / comic_id / chapter_id / "0000.jpg").read_bytes() == page0
     assert (root / source / comic_id / chapter_id / "0001.jpg").read_bytes() == page1
     assert fetches.count("https://images.test/0.jpg") == 1, "已落盘的第 0 页不得重复回源"
-    assert fetches.count("https://images.test/1.jpg") == 2, "恢复只应补取缺失的第 1 页"
+    assert fetches.count("https://images.test/1.jpg") == attempts_before_success + 1
+    assert preserved_page.stat().st_mtime_ns == preserved_mtime
+    for path in (preserved_page, preserved_page.parent / "0001.jpg"):
+        with Image.open(path) as image:
+            image.verify()
     assert manga_state._scan_downloaded_chapters(source, comic_id) == [chapter_id]
 
 
