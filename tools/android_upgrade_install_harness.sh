@@ -208,11 +208,14 @@ echo "[2/5] 在旧版本运行期间建立书架、阅读进度、部分下载�
 "${adb_cmd[@]}" install -r "$test_apk"
 phase1_started=1
 "${adb_cmd[@]}" logcat -c
+phase1_args=(-e upgradeRunId "$run_id")
+if [[ -n "${UPGRADE_TEST_PROXY:-}" ]]; then
+  phase1_args+=(-e upgradeTestProxy "$UPGRADE_TEST_PROXY")
+fi
 "${adb_cmd[@]}" shell am instrument -w -r \
   -e class "$test_class#phase1_setupState" \
   -e upgradeHarness 1 \
-  -e upgradeTestProxy "${UPGRADE_TEST_PROXY:-}" \
-  -e upgradeRunId "$run_id" \
+  "${phase1_args[@]}" \
   "$runner" | tee "$tmp_dir/phase1.log"
 "${adb_cmd[@]}" logcat -d -s System.out:I >>"$tmp_dir/phase1.log"
 require_evidence "$tmp_dir/phase1.log" "UPGRADE_EVIDENCE 阶段 1 完成" "阶段 1"

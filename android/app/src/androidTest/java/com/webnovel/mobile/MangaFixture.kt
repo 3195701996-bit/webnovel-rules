@@ -40,13 +40,15 @@ object MangaFixture {
     suspend fun pick(gw: EngineGateway, port: Int,
                      source: String = "mangadex",
                      requireReachable: Boolean = false,
+                     minimumChapters: Int = 1,
                      log: (String) -> Unit = {}): Pick {
+        require(minimumChapters >= 1)
         val cached = loadCached()
         if (cached != null && requireReachable && cached.source != source) {
             log("升级验收忽略其他来源的缓存夹具：${cached.source}（要求 $source）")
         }
         cached?.takeIf { !requireReachable || it.source == source }?.let { c ->
-            val ok = fromDetail(gw, port, c.source, c.comicId, c.chapterId)
+            val ok = fromDetail(gw, port, c.source, c.comicId, c.chapterId, minimumChapters)
             if (ok != null && ok.chapterId.isNotBlank()) {
                 log("夹具命中缓存：${ok.source}/${ok.comicId}（未重新搜索）")
                 return ok.copy(fromCache = true)
@@ -60,12 +62,14 @@ object MangaFixture {
         for (round in 0 until 3) {
             for (src in sources) {
                 for (kw in KEYWORDS) {
-                    val hit = searchOne(gw, port, src, kw) ?: continue
-                    val p = fromDetail(gw, port, hit.first, hit.second) ?: continue
-                    if (p.chapterId.isBlank()) continue
-                    save(p)
-                    log("夹具新解析：${p.source}/${p.comicId}（关键词「$kw」，第 ${round + 1} 轮）")
-                    return p.copy(fromCache = false)
+                    for (hit in searchCandidates(gw, port, src, kw)) {
+                        val p = fromDetail(gw, port, hit.first, hit.second,
+                            minimumChapters = minimumChapters) ?: continue
+                        if (p.chapterId.isBlank()) continue
+                        save(p)
+                        log("夹具新解析：${p.source}/${p.comicId}（至少${minimumChapters}话，关键词「$kw」，第 ${round + 1} 轮）")
+                        return p.copy(fromCache = false)
+                    }
                 }
             }
             delay(4000L * (round + 1))          // 退避：给源站喘口气
@@ -111,23 +115,26 @@ object MangaFixture {
     /** 只查详情（比搜索稳得多）：拿标题/封面/章节 */
     private suspend fun fromDetail(gw: EngineGateway, port: Int,
                                    source: String, comicId: String,
-                                   preferredChapterId: String = ""): Pick? {
+                                   preferredChapterId: String = "",
+                                   minimumChapters: Int = 1): Pick? {
         val dr = gw.httpText(port, "/api/manga/$source/$comicId")
         if (!dr.ok) return null
         val d = EngineData.mangaDetail(dr.body) ?: return null
-        val ch = d.chapters.firstOrNull { it.id == preferredChapterId }
-            ?: d.chapters.lastOrNull() ?: return null
+        val chapters = d.readingChapters.distinctBy { it.id }.filter { it.id.isNotBlank() }
+        if (chapters.size < minimumChapters) return null
+        val ch = chapters.firstOrNull { it.id == preferredChapterId }
+            ?: chapters.lastOrNull() ?: return null
         return Pick(source, comicId, ch.id, d.title, d.cover, false)
     }
 
     /** 指定源 + 关键词搜索（限定源比全源搜索省得多，也更不容易被限流） */
-    private suspend fun searchOne(gw: EngineGateway, port: Int, source: String,
-                                  keyword: String): Pair<String, String>? {
+    private suspend fun searchCandidates(gw: EngineGateway, port: Int, source: String,
+                                  keyword: String): List<Pair<String, String>> {
         val r = gw.httpText(port, "/api/manga/search?source=$source&q=" +
             URLEncoder.encode(keyword, "UTF-8"))
-        if (!r.ok) return null
+        if (!r.ok) return emptyList()
         val (hits, _) = EngineData.mangaSearch(r.body)
-        val h = hits.firstOrNull { it.source == source } ?: hits.firstOrNull() ?: return null
-        return h.source to h.comicId
+        return hits.filter { it.source == source }.map { it.source to it.comicId }
+            .distinct().take(8)
     }
 }

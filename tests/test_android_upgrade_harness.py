@@ -345,3 +345,13 @@ def test_explicit_upgrade_proxy_is_forwarded_and_restored(tmp_path):
     assert 'checkpoint("test_proxy_previous"' in source
     assert "restoreTestProxy(gateway, ep.port)" in source
     assert "restoreTestProxy(gateway, endpoint!!.port)" in source
+
+
+def test_empty_proxy_argument_is_not_forwarded(tmp_path):
+    apks, adb_log, env = _fixture(tmp_path)
+    env.pop("UPGRADE_TEST_PROXY", None)
+    result = _run(apks, env)
+    calls = adb_log.read_text(encoding="utf-8")
+    assert "phase1_setupState" in calls
+    assert "upgradeTestProxy" not in calls
+    assert "unbound variable" not in result.stderr

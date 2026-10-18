@@ -195,7 +195,7 @@ class UpgradeConsistencyTest {
         // 1) 真实源：搜索 → 详情 → 建下载任务（真实链路，不用夹具）
         // 夹具解析：优先缓存、失败才搜索（源站限流不再让本用例成片失败）
         val fx = MangaFixture.pick(gateway, ep.port, source,
-            requireReachable = upgradeHarness) { ev(it) }
+            requireReachable = upgradeHarness, minimumChapters = 2) { ev(it) }
         source = fx.source
         val realComicId = fx.comicId
         val comicId = "__upgrade_${UUID.randomUUID().toString().replace("-", "")}__"
