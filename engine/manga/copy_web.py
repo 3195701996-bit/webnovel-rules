@@ -835,11 +835,16 @@ def _parse_chapters(plain, path_word):
             continue
     base = _BASE.get("base") or _domain_pool()[0]
     out = []
+    seen_ids = set()
     for gname, ginfo in groups.items():
         for ch in ((ginfo or {}).get("chapters") or []):
             cid = (ch or {}).get("id") or ""
             if not cid:
                 continue
+            cid = str(cid)
+            if cid in seen_ids:
+                continue
+            seen_ids.add(cid)
             ctype = ch.get("type")
             try:
                 ctype = int(ctype)

@@ -1,3 +1,4 @@
+import json
 import pytest
 
 from engine.manga.copymanga import CopyManga
@@ -5,7 +6,7 @@ from engine.manga.base import MangaError
 
 
 @pytest.mark.parametrize("method", ["_app_fetch_chapters", "_app_comic_info"])
-@pytest.mark.parametrize("failure", ["network", "empty", "success"])
+@pytest.mark.parametrize("failure", ["network", "empty", "success", "repeated_id", "missing_id"])
 def test_app_catalog_never_returns_partial_success(monkeypatch, method, failure):
     adapter = object.__new__(CopyManga)
     monkeypatch.setattr(CopyManga, "api_url", property(lambda self: "https://catalog.test"))
@@ -23,6 +24,9 @@ def test_app_catalog_never_returns_partial_success(monkeypatch, method, failure)
         if failure == "success":
             return {"results": {"total": 101, "list": [
                 {"uuid": "100", "name": "第100话"}]}}
+        if failure in ("repeated_id", "missing_id"):
+            return {"results": {"total": 101, "list": [
+                {"uuid": "99" if failure == "repeated_id" else "", "name": "第100话"}]}}
         return {"results": {"total": 101, "list": []}}
 
     monkeypatch.setattr(adapter, "_get", get)
@@ -34,3 +38,15 @@ def test_app_catalog_never_returns_partial_success(monkeypatch, method, failure)
     else:
         with pytest.raises(MangaError, match="未取全"):
             getattr(adapter, method)("comic")
+
+
+def test_web_catalog_deduplicates_only_identity_not_name():
+    from engine.manga.copy_web import _parse_chapters
+    payload = {"groups": {"default": {"name": "默认", "chapters": [
+        {"id": "chapter-41", "name": "第41话"},
+        {"id": "chapter-41", "name": "第41话"},
+        {"id": "chapter-42", "name": "第41话"},
+    ]}}}
+    rows = _parse_chapters(json.dumps(payload), "comic")
+    assert [row.id for row in rows] == ["chapter-41", "chapter-42"]
+    assert [row.name for row in rows] == ["第41话", "第41话"]

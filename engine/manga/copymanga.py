@@ -719,6 +719,7 @@ class CopyManga(MangaAdapter):
             if not path_word:
                 continue
             offset = 0
+            group_ids = set()
             while True:
                 rid = self._get_request_id()
                 # limit=100（实测 limit=500 返回 total=0/list=0 空数据，
@@ -734,8 +735,12 @@ class CopyManga(MangaAdapter):
                 if not page and offset < (total or 0):
                     raise MangaError("拷贝漫画章节分页为空，目录未取全")
                 for ch in page:
+                    chapter_id = str(ch.get("uuid") or ch.get("id") or "")
+                    if not chapter_id or chapter_id in group_ids:
+                        raise MangaError("拷贝漫画章节标识缺失或重复，目录未取全")
+                    group_ids.add(chapter_id)
                     ch_list.append(Chapter(
-                        id=ch.get("uuid", ch.get("id", "")),
+                        id=chapter_id,
                         name=ch.get("name", ""), group=ginfo.get("name", gname),
                         url=ch.get("id", "")))
                 offset += 100
@@ -798,6 +803,7 @@ class CopyManga(MangaAdapter):
             if not path_word:
                 continue
             offset = 0
+            group_ids = set()
             while True:
                 rid = self._get_request_id()
                 cu = (f"{self.api_url}/api/v3/comic/{comic_id}/group/{path_word}/chapters"
@@ -811,8 +817,12 @@ class CopyManga(MangaAdapter):
                 if not page and offset < (total or 0):
                     raise MangaError("拷贝漫画章节分页为空，目录未取全")
                 for ch in page:
+                    chapter_id = str(ch.get("uuid") or ch.get("id") or "")
+                    if not chapter_id or chapter_id in group_ids:
+                        raise MangaError("拷贝漫画章节标识缺失或重复，目录未取全")
+                    group_ids.add(chapter_id)
                     ch_list.append(Chapter(
-                        id=ch.get("uuid", ch.get("id", "")),
+                        id=chapter_id,
                         name=ch.get("name", ""), group=ginfo.get("name", gname),
                         url=ch.get("id", "")))
                 offset += 100
