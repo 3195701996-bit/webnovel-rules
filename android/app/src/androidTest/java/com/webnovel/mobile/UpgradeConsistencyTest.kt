@@ -199,21 +199,26 @@ class UpgradeConsistencyTest {
         source = fx.source
         val realComicId = fx.comicId
         val comicId = "__upgrade_${UUID.randomUUID().toString().replace("-", "")}__"
-        val chapterId = fx.chapterId
         assertTrue("升级夹具来源需可稳定路由", source == "mangadex")
         checkpoint("source", source)
         checkpoint("comic_id", comicId)
-        checkpoint("chapter_id", chapterId)
         checkpoint("real_source_comic_id", realComicId)
-        ev("选中真实源章节：$source/$realComicId / ${fx.chapterId}；本地身份隔离为 $comicId")
 
         val detailResp = gateway.httpText(ep.port, "/api/manga/$source/$realComicId")
         assertTrue("读取下载目录应成功：HTTP ${detailResp.code}", detailResp.ok)
         val detail = EngineData.mangaDetail(detailResp.body)
             ?: throw AssertionError("下载目录无法解析")
+        // The worker sorts the selected catalog before downloading. Monitoring
+        // MangaFixture's preferred last chapter waits for the whole batch, not
+        // its first persisted page, and can falsely fail while earlier chapters
+        // are downloading correctly. Use the server's canonical first unit.
+        val chapterId = detail.readingChapters.firstOrNull()?.id
+            ?: throw AssertionError("升级下载目录为空")
+        checkpoint("chapter_id", chapterId)
+        ev("监视规范目录首话：$source/$realComicId / $chapterId；本地身份隔离为 $comicId")
         // 多话任务使“首批图片写盘后暂停”有足够观察窗口。保留夹具选中的话为第一项，
         // 后续章节取同一真实作品目录；不再让单话快速完成与两秒轮询发生竞态。
-        val chapterIds = (listOf(chapterId) + detail.readingChapters.map { it.id })
+        val chapterIds = detail.readingChapters.map { it.id }
             .filter { it.isNotBlank() }
             .distinct()
             .take(12)
@@ -245,6 +250,15 @@ class UpgradeConsistencyTest {
             if (taskStatus(gateway, ep.port, comicId) == "error") {
                 skipUnlessUpgradeRequired("漫画源不可用，无法执行升级下载断言：$comicId", false)
             }
+        }
+        if (n < 1) {
+            val status = gateway.httpText(ep.port,
+                "/api/manga/download/status?source=$source&cid=$comicId")
+            val state = runCatching { JSONObject(status.body) }.getOrNull()
+            val allPages = syntheticDir.walkTopDown().count { it.isFile && isImage(it) }
+            ev("首话未落盘：status=${state?.optString("status")} " +
+                "current_chapter_id=${state?.optString("current_chapter_id")} " +
+                "images_done=${state?.optInt("images_done")} actual_pages=$allPages")
         }
         assertTrue("下载应至少落盘 1 张（实际 $n）", n >= 1)
         gateway.httpPost(ep.port, "/api/manga/download/pause?source=$source&cid=$comicId")
