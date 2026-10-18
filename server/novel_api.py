@@ -2142,8 +2142,19 @@ def api_book_progress_get(book_key):
 def api_book_progress_save(book_key):
     book_key = _safe_seg(book_key, "书籍")
     body = request.get_json(silent=True) or {}
-    idx = int(body.get("idx") or 0)
-    pct = int(body.get("pct") or 0)
+    if not isinstance(body, dict):
+        return jsonify({"ok": False, "error": "无效的阅读进度"}), 400
+    try:
+        raw_idx = body.get("idx", 0)
+        raw_pct = body.get("pct", 0)
+        if isinstance(raw_idx, bool) or isinstance(raw_pct, bool):
+            raise ValueError("boolean progress")
+        idx = int(raw_idx)
+        pct = int(raw_pct)
+        if isinstance(raw_idx, float) and raw_idx != idx:
+            raise ValueError("fractional chapter index")
+    except (ValueError, TypeError, OverflowError):
+        return jsonify({"ok": False, "error": "无效的阅读进度"}), 400
     name = str(body.get("name") or "")[:100]
     # 兜底：章节序号必须 >= 1。客户端在"读进度失败"时可能回退到 0/第 1 章，
     # 那种写入会把两端已有进度一起清掉（用户实测的"重连后进度被重置"）。
