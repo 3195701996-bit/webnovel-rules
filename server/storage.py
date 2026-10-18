@@ -16,7 +16,7 @@ import os
 import shutil
 import time
 
-from engine.app_utils import cache_key_of
+from engine.app_utils import cache_key_of, chapter_cache_valid
 from engine.config import (BOOKS_DIR, DATA_DIR, MANGA_CACHE_DIR,
                            MANGA_DOWNLOADS_DIR, MANGA_LIBRARY_FILE,
                            SEARCH_CACHE_FILE, TOC_CACHE_FILE)
@@ -403,20 +403,18 @@ def clear(target):
         failed = state.get("failed", {}) or {}
         only = (target.get("only") or "").strip()
         wanted = set()
+        recovered_urls = []
         if only == "failed":
-            # "错误缓存"：抓取失败的章节 + 内容为空的损坏缓存
+            # 历史 failed 不等于正文损坏；清错误缓存不能删除已恢复的正常正文。
             for i, c in enumerate(chapters):
                 u = c.get("url", "")
-                if u in failed:
-                    wanted.add(i + 1)
                 p = os.path.join(d, cache_key_of(u) + ".cache")
-                if os.path.exists(p):
-                    try:
-                        with open(p, encoding="utf-8") as f:
-                            if not f.read().strip():
-                                wanted.add(i + 1)
-                    except (OSError, UnicodeDecodeError):
-                        wanted.add(i + 1)
+                if chapter_cache_valid(p):
+                    if u in failed:
+                        recovered_urls.append(u)
+                    continue
+                if u in failed or os.path.exists(p):
+                    wanted.add(i + 1)
         elif isinstance(target.get("chapters"), (list, tuple)):
             for v in target["chapters"]:
                 try:
@@ -436,12 +434,12 @@ def clear(target):
             if not os.path.exists(p):
                 removed_urls.append(u)
         # 状态不撒谎：completed 里剔除已删章节 → 下次"继续下载"会重新抓
-        if removed_urls:
+        if removed_urls or recovered_urls:
             _completed = state.get("completed", [])
             _kept_completed = [u for u in _completed if u not in set(removed_urls)]
             if len(_kept_completed) != len(_completed):
                 state["completed"] = _kept_completed
-            for u in removed_urls:
+            for u in removed_urls + recovered_urls:
                 failed.pop(u, None)
             state["failed"] = failed
             try:
@@ -450,7 +448,9 @@ def clear(target):
                 atomic_write(os.path.join(d, "_state.json"), state)
                 invalidate_book_state(os.path.join(d, "_state.json"))
             except Exception as e:                  # noqa: BLE001
-                notes.append(f"缓存已删，但状态回写失败（继续下载时会自愈）：{e}")
+                notes.append(f"清理状态回写失败（继续下载时会自愈）：{e}")
+        if recovered_urls:
+            notes.append(f"保留 {len(recovered_urls)} 章已恢复的正常正文，并纠正过期失败记录")
         notes.append("已下载的其他章节与书架记录未受影响；被删章节可在下载页点「继续」重抓")
         if not wanted:
             notes.append("没有匹配到需要清理的章节（失败章节没有缓存、也没有空缓存）")

@@ -245,12 +245,27 @@ def test_clear_book_chapters_prunes_failed_entry(store):
     """删失败章节的缓存时，failed 里那条也要清（否则界面一直显示上次失败原因）"""
     S, root, books, dl, cache, trash = store
     d, chs = _mk_book(books, "srcA_aaaa", chapters=2, cached=(1,), failed=(2,))
-    _write(d / (cache_key_of(chs[1]["url"]) + ".cache"), 200)   # 失败章也有半截缓存
+    (d / (cache_key_of(chs[1]["url"]) + ".cache")).write_bytes(b"\xff" * 200)
     res = S.clear({"scope": "book_chapters", "key": "srcA_aaaa", "only": "failed"})
     assert res["ok"] and res["freed_bytes"] == 200
     state = json.load(open(str(d / "_state.json"), encoding="utf-8"))
     assert state["failed"] == {}
     assert chs[1]["url"] not in state["completed"]
+
+
+def test_clear_failed_preserves_recovered_body_and_clears_stale_failure(store):
+    S, root, books, dl, cache, trash = store
+    d, chs = _mk_book(books, "recovered_book", chapters=2, cached=(1, 2), failed=(1,))
+    path = d / (cache_key_of(chs[0]["url"]) + ".cache")
+    path.write_text("正常正文已恢复，不可被旧失败记录删除。", encoding="utf-8")
+    before = path.read_bytes(), path.stat().st_mtime_ns
+    response = S.clear({"scope": "book_chapters", "key": "recovered_book", "only": "failed"})
+    assert response["ok"]
+    assert (path.read_bytes(), path.stat().st_mtime_ns) == before
+    state = json.loads((d / "_state.json").read_text(encoding="utf-8"))
+    assert chs[0]["url"] in state["completed"]
+    assert state["failed"] == {}
+    assert response["freed_bytes"] == 0
 
 
 # ── 6) 参数校验：一律先拒绝、后动手 ─────────────────────────────────
