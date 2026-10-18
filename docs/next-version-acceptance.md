@@ -130,6 +130,14 @@
 - 新增 `novel_detail_intent.test.js` 覆盖六种交互标记；原 toc_render 与 frontend_remaining 回归通过。临时复现脚本和截图仍在 `/private/tmp/webnovel-main-web-audit-KPHxpl`，浏览器／隔离服务已关闭。
 - 本项是异步交互修复，不是手机重复漫画身份或所有阅读模式验收的替代证据；尚未打包。
 
+## 最新运行时代码的 Android 长目录补验（调试包，未发布）
+
+- 在本任务专用 `ReaderNext20261018_API35`／emulator-5560 覆盖安装最新调试 APK 和 instrumentation；JVM 单测、调试包及测试包构建通过。没有操作用户应用宝 emulator-5554。
+- 新增 `NovelCacheScaleTest`：5035 个有真实 UTF-8 正文的缓存文件，真实嵌入式 Python 详情接口首次120ms、重复57ms；原地改坏一章后 done=5034，修复后5035。测试完成清除唯一隔离书目录。
+- `ReaderPathTest` 通过：书架／详情、正文与未下载分支、进度写回读回以及书架续读数据，清理后隔离书和进度残留均为0。
+- `MangaDetailScaleTest` 通过：5000项漫画目录接口218ms、JSON解析18ms、首次详情渲染292ms、重复打开166ms。三个设备测试共通过；这是API35模拟器调试包单次观测，不是vivo API36性能基准或正式签名包验收。
+- 专用模拟器已关闭，adb清单只剩用户应用宝5554；无发布动作。公开rc2 APK未因本轮调试构建而替换。
+
 ## 当前完成度审计：保留整个项目目标
 
 | 用户要求／门槛 | 已有直接证据 | 仍缺的证明 |
