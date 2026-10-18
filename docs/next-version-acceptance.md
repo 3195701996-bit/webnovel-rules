@@ -179,6 +179,13 @@
 - rc3风险提示继续保留并链接rc4，未替换旧版本资产。本轮专用5568已关闭，adb只剩用户5554，原书库与VPN未改动。Web源码修复已在分支，未擅自启动／部署真实数据服务。
 - 手机重复41话、真机系统存储体验、完整跨端及最终稳定发布仍未完成；本回执不能替代剩余目标。
 
+## 公开 rc4 的 Android16／API36 补验
+
+- 通过官方sdkmanager补齐 `system-images;android-36;google_apis;arm64-v8a`（revision7），新建本任务专用 `ReaderAudit_API36`／5570；API36、4KB页，未变更编译平台、用户应用宝／VPN或真机。
+- 直接安装回下载核验的公开rc4 APK（SHA256 c7641b917abdd4c96faa6cb1ca076b4d3970c65435c704880ca884ea52f2b8d6），测试APK同一clean revision `02f46947df37ff83a892ace465b7cdeb40025614`／163。StorageUiTest两项、ReaderPath、ReaderUiAcceptance、NovelCacheScale、MangaDetailScale、MangaReaderControlsAutoHide共 **7项通过（15.892秒）**，隔离夹具清理完成。
+- 此为Android16模拟器兼容验证，不能替代vivo V2304A真机的规则VPN、系统存储操作、旧漫画重复身份与厂商后台行为。系统设置“清除缓存”与应用内错误缓存清理是不同流程，前者仍未验收。
+- 专用5570已关闭；运行镜像保留供后续复验，没有自动删除用户数据或卸载用户工具。SDK管理器对本机既有旧NDK元数据有兼容警告，本轮未修复／改动该既有NDK。
+
 ## 当前完成度审计：保留整个项目目标
 
 | 用户要求／门槛 | 已有直接证据 | 仍缺的证明 |
