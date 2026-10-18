@@ -368,6 +368,57 @@ def test_incremental_volume_worker_preserves_existing_page_count(
     assert [row["name"] for row in manifest["chapters"]] == [first[1], second[1]]
 
 
+@pytest.mark.parametrize("already_archived", [False, True])
+def test_refresh_keeps_withdrawn_local_identity_without_downloading_it(
+        tmp_path, monkeypatch, already_archived):
+    """A removed upstream UUID stays locally readable, never a new task target."""
+    from engine.manga import download_manager as module
+    from engine.manga import downloader
+
+    source, comic_id = "demovol", "withdrawn-local"
+    root = tmp_path / "downloads"
+    base = root / source / comic_id
+    old_id = "3ed54ac2-c519-11f1-a73b-fa163e02432f"
+    (base / old_id).mkdir(parents=True)
+    old_page = base / old_id / "0000.webp"
+    old_page.write_bytes(b"original downloaded image")
+    original_stat = old_page.stat().st_mtime_ns
+    manifest_path = base / "_info.json"
+    manifest_path.write_text(json.dumps({"chapters": [
+        {"id": old_id, "name": "第41話", "group": "默認",
+         "download_page_count": 1, "local_archive": already_archived}]}), encoding="utf-8")
+    manager = module.DownloadManager(state_file=str(tmp_path / "tasks.json"))
+    manager.configure(downloads_root=str(root), state_dir=str(tmp_path / "state"),
+                      library_file=str(tmp_path / "library.json"))
+    manager._adapter_pool = {source: _VolAdapter()}
+    monkeypatch.setattr(downloader, "ImageDownloader", _FakeImageDownloader)
+    requested = []
+    monkeypatch.setattr(module, "images_resolver", lambda a, s, c, chapter:
+                        requested.append(chapter) or [f"https://img.example/{chapter}.jpg"])
+    key = f"{source}:{comic_id}"
+    # First force a source refresh for a selected new identity; then a whole-book
+    # task reuses the fresh manifest. Neither may ask the source for old_id.
+    for selection in ([] if already_archived else ["v2"], []):
+        manager._tasks[key] = {
+            "status": "running", "source": source, "comic_id": comic_id,
+            "title": "保留旧目录", "cover": "https://img.example/cover.jpg",
+            "chapters": selection, "images_done": 0, "images_total": 0,
+            "paused": False,
+        }
+        manager._active = 1
+        manager._worker_alive.add(key)
+        manager._worker(key)
+        assert manager.status(key)["status"] == "done"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        archived = [row for row in manifest["chapters"] if row["id"] == old_id]
+        assert len(archived) == 1, "刷新不得丢掉已下载的旧章节身份"
+        assert archived[0]["local_archive"] is True
+        assert archived[0]["download_page_count"] == 1
+    assert old_id not in requested
+    assert old_page.read_bytes() == b"original downloaded image"
+    assert old_page.stat().st_mtime_ns == original_stat
+
+
 @pytest.mark.parametrize("selection", [["missing"], ["v1", "missing"]])
 def test_worker_never_downloads_other_chapters_for_unresolved_selection(
         tmp_path, monkeypatch, selection):

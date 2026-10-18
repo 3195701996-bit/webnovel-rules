@@ -150,6 +150,23 @@ images_resolver = None
 # 下载完成写库后回调 (source, comic_id) 重扫该部快照。None 时仅写库，
 # 保持 engine 独立可用）
 library_change_hook = None
+# Optional host diagnostic sink; engine remains usable without Flask/server.
+diagnostic_error_hook = None
+
+
+def _report_worker_error(exc):
+    """Record exception type and code locations, never URLs or exception values."""
+    if diagnostic_error_hook is None:
+        return
+    try:
+        locations = " -> ".join(f"{frame.name}:{frame.lineno}"
+                                for frame in traceback.extract_tb(exc.__traceback__)[-8:])
+        diagnostic_error_hook("manga.download.worker", exc,
+                              msg=locations or "worker failed before traceback")
+    except Exception:
+        pass  # Diagnostics must never prevent task termination/slot release.
+
+
 import re as _re
 
 # 附加类命名关键词（无话号时判定为附加内容，不参与正片序号提取）——
@@ -1003,7 +1020,12 @@ class DownloadManager:
                         if _age < INFO_TTL:
                             with open(info_p, encoding="utf-8") as _f:
                                 info = json.load(_f)
-                            _cand = info.get("chapters") or []
+                            # Archived local identities are retained for offline
+                            # reading, not part of the current upstream catalog.
+                            _cand = [row for row in (info.get("chapters") or [])
+                                     if not row.get("local_archive")]
+                            if not _cand and info.get("chapters"):
+                                raise ValueError("本地只有旧目录，需刷新当前源目录")
                             if selected_ids - {c.get("id") for c in _cand}:
                                 raise ValueError("缓存目录缺少选中章节，需要刷新源目录")
                             # R36: TTL 内复用前也校验与目录的重叠——被污染列表
@@ -1053,13 +1075,17 @@ class DownloadManager:
                     # 策略：对比新旧列表与磁盘目录的 ID 重叠度，选用重叠最多的列表；
                     # 新列表与目录零重叠且目录非空时，保留旧列表（幂等续传）。
                     _old_chapters = None
+                    _old_manifest_chapters = []
                     _old_page_counts = {}
                     if os.path.exists(info_p):
                         try:
                             with open(info_p, encoding="utf-8") as _f:
                                 _old_info = json.load(_f)
-                            _old_chapters = _old_info.get("chapters") or []
-                            for _row in _old_chapters:
+                            _old_manifest_chapters = _old_info.get("chapters") or []
+                            _old_chapters = [row for row in _old_manifest_chapters
+                                             if isinstance(row, dict) and
+                                             not row.get("local_archive")]
+                            for _row in _old_manifest_chapters:
                                 if (not isinstance(_row, dict) or not _row.get("id") or
                                         _row.get("download_page_count") is None):
                                     continue
@@ -1109,7 +1135,22 @@ class DownloadManager:
                             error="源目录中找不到部分选中章节，请重新检查更新后重试；未回退全量下载")
                         return
                     # 续传依赖的关键文件：原子写，避免半截 JSON；同时关闭句柄
-                    atomic_write(info_p, {"chapters": chapters, "cover": cover,
+                    # A source can withdraw/reissue a UUID while the user still
+                    # owns its downloaded pages. Keep that metadata in the local
+                    # manifest, separately marked, without adding it to this task
+                    # or equating it to a same-name replacement chapter.
+                    _manifest_chapters = list(chapters)
+                    _manifest_ids = {str(row.get("id") or "")
+                                     for row in _manifest_chapters}
+                    for _row in _old_manifest_chapters:
+                        if not isinstance(_row, dict):
+                            continue
+                        _old_id = str(_row.get("id") or "")
+                        if (_old_id and _old_id in _dir_ids and
+                                _old_id not in _manifest_ids):
+                            _manifest_chapters.append(dict(_row, local_archive=True))
+                            _manifest_ids.add(_old_id)
+                    atomic_write(info_p, {"chapters": _manifest_chapters, "cover": cover,
                                           "title": title})
                 # 2) 章节选择
                 if sel_chapters:
@@ -1586,6 +1627,7 @@ class DownloadManager:
                 else:
                     self._mark_done(key, "stopped", error="")
             except Exception as e:
+                _report_worker_error(e)
                 # P2-8: error 字段只存脱敏稳定文案（经 API 回客户端），
                 # 完整异常（可能含 URL/内网地址/凭据片段）只进日志
                 print(f"[manga-dl] worker {key} 任务异常: "
@@ -1601,6 +1643,7 @@ class DownloadManager:
                                 stop_reason=_disk or (str(e) if _library_error else
                                     "下载过程异常中断（已下载的图片保留，可点「继续」）"))
         except Exception as e:
+            _report_worker_error(e)
             # 启动期异常兜底：主体 try 之前的失败（适配器构造/导入等）
             print(f"[manga-dl] worker {key} 未捕获异常: "
                   f"{type(e).__name__}: {e}\n{traceback.format_exc()}",

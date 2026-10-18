@@ -2461,7 +2461,7 @@ def _downloaded_ids_for_chapters(source, comic_id, chapters):
                 with open(_p, encoding="utf-8") as _f:
                     _info = json.load(_f)
                 for _c in (_info.get("chapters") or []):
-                    if str(_c.get("id")) in _ids:
+                    if str(_c.get("id")) in _ids and not _c.get("local_archive"):
                         _name = _manga_chapter_name_key(_c.get("name"))
                         if _name:
                             _names.add(_name)
@@ -2501,7 +2501,8 @@ def _partial_downloaded_ids_for_chapters(source, comic_id, chapters):
                     rows = json.load(f).get("chapters") or []
                 for row in rows:
                     if (isinstance(row, dict) and
-                            str(row.get("id") or "") in disk_ids):
+                            str(row.get("id") or "") in disk_ids and
+                            not row.get("local_archive")):
                         key = _manga_chapter_name_key(row.get("name"))
                         if key:
                             names.add(key)
@@ -2591,6 +2592,8 @@ def _manga_local_media_dirs(source, comic_id, chapter_id, downloaded_only=False)
         for _base, rows in metadata:
             matches = {}
             for row in rows:
+                if row.get("local_archive"):
+                    continue
                 row_name = _manga_chapter_name_key(row.get("name"))
                 row_id = str(row.get("id") or "")
                 if row_name in names and row_id:
@@ -2710,6 +2713,14 @@ _manga_dl.configure(
 # P1-1: 下载 worker 的章节图片列表也走统一三级缓存（内存→磁盘→回源）
 import engine.manga.download_manager as _dm_mod  # noqa: E402
 _dm_mod.images_resolver = _get_chapter_images
+
+
+def _record_manga_worker_error(where, exc, msg=None):
+    from server.diag import record_error
+    record_error(where, exc, msg=msg)
+
+
+_dm_mod.diagnostic_error_hook = _record_manga_worker_error
 
 
 def _manga_dl_key(source, comic_id):

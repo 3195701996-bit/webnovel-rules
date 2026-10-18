@@ -7,6 +7,33 @@ def _page(path):
     (path / "0000.jpg").write_bytes(b"\xff\xd8\xff" + b"x" * 128)
 
 
+def test_archived_local_identity_cannot_impersonate_same_name_current_chapter(
+        tmp_path, monkeypatch):
+    import server.state as state
+
+    downloads, cache = tmp_path / "downloads", tmp_path / "cache"
+    monkeypatch.setattr(state, "MANGA_DOWNLOADS_DIR", str(downloads))
+    monkeypatch.setattr(state, "MANGA_CACHE_DIR", str(cache))
+    for count in (1, 3):  # Complete and provably partial old media.
+        comic = f"archived-{count}"
+        base = downloads / "copymanga" / comic
+        _page(base / "old-id")
+        (base / "_info.json").write_text(json.dumps({"chapters": [
+            {"id": "old-id", "name": "第41話", "local_archive": True,
+             "download_page_count": count}]}), encoding="utf-8")
+        detail = cache / "copymanga" / comic / "_info_full.json"
+        detail.parent.mkdir(parents=True)
+        current = [{"id": "current-id", "name": "第41話"}]
+        detail.write_text(json.dumps({"data": {"chapters": current}}), encoding="utf-8")
+        assert "current-id" not in state._downloaded_ids_for_chapters(
+            "copymanga", comic, current)
+        assert "current-id" not in state._partial_downloaded_ids_for_chapters(
+            "copymanga", comic, current)
+        assert state._manga_local_media_dirs("copymanga", comic, "current-id") == []
+        assert str(base / "old-id") in state._manga_local_media_dirs(
+            "copymanga", comic, "old-id")
+
+
 def test_download_scan_excludes_untracked_read_cache_but_keeps_downloads(
         tmp_path, monkeypatch):
     import server.state as state
