@@ -277,7 +277,7 @@ async function init() {
   if (window._chCache) window._chCache.invalidateAll();
   document.title = BOOK.name + ' · 阅读';
   $('#side-title').textContent = BOOK.name + '（' + (BOOK.done || 0) + '/' + BOOK.total + ' 章）';
-  $('#book-progress').textContent = BOOK.percent + '%';
+  $('#book-progress').textContent = '已下载 ' + BOOK.percent + '%';
   if (BOOK.done >= BOOK.total) { $('#txt-download').style.display = ''; }
   $('#txt-download').onclick = () => window.open('/api/books/' + KEY + '/txt', '_blank');
 

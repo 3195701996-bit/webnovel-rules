@@ -1506,6 +1506,7 @@ def api_book_detail(book_key):
         "intro": info.get("intro", ""),
         "total": len(chapters),
         "done": done,
+        "percent": round(done * 100 / len(chapters), 1) if chapters else 0,
         "state_completed": len(completed),
         "stale_completed": stale,
         # **失败数以磁盘为准**：`_state.json` 里的 failed 可能挂着旧记录

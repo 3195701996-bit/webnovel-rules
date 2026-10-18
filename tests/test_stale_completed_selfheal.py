@@ -184,6 +184,7 @@ def test_invalid_cache_is_not_downloaded(client, cache_kind):
     books = client.get("/api/books").get_json()["books"]
     assert next(b for b in books if b["key"] == key)["done"] == 2
     assert detail["done"] == 2
+    assert detail["percent"] == 66.7
     assert detail["chapters"][2]["downloaded"] is False
     assert client.get(f"/api/books/{key}/chapter/3").get_json()["downloaded"] is False
     stat = os.stat(path)
