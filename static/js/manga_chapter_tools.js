@@ -9,6 +9,24 @@
     return rows.map((row, index) => ({row, index})).filter(entry =>
       !needle || key(entry.row.name + ' ' + (entry.row.group || '')).includes(needle)).slice(0, 100);
   }
+  function identityHints(rows) {
+    const groups=new Map(), hints=new Map();
+    rows.forEach(row=>{
+      const name=String(row.name || '').trim(), id=String(row.id || '');
+      if (!name || !id) return;
+      if (!groups.has(name)) groups.set(name,new Set());
+      groups.get(name).add(id);
+    });
+    groups.forEach(idsSet=>{
+      const ids=[...idsSet];
+      if (ids.length<2) return;
+      const longest=ids.reduce((max,id)=>Math.max(max,id.length),0);
+      let length=8;
+      while (length<longest && new Set(ids.map(id=>id.slice(0,length))).size<ids.length) length++;
+      ids.forEach(id=>hints.set(id,id.slice(0,length)+(id.length>length?'…':'')));
+    });
+    return hints;
+  }
   function report(detail, source, comicId, localOnly) {
     const rows = [...(detail.volumes || []), ...(detail.chapters || [])];
     const downloaded = new Set(detail.downloaded || []);
@@ -41,8 +59,7 @@
     hint.setAttribute('role','status');
     const results = document.createElement('div');
     results.className = 'finder-results';
-    const names = new Map();
-    rows.forEach(row=>names.set(row.name,(names.get(row.name)||0)+1));
+    const hints = identityHints(rows);
     input.oninput = () => {
       results.replaceChildren();
       if (!input.value.trim()) { hint.textContent=''; return; }
@@ -53,12 +70,12 @@
         button.className='chap-item';
         button.dataset.chapterId=String(row.id);
         button.textContent=(index+1)+'. '+row.name+(row.group?' · '+row.group:'')+
-          (names.get(row.name)>1?' · 身份 '+String(row.id).slice(-12):'');
+          (hints.has(String(row.id))?' · 身份 '+hints.get(String(row.id)):'');
         button.onclick=()=>onSelect(index);
         results.append(button);
       });
     };
     host.append(label,hint,results);
   }
-  window.mangaChapterTools={find,report,mount};
+  window.mangaChapterTools={find,report,mount,identityHints};
 }());

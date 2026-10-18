@@ -21,4 +21,18 @@ assert.equal(report.chapters[0].downloaded,true);
 assert.equal(report.chapters[1].partial,true);
 assert.equal(JSON.stringify(report).includes('SECRET_URL'),false);
 assert.equal(JSON.stringify(report).includes('PRIVATE_TEXT'),false);
+const twins=[
+  {id:'3ed54ac2-c519-11f1-a73b-fa163e02432f',name:'第41話',group:'默认'},
+  {id:'3b77390f-c4d7-11f1-8ff4-fa163e02432f',name:' 第41話 ',group:'默认'}];
+assert.equal(twins[0].id.slice(-12),twins[1].id.slice(-12));
+const hints=tools.identityHints(twins);
+assert.equal(hints.size,2);
+assert.notEqual(hints.get(twins[0].id),hints.get(twins[1].id));
+assert.equal(hints.get(twins[0].id),'3ed54ac2…');
+const sharedPrefix='same-prefix-'.repeat(5);
+const longRows=['a','b'].map(suffix=>({id:sharedPrefix+suffix,name:'同名'}));
+const longHints=tools.identityHints(longRows);
+assert.notEqual(longHints.get(longRows[0].id),longHints.get(longRows[1].id));
+assert.equal(tools.identityHints([{id:'same',name:'one'},{id:'same',name:'one'}]).size,0);
+assert.equal(tools.identityHints(rows).size,0);
 console.log('manga_chapter_tools: original identity/index, bounded search and metadata-only export passed');

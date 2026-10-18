@@ -28,9 +28,7 @@ fun MangaChapterFinder(rows: List<MangaChapter>, onDismiss: () -> Unit,
                        onSelect: (Int, MangaChapter) -> Unit) {
     var query by remember { mutableStateOf("") }
     val matches = remember(rows, query) { findMangaChapters(rows, query) }
-    val duplicateNames = remember(rows) {
-        rows.groupingBy { it.name.trim() }.eachCount().filterValues { it > 1 }.keys
-    }
+    val identityHints = remember(rows) { mangaChapterIdentityHints(rows) }
     AlertDialog(onDismissRequest = onDismiss, title = { Text("查找章节") },
         text = {
             Column {
@@ -49,8 +47,8 @@ fun MangaChapterFinder(rows: List<MangaChapter>, onDismiss: () -> Unit,
                                 Text("${match.index + 1}. ${match.value.label}")
                                 if (match.value.group.isNotBlank()) Text(match.value.group,
                                     style = MaterialTheme.typography.bodySmall)
-                                if (match.value.name.trim() in duplicateNames) {
-                                    Text("章节身份：${match.value.id.takeLast(12)}",
+                                identityHints[match.value.id]?.let { hint ->
+                                    Text("章节身份：$hint",
                                         style = MaterialTheme.typography.labelSmall)
                                 }
                             }
@@ -59,4 +57,17 @@ fun MangaChapterFinder(rows: List<MangaChapter>, onDismiss: () -> Unit,
                 }
             }
         }, confirmButton = { TextButton(onClick = onDismiss) { Text("关闭") } })
+}
+
+/** UUIDs often share a node suffix. Use the shortest distinguishing prefix instead. */
+fun mangaChapterIdentityHints(rows: List<MangaChapter>): Map<String, String> = buildMap {
+    rows.filter { it.name.isNotBlank() && it.id.isNotBlank() }
+        .groupBy { it.name.trim() }.values.forEach { group ->
+            val ids = group.map { it.id }.distinct()
+            if (ids.size < 2) return@forEach
+            val longest = ids.maxOf { it.length }
+            var length = 8
+            while (length < longest && ids.map { it.take(length) }.toSet().size < ids.size) length++
+            ids.forEach { id -> put(id, id.take(length) + if (id.length > length) "…" else "") }
+        }
 }
