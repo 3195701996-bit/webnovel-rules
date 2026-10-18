@@ -218,7 +218,8 @@ def test_check_update_detects_missing_cache_without_opening_reader(monkeypatch, 
 
 
 @pytest.mark.parametrize("cache_kind", ["missing", "empty", "directory"])
-def test_crawl_prunes_completed_without_cache(monkeypatch, cache_kind):
+@pytest.mark.parametrize("stale_failure", [False, True])
+def test_crawl_prunes_completed_without_cache(monkeypatch, cache_kind, stale_failure):
     """开爬前 completed 与磁盘对齐：丢缓存的章节重新进入待下载队列"""
     from engine.crawler import CrawlTask
     from engine.app_utils import cache_key_of
@@ -241,6 +242,9 @@ def test_crawl_prunes_completed_without_cache(monkeypatch, cache_kind):
         os.rmdir(invalid_path)  # Assert detection without obstructing atomic repair.
     assert task._load_state() is True
     assert len(task.completed) == 3
+    if stale_failure:
+        task.failed[chapters[0]["url"]] = "old failure after successful cache write"
+        task._save_state()  # crawl(resume=True) reloads state; exercise persisted failure.
 
     fetched = []
 
@@ -261,6 +265,9 @@ def test_crawl_prunes_completed_without_cache(monkeypatch, cache_kind):
     from engine.app_utils import cache_key_of as _ck
     assert os.path.exists(os.path.join(d, _ck(chapters[2]["url"]) + ".cache"))
     assert len(task.completed) == 3 and task._done_count() == 3
+    assert task.failed == {}
+    with open(os.path.join(d, "_state.json"), encoding="utf-8") as f:
+        assert json.load(f)["failed"] == {}
 
     shutil.rmtree(d, ignore_errors=True)
 

@@ -1081,7 +1081,15 @@ class CrawlTask:
         chapters = self.book.chapters
         # B06: completed 成员判断走运行时 set 镜像（O(1)），不再扫列表
         is_done = lambda c: c['url'] in self._completed_set or self._has_cache(c['url'])
-        pending = [c for c in chapters if c['url'] in self.failed]
+        recovered = [c['url'] for c in chapters
+                     if c['url'] in self.failed and is_done(c)]
+        for url in recovered:
+            self.failed.pop(url, None)
+        if recovered:
+            self._save_state()
+        # 旧失败记录可能晚于正文落盘；不要仅凭 failed 强制覆盖可读缓存。
+        pending = [c for c in chapters
+                   if c['url'] in self.failed and not is_done(c)]
         pending_urls = {c['url'] for c in pending}
         for c in chapters:
             if not is_done(c) and c['url'] not in pending_urls:
