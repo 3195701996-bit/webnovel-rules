@@ -294,12 +294,26 @@ let _histTimer = null;
 function currentPage() {
   const wraps = document.querySelectorAll('#stage .img-wrap');
   if (!wraps.length) return 1;
-  const vp = window.scrollY + window.innerHeight * 0.35;
-  for (let i = 0; i < wraps.length; i++) {
-    const w = wraps[i];
-    if (w.offsetTop + w.offsetHeight > vp) return i + 1;
+  if (window.scrollY <= 0.5) return 1;
+  if (window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 1) {
+    return wraps.length;
   }
-  return wraps.length;
+  const anchor = window.innerHeight * 0.35;
+  // 图片缩放后存在小数像素；offsetTop + offsetHeight 分别取整可能与
+  // 下一页起点相差 1px。统一按真实起点判断，容忍 scrollY 的半像素取整。
+  // 页面在纵向流中有序；二分定位，避免长话每次滚动读取数千次布局。
+  let low = 1, high = wraps.length;
+  while (low < high) {
+    const mid = Math.floor((low + high) / 2);
+    if (wraps[mid].getBoundingClientRect().top <= anchor + 0.5) low = mid + 1;
+    else high = mid;
+  }
+  return low;
+}
+function readerPageDocumentTop(page) {
+  // 先刷新布局，再读取 scrollY；图片解码可能触发浏览器滚动锚定。
+  const bounds = page.getBoundingClientRect();
+  return bounds.top + window.scrollY;
 }
 // Keep a sought page under the same 35%-viewport anchor used by currentPage().
 function readerScrollOffsetForPage(pageTop, viewportHeight) {
@@ -494,25 +508,28 @@ function scheduleProgressSave() {
 // 定位锚点：scrollToPage 期间记录目标位置；用户手动滚动离开后不再抢位校正
 let _locateY = -1;
 let _userMoved = false;
+let _seekGeneration = 0;
 
 function scrollToPage(pg, onDone) {
   const gen = _curGen, chId = _curChId;  // 冻结所属章：切章后旧校正/定时器不得抢位
   const wraps = document.querySelectorAll('#stage .img-wrap');
   const target = wraps[pg - 1];
   if (!target) { if (onDone) onDone(); return; }
+  const seekGeneration = ++_seekGeneration;
   const imgs = window._curImgs || [];
   // ① 瞬时定位到目标页占位处；占位比例可能与原图不一致，随后按真实布局校准。
-  _locateY = readerScrollOffsetForPage(target.offsetTop, window.innerHeight);
+  _locateY = readerScrollOffsetForPage(readerPageDocumentTop(target), window.innerHeight);
   _userMoved = false;
   scrollReaderTo(_locateY);
   // ② 只强制加载目标页与紧邻前页；更前方已在途的图等待完成，未请求的图保留占位。
   //    不能为跳到第 N 页而启动前 N 张网络图片请求（长篇会造成无谓带宽和源站压力）。
   let pending = 0;
   const correct = () => {
+    if (seekGeneration !== _seekGeneration) return;  // 同章后一次跳页已接管定位
     if (gen !== _curGen) { if (onDone) onDone(); return; }  // 已切章：旧章不再校正
     if (!target.isConnected) return;
     if (_userMoved) { if (onDone) onDone(); return; }
-    _locateY = readerScrollOffsetForPage(target.offsetTop, window.innerHeight);
+    _locateY = readerScrollOffsetForPage(readerPageDocumentTop(target), window.innerHeight);
     scrollReaderTo(_locateY);  // 瞬时，无动画
     if (onDone) onDone();
   };
@@ -527,9 +544,10 @@ function scrollToPage(pg, onDone) {
   if (pending <= 0) correct();
   // ④ 兜底：3.5s 内仍未全部 settle（CDN 极慢/降级代理中）也校正一次，避免一直悬空
   setTimeout(() => {
+    if (seekGeneration !== _seekGeneration) return;
     if (gen !== _curGen) return;  // 已切章：旧章的兜底校正不得执行
     if (target.isConnected && !_userMoved) {
-      _locateY = readerScrollOffsetForPage(target.offsetTop, window.innerHeight);
+      _locateY = readerScrollOffsetForPage(readerPageDocumentTop(target), window.innerHeight);
       scrollReaderTo(_locateY);
     }
   }, 3500);
@@ -545,7 +563,8 @@ window.addEventListener('scroll', () => {
 window.addEventListener('wheel', () => { if (_locateY >= 0) _userMoved = true; }, {passive:true});
 window.addEventListener('touchmove', () => { if (_locateY >= 0) _userMoved = true; }, {passive:true});
 window.addEventListener('keydown', e => {
-  if (_locateY >= 0 && ['ArrowUp','ArrowDown','PageUp','PageDown','Home','End'].includes(e.key)) {
+  if (readerControlOwnsKey(e.target) || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (_locateY >= 0 && ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','PageUp','PageDown','Home','End'].includes(e.key)) {
     _userMoved = true;
   }
 });
@@ -977,13 +996,21 @@ function _mountImg(w, item, idx, imgs, force, onDone, gen, chId) {
   }
 }
 
-document.addEventListener('keydown', e => {
+function readerControlOwnsKey(target) {
+  return Boolean(target && (target.isContentEditable ||
+    (typeof target.closest === 'function' && target.closest(
+      'input, textarea, select, button, a, [role="slider"], [role="textbox"], [contenteditable]:not([contenteditable="false"])'))));
+}
+function handleReaderNavigationKey(e) {
+  if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey || readerControlOwnsKey(e.target)) return;
+  if (!['ArrowRight','ArrowLeft','PageDown','PageUp','Home','End'].includes(e.key)) return;
+  e.preventDefault();  // 画布导航只执行一次，不叠加浏览器原生 PageDown/Home 行为
   // 翻页模式：左右键/翻页键翻屏；Home/End 切章
   if (settings.mode !== 'scroll') {
     const view = document.querySelector('.page-view');
     const per = view && view.classList.contains('double') ? 2 : 1;
-    if (e.key === 'ArrowRight' || e.key === 'PageDown') { e.preventDefault(); flipPage(per); }
-    else if (e.key === 'ArrowLeft' || e.key === 'PageUp') { e.preventDefault(); flipPage(-per); }
+    if (e.key === 'ArrowRight' || e.key === 'PageDown') { flipPage(per); }
+    else if (e.key === 'ArrowLeft' || e.key === 'PageUp') { flipPage(-per); }
     else if (e.key === 'Home') { if (chIdx > 0) jumpChapter(chIdx - 1); }
     else if (e.key === 'End') { if (chIdx < chapters.length - 1) jumpChapter(chIdx + 1); }
     return;
@@ -992,7 +1019,8 @@ document.addEventListener('keydown', e => {
   if (e.key === 'ArrowLeft' || e.key === 'PageUp') window.scrollBy({top: -window.innerHeight * 0.8, behavior:'smooth'});
   if (e.key === 'Home') { if (chIdx > 0) jumpChapter(chIdx - 1); else window.scrollTo(0,0); }
   if (e.key === 'End') { if (chIdx < chapters.length - 1) jumpChapter(chIdx + 1); else window.scrollTo(0, document.body.scrollHeight); }
-});
+}
+document.addEventListener('keydown', handleReaderNavigationKey);
 
 function toggleToc(show) {
   document.getElementById('toc-panel').classList.toggle('show', show);
