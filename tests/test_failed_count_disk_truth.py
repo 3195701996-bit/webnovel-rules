@@ -53,3 +53,15 @@ def test_failed_count_keeps_truly_missing(tmp_path):
     chs = _make_book(d, with_cache=False)
     live = na._failed_live(d, {chs[2]["url"]: "真的没拿到"})
     assert list(live) == [chs[2]["url"]], f"真正缺失的章被吞掉了：{live}"
+
+
+def test_detail_recovered_chapter_has_no_stale_failure():
+    import app
+    import server.novel_api as na
+    d = os.path.join(na.BOOKS_DIR, "src_recovered_detail")
+    _make_book(d, with_cache=True)
+    body = app.app.test_client().get("/api/books/src_recovered_detail").get_json()
+    assert body["failed_count"] == 0
+    assert body["chapters"][2]["downloaded"] is True
+    assert body["chapters"][2]["failed"] is False
+    assert body["chapters"][2]["failed_reason"] == ""

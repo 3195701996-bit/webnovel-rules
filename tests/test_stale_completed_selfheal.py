@@ -152,7 +152,73 @@ def test_scan_books_done_follows_disk(client, stale_book):
 
 
 # ── 3) 任务自愈：缓存丢了的章节要重新下载 ────────────────────────────
-def test_crawl_prunes_completed_without_cache(monkeypatch):
+@pytest.mark.parametrize("total", [4999, 5000, 5035])
+def test_large_book_download_count_matches_detail(client, total):
+    key = f"stale_large_{total}"
+    _mk_book(key=key, completed_n=total, cache_n=2, total=total)
+    detail = client.get(f"/api/books/{key}").get_json()
+    books = client.get("/api/books").get_json()["books"]
+    summary = next(book for book in books if book["key"] == key)
+    assert summary["done"] == detail["done"] == 2
+    assert detail["stale_completed"] == total - 2
+
+
+@pytest.mark.parametrize("cache_kind", ["empty", "directory"])
+def test_invalid_cache_is_not_downloaded(client, cache_kind):
+    from engine.app_utils import cache_key_of
+    key = f"stale_invalid_{cache_kind}"
+    d, chapters = _mk_book(key=key, completed_n=3, cache_n=2)
+    path = os.path.join(d, cache_key_of(chapters[2]["url"]) + ".cache")
+    if cache_kind == "directory":
+        os.mkdir(path)
+    else:
+        with open(path, "w", encoding="utf-8"):
+            pass
+    detail = client.get(f"/api/books/{key}").get_json()
+    books = client.get("/api/books").get_json()["books"]
+    assert next(b for b in books if b["key"] == key)["done"] == 2
+    assert detail["done"] == 2
+    assert detail["chapters"][2]["downloaded"] is False
+    assert client.get(f"/api/books/{key}/chapter/3").get_json()["downloaded"] is False
+
+
+@pytest.mark.parametrize("offline", [False, True])
+def test_check_update_detects_missing_cache_without_opening_reader(monkeypatch, offline):
+    import server.state as st
+    key = f"stale_check_{offline}"
+    d, chapters = _mk_book(key=key, completed_n=3, cache_n=2)
+    state_path = os.path.join(d, "_state.json")
+    with open(state_path, encoding="utf-8") as f:
+        state = json.load(f)
+    state["completed"] = [c["url"] for c in chapters]
+    state["failed"] = {chapters[0]["url"]: "stale failure"}
+    with open(state_path, "w", encoding="utf-8") as f:
+        json.dump(state, f)
+    _invalidate(d)
+
+    class Crawler:
+        def __init__(self, source):
+            pass
+
+        def get_book(self, url):
+            if offline:
+                raise OSError("offline")
+            return object()
+
+        def get_toc(self, book, **kwargs):
+            return chapters
+
+    monkeypatch.setattr(st, "get_by_uid", lambda uid: {"uid": uid})
+    monkeypatch.setattr(st, "SourceCrawler", Crawler)
+    st._run_check_update(key)
+    assert st._check_jobs[key]["status"] == "done"
+    assert st._check_jobs[key]["missing_count"] == 1
+    assert st._check_jobs[key]["retry_failed"] == 0
+    assert st._check_missing[key]["chapters"] == chapters[2:]
+
+
+@pytest.mark.parametrize("cache_kind", ["missing", "empty", "directory"])
+def test_crawl_prunes_completed_without_cache(monkeypatch, cache_kind):
     """开爬前 completed 与磁盘对齐：丢缓存的章节重新进入待下载队列"""
     from engine.crawler import CrawlTask
     from engine.app_utils import cache_key_of
@@ -160,10 +226,19 @@ def test_crawl_prunes_completed_without_cache(monkeypatch):
     d, chapters = _mk_book(key="stale_src_crawl1", completed_n=3, cache_n=2)
     # 第 3 章缓存丢失（completed 里仍在）→ 必须被剔除并重抓
     assert not os.path.exists(os.path.join(d, cache_key_of(chapters[2]["url"]) + ".cache"))
+    invalid_path = os.path.join(d, cache_key_of(chapters[2]["url"]) + ".cache")
+    if cache_kind == "empty":
+        with open(invalid_path, "w", encoding="utf-8"):
+            pass
+    elif cache_kind == "directory":
+        os.mkdir(invalid_path)
 
     src = {"uid": "stale_src", "bookSourceName": "假源",
            "bookSourceUrl": "http://stale.example.com"}
     task = CrawlTask(src, BOOK_URL, d, resume=True)
+    assert task._has_cache(chapters[2]["url"]) is False
+    if cache_kind == "directory":
+        os.rmdir(invalid_path)  # Assert detection without obstructing atomic repair.
     assert task._load_state() is True
     assert len(task.completed) == 3
 

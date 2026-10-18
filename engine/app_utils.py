@@ -210,6 +210,24 @@ def cache_key_of(url):
     return re.sub(r"[^\w\u4e00-\u9fff-]", "_", url)[-60:]
 
 
+def chapter_cache_keys(book_dir):
+    """Inventory nonempty regular chapter files; never trust completion history."""
+    keys = set()
+    try:
+        with os.scandir(book_dir) as entries:
+            for entry in entries:
+                if not entry.name.endswith(".cache"):
+                    continue
+                try:
+                    if entry.is_file() and entry.stat().st_size > 0:
+                        keys.add(entry.name[:-6])
+                except OSError:
+                    continue  # Concurrent deletion is an unavailable cache.
+    except OSError:
+        pass
+    return keys
+
+
 
 _json_lock = threading.Lock()  # JSON 文件并发读写锁（Kimi 优化）
 

@@ -18,7 +18,7 @@ from engine.crawler import SourceCrawler
 from engine.crawler import (export_is_fresh as _export_is_fresh,
                             merge_book_txt as _merge_book_txt)
 from engine.app_utils import (now_iso, _norm, atomic_write, atomic_write_text,
-                              load_json, _read_json, update_json,
+                              load_json, _read_json, update_json, chapter_cache_keys,
                               cache_key_of as _cache_key)
 from engine.config import (TOC_CACHE_TTL, SLOW_COOLDOWN,
                            SEARCH_MAX_WORKERS, SEARCH_SOURCE_TIMEOUT,
@@ -1456,14 +1456,14 @@ def _failed_live(book_dir, failed):
     """真正"还没拿到正文"的失败章节（本机已有非空缓存的不算失败）。
 
     判据：`cache_key_of(url) + ".cache"` 存在且**非空** —— 与下载路径写缓存的口径
-    一致（`Crawler._save_cache` 非空才写、`_has_cache` 只看存在）。只读判断、不改盘。
+    一致（`Crawler._save_cache` 非空才写、`_has_cache` 检查非空文件）。只读判断、不改盘。
     """
     from engine.app_utils import cache_key_of
     out = {}
     for url, why in (failed or {}).items():
         try:
             p = os.path.join(book_dir, cache_key_of(url) + ".cache")
-            if os.path.exists(p) and os.path.getsize(p) > 0:
+            if os.path.isfile(p) and os.path.getsize(p) > 0:
                 continue                     # 本机已有正文 → 不算失败
         except OSError:
             pass
@@ -1484,9 +1484,9 @@ def api_book_detail(book_key):
     chapters = state.get("chapters", [])
     completed = set(state.get("completed", []))
     failed = state.get("failed", {}) or {}
+    live_failed = _failed_live(d, failed)
     info = state.get("book") or {}
-    cache_map = {f[:-6]: os.path.join(d, f)
-                 for f in os.listdir(d) if f.endswith(".cache")}
+    cache_map = chapter_cache_keys(d)
     # 0.55.0: "已下载"只看**磁盘上真的有缓存**（与 _scan_books 同口径）。
     # 此前把 state 的 completed 也算进来，于是"缓存被清理/书目录被任务重建"
     # 的书会显示"已下载"而点开正文是空的；completed 只作诊断字段暴露。
@@ -1510,7 +1510,7 @@ def api_book_detail(book_key):
         # **失败数以磁盘为准**：`_state.json` 里的 failed 可能挂着旧记录
         # （实测：2 章正文其实已下载 1 万字、能正常读，却仍被算作失败 ✗），
         # 于是检查更新会劝用户再下一次已经能读的章。这里剔掉"本机已有正文"的条目。
-        "failed_count": len(_failed_live(d, failed)),
+        "failed_count": len(live_failed),
         "progress": load_json(os.path.join(d, "_progress.json")),
         "fallback": {
             "sources": _fb.get("sources") or [],
@@ -1521,8 +1521,8 @@ def api_book_detail(book_key):
         "chapters": [
             {"index": i + 1, "name": c.get("name", ""), "url": c.get("url", ""),
              "downloaded": has_cache(c),
-             "failed": c.get("url") in failed,
-             "failed_reason": failed.get(c.get("url", ""), ""),
+             "failed": c.get("url") in live_failed,
+             "failed_reason": live_failed.get(c.get("url", ""), ""),
              "fb_from": (_fb_map.get(c.get("url", "")) or {}).get("uid", "")}
             for i, c in enumerate(chapters)
         ],

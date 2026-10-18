@@ -17,7 +17,7 @@ from engine.source_mgr import (get_by_uid, find_source)
 from engine.crawler import SourceCrawler, CrawlTask
 from engine.app_utils import (now_iso, _norm, _group_key, _parse_time,
                               _parse_words, book_key_of, atomic_write,
-                              load_json, cache_key_of)
+                              load_json, cache_key_of, chapter_cache_keys)
 from engine.config import (SEARCH_CACHE_TTL, TOC_CACHE_TTL, BOOK_PROGRESS_FILE,
                            TOC_PAGE_CAP,
                            MANGA_DIR, MANGA_LIBRARY_FILE, MANGA_FAV_FILE, MANGA_TASKS_FILE, MANGA_CACHE_DIR,
@@ -915,7 +915,6 @@ def _scan_books():
         if not state:
             continue
         chapters = state.get("chapters", [])
-        completed = state.get("completed", [])
         failed = state.get("failed", {}) or {}
         total = len(chapters)
         if total == 0:
@@ -924,19 +923,11 @@ def _scan_books():
         # 已完成 = 有缓存的章节数（缓存即真实数据；失败章节无缓存不计入）
         # 0.55.0: completed 不再直接计入——它只是"爬取时成功过"的历史记录，
         # 缓存被清理后仍会谎报已完成（书库显示"已下载"而正文空白）。
-        comp_set = set(completed)
-        if chapters and len(chapters) < 5000:
-            # R47 性能：每书一次 listdir 建立缓存文件名集，替代逐章
-            # os.path.exists（50 书 × 2500 章 ≈ 12.5 万次 stat/请求 → 50 次 listdir）
-            try:
-                _cache_files = {f[:-6] for f in os.listdir(d)
-                                if f.endswith(".cache")}
-            except OSError:
-                _cache_files = set()
-            done = sum(1 for c in chapters
-                       if _cache_key(c.get('url', '')) in _cache_files)
-        else:
-            done = len(comp_set)
+        # 每书一次目录扫描，验证候选缓存为非空文件；不因目录超过 5000 章
+        # 而回退到历史 completed，也不把空文件或同名目录算作正文。
+        _cache_files = chapter_cache_keys(d)
+        done = sum(1 for c in chapters
+                   if _cache_key(c.get('url', '')) in _cache_files)
         done = min(done, total)
         # R30: 最近阅读时间戳来自全局阅读进度 book_progress.json
         # 2026-09-13: 一并带出**阅读进度**（读到第几章/章内百分比/章名）——
@@ -1193,10 +1184,12 @@ def _run_check_update(book_key):
             return
 
         crawler = SourceCrawler(src)
-        # 缺失检测：纯本地对比（chapters 目录 vs 已下载 completed）——
+        # 缺失检测：纯本地对比（目录 vs 非空正文缓存）——
         # 不依赖源站实时访问（源站不可达也能检测缺失）
         local_urls = {c.get("url") for c in state.get("chapters", [])}
-        done_urls = set(state.get("completed", []) or [])
+        cache_keys = chapter_cache_keys(d)
+        done_urls = {c.get("url") for c in state.get("chapters", [])
+                     if _cache_key(c.get("url", "")) in cache_keys}
         failed = state.get("failed", {}) or {}
         missing = [c for c in state.get("chapters", [])
                    if c.get("url") not in done_urls]
@@ -1224,11 +1217,8 @@ def _run_check_update(book_key):
         seen_urls = {c.get("url") for c in all_missing}
         # 失败章节里**本机已有正文的不算缺失**（_state.json 的 failed 可能是旧记录；
         # 实测有 2 章正文已下载 1 万字却仍被劝"下载缺失章节"）。
-        from engine.app_utils import cache_key_of as _cko
-        _bkdir = os.path.join(BOOKS_DIR, book_key)
         _failed_real = {u for u in failed
-                        if not (os.path.exists(os.path.join(_bkdir, _cko(u) + ".cache"))
-                                and os.path.getsize(os.path.join(_bkdir, _cko(u) + ".cache")) > 0)}
+                        if _cache_key(u) not in cache_keys}
         for c in new_ch + [c for c in state.get("chapters", [])
                            if c.get("url") in _failed_real]:
             if c.get("url") not in seen_urls:
@@ -1241,7 +1231,7 @@ def _run_check_update(book_key):
                 "chapters": all_missing, "ts": now_iso()}
             _check_jobs[book_key] = {
                 "status": "done", "new_chapters": len(new_ch),
-                "retry_failed": len(failed),
+                "retry_failed": len(_failed_real),
                 "missing_count": len(all_missing),
                 "task_id": None, "message":
                     ("、".join(x for x in (

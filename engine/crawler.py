@@ -997,7 +997,7 @@ class CrawlTask:
 
     def _save_cache(self, url, text):
         # R29(技术评审5.1): 缓存原子写——先写临时文件，内容非空才替换，
-        # 防崩溃留下半写缓存（_has_cache 只查存在，半写会被当成完成内容）
+        # 原子替换防止崩溃留下非空但只写了一半的正文。
         # R47: 实现收敛到 app_utils.atomic_write_text
         if not text:
             return
@@ -1007,7 +1007,11 @@ class CrawlTask:
             self._cache_set.add(url)
 
     def _has_cache(self, url):
-        return os.path.exists(self._cache_path(url))
+        path = self._cache_path(url)
+        try:
+            return os.path.isfile(path) and os.path.getsize(path) > 0
+        except OSError:
+            return False
 
     def _mark_completed(self, url):
         """B06: completed 列表与运行时 set 镜像同步写入（O(1) 成员判断）"""
