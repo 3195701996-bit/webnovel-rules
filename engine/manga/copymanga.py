@@ -727,10 +727,13 @@ class CopyManga(MangaAdapter):
                       f"?limit=100&offset={offset}&in_mainland=true&request_id={rid}")
                 try:
                     cd = self._get(cu)
-                except Exception:
-                    break
+                except Exception as exc:
+                    raise MangaError("拷贝漫画章节目录未取全，请稍后重试") from exc
                 total = (cd.get("results") or {}).get("total", 0)
-                for ch in (cd.get("results") or {}).get("list", []):
+                page = (cd.get("results") or {}).get("list", [])
+                if not page and offset < (total or 0):
+                    raise MangaError("拷贝漫画章节分页为空，目录未取全")
+                for ch in page:
                     ch_list.append(Chapter(
                         id=ch.get("uuid", ch.get("id", "")),
                         name=ch.get("name", ""), group=ginfo.get("name", gname),
@@ -801,10 +804,13 @@ class CopyManga(MangaAdapter):
                       f"?limit=100&offset={offset}&in_mainland=true&request_id={rid}")
                 try:
                     cd = self._get(cu)
-                except Exception:
-                    break
+                except Exception as exc:
+                    raise MangaError("拷贝漫画章节目录未取全，请稍后重试") from exc
                 total = (cd.get("results") or {}).get("total", 0)
-                for ch in (cd.get("results") or {}).get("list", []):
+                page = (cd.get("results") or {}).get("list", [])
+                if not page and offset < (total or 0):
+                    raise MangaError("拷贝漫画章节分页为空，目录未取全")
+                for ch in page:
                     ch_list.append(Chapter(
                         id=ch.get("uuid", ch.get("id", "")),
                         name=ch.get("name", ""), group=ginfo.get("name", gname),
