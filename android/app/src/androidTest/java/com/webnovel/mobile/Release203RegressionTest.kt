@@ -144,7 +144,23 @@ class Release203RegressionTest {
         rule.onNodeWithText("下载缺失章节（1）").assertIsDisplayed()
     }
 
-    @Test fun chapterFinderOpensChosenChapterInsteadOfPreviousProgress() {
+    @Test fun chapterFinderOpensChosenChapterInsteadOfPreviousProgress() =
+        verifyChapterFinderSelection(horizontalPaging = false)
+
+    @Test fun chapterFinderOpensChosenChapterInPagedMode() =
+        verifyChapterFinderSelection(horizontalPaging = true)
+
+    private fun verifyChapterFinderSelection(horizontalPaging: Boolean) {
+        val oldPrefs = ReaderPrefs.load(rule.activity)
+        try {
+            ReaderPrefs.save(rule.activity, oldPrefs.copy(horizontalPaging = horizontalPaging))
+            checkChapterFinderSelection()
+        } finally {
+            ReaderPrefs.save(rule.activity, oldPrefs)
+        }
+    }
+
+    private fun checkChapterFinderSelection() {
         connect()
         val c = SelfTestComic(resumeAtChapter = 1).also { comic = it; it.create() }
         rule.openCachedShelf()
@@ -156,8 +172,13 @@ class Release203RegressionTest {
         rule.onNodeWithTag("open_chapter_finder").performClick()
         rule.onNodeWithTag("chapter_finder_query").performTextInput("2")
         rule.onNodeWithTag("find_chapter_${SelfTestComic.CH2_ID}").performClick()
-        rule.waitUntil(30_000) { rule.onAllNodesWithTag("manga_pages").fetchSemanticsNodes().isNotEmpty() }
-        rule.onNodeWithTag("manga_pages").performTouchInput {
+        rule.waitUntil(30_000) {
+            rule.onAllNodesWithTag("manga_pages").fetchSemanticsNodes().isNotEmpty() ||
+                rule.onAllNodesWithTag("manga_pager").fetchSemanticsNodes().isNotEmpty()
+        }
+        val pageTag = if (rule.onAllNodesWithTag("manga_pages").fetchSemanticsNodes().isNotEmpty())
+            "manga_pages" else "manga_pager"
+        rule.onNodeWithTag(pageTag).performTouchInput {
             click(androidx.compose.ui.geometry.Offset(width / 2f, height / 2f))
         }
         rule.waitUntil(20_000) {
