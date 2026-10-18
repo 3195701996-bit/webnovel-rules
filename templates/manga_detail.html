@@ -459,9 +459,10 @@ async function load() {
     }
     $('#desc').textContent = detail.description || '';
     const cover = $('#cover');
-    cover.hidden = !detail.cover;
+    const coverUrl = detailCoverUrl();
+    cover.hidden = !coverUrl;
     cover.onerror = () => { cover.hidden = true; };
-    if (detail.cover) cover.src = detail.cover; else cover.removeAttribute('src');
+    if (coverUrl) cover.src = coverUrl; else cover.removeAttribute('src');
     $('#like-num').textContent = detail.likes || '';
     $('#like-btn').style.display = detail.likes ? '' : 'none';
     // 信息区
@@ -598,9 +599,15 @@ async function load() {
       ? '该漫画在所选源中已下架。可 <a href="javascript:history.back()">返回搜索</a> 或切换其他源。'
       : '该源可能正在风控/限流。可 <a href="javascript:location.reload()">重试</a>，或稍后再试（已成功的详情会缓存，下次秒开）。'}</small></div>`);
 }
+function detailCoverUrl() {
+  if (LOCAL_CATALOG) return detail.cover_view || '';
+  return detail.cover_view || detail.cover || '';
+}
 function viewCover() {
+  const url = detailCoverUrl();
+  if (!url) return;
   const o = $('#cover-overlay');
-  o.innerHTML = `<img src="${esc(detail.cover)}">`;
+  o.innerHTML = `<img src="${esc(url)}">`;
   o.style.display = 'flex';
 }
 function startRead() { if (chapters.length) openReader(0); }

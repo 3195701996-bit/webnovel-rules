@@ -141,6 +141,9 @@ internal fun mangaFavoriteMutationResult(
 private fun coverUrl(port: Int, source: String, comicId: String): String =
     "http://127.0.0.1:$port" + mangaPath(source, comicId, "/cover")
 
+internal fun mangaDetailCoverUrl(url: String, localCatalog: Boolean): String =
+    if (localCatalog) enforceLocalCatalog(url) else url
+
 /** 把服务端返回的本机 API 图片路径收敛到严格本地目录，保留其它查询参数。 */
 internal fun enforceLocalCatalog(url: String): String {
     val path = url.substringBefore('?')
@@ -497,7 +500,8 @@ fun MangaDetailScreen(
                             .background(WnColors.surface).padding(WnSpace.md)) {
                             SubcomposeAsyncImage(
                                 model = ImageRequest.Builder(androidx.compose.ui.platform.LocalContext.current)
-                                    .data(coverUrl(ep.imagePort, d.source, d.comicId))
+                                    .data(mangaDetailCoverUrl(
+                                        coverUrl(ep.imagePort, d.source, d.comicId), localCatalog))
                                     .crossfade(true)
                                     .build(),
                                 imageLoader = loader,
@@ -509,7 +513,8 @@ fun MangaDetailScreen(
                                 error = {
                                     // 非书库漫画（搜索/浏览进来的）per-comic 封面可能没有：
                                     // 回落按源站地址取图的代理，再失败才显示"无封面"
-                                    val fb = remoteCoverUrl(ep, d.source, d.cover)
+                                    val fb = if (localCatalog) "" else
+                                        remoteCoverUrl(ep, d.source, d.cover)
                                     if (fb.isNotBlank()) {
                                         SubcomposeAsyncImage(
                                             model = ImageRequest.Builder(

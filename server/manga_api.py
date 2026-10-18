@@ -1408,6 +1408,12 @@ def api_manga_detail(source, comic_id):
             _payload.setdefault("comic_id", comic_id)
             _payload.setdefault("identity_source", manga_identity_source(source))
             _payload.setdefault("source_aliases", list(manga_source_aliases(source)))
+            if _local_catalog:
+                # A local catalog must stay offline, including its decoration.
+                # Preserve the original cover URL for favorites/download metadata.
+                _payload["cover_view"] = (
+                    f"/api/manga/{source}/{comic_id}/cover?catalog=local"
+                    if _local_cover_path(source, comic_id) else "")
             # Old full-detail caches already contain the former incorrect order.
             # Canonicalize every response, including fresh/stale cache hits, so an
             # upgrade fixes existing catalogs without deleting downloads or caches.
@@ -2327,6 +2333,8 @@ def api_manga_cover(source, comic_id):
     _hit = _serve_local_cover(source, comic_id)
     if _hit is not None:
         return _hit
+    if request.args.get("catalog") == "local":
+        abort(404, "本地无封面")
     _url = _library_cover_url(source, comic_id)
     if not _url:
         abort(404, "无封面")
@@ -3519,6 +3527,9 @@ def api_manga_favorites():
                       "unread_count": unread_count,
                       "local_downloaded_chapters": local_downloaded_chapters,
                       "local_catalog_pending": local_downloaded_chapters is None,
+                      "local_cover_view": (
+                          f"/api/manga/{src}/{cid}/cover?catalog=local"
+                          if _local_cover_path(src, cid) else ""),
                       "latest_chapter_id": latest_id,
                       "latest_chapter_label": latest_label})
     # 优先按源站作品更新时间排序；不可解析时退到最近一次检查/收藏时间。

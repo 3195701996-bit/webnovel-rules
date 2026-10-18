@@ -169,6 +169,24 @@ def test_local_catalog_detail_filters_to_real_downloads(client, library_comic, m
     assert [c["id"] for c in detail["chapters"] + detail["volumes"]] == ["ch1"]
 
 
+def test_local_detail_cover_display_is_local_without_changing_original_url(
+        client, library_comic, monkeypatch):
+    mapi, _root, dl, _cache = library_comic
+    monkeypatch.setattr(mapi, "_downloaded_ids_for_chapters", lambda *_: ["ch1"])
+    info = dl / SRC / CID / "_info.json"
+    data = json.loads(info.read_text())
+    data["cover"] = "https://example.invalid/original.jpg"
+    info.write_text(json.dumps(data))
+    url = f"/api/manga/{SRC}/{CID}?catalog=local"
+    result = client.get(url).get_json()
+    assert result["cover"] == data["cover"]
+    assert result["cover_view"] == ""
+    (dl / SRC / CID / "cover.jpg").write_bytes(b"\xff\xd8\xff" + b"x" * 2048)
+    result = client.get(url).get_json()
+    assert result["cover"] == data["cover"]
+    assert result["cover_view"] == f"/api/manga/{SRC}/{CID}/cover?catalog=local"
+
+
 def test_online_detail_merges_local_download_identity_without_truncating_new_catalog(
         client, library_comic, monkeypatch):
     """Venera semantics: online catalog stays complete while downloaded chapters stay local-first."""

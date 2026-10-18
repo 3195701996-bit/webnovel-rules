@@ -1908,15 +1908,17 @@ def _local_cover_path(source, comic_id):
     两个根目录都查：已下载漫画（downloads 存在）的封面可能是浏览时缓存在
     _cache 的，反之亦然——只查 _manga_media_root 会漏掉另一种。
     """
+    aliases = [source] + [alias for alias in manga_source_aliases(source) if alias != source]
     for _root in (MANGA_DOWNLOADS_DIR, MANGA_CACHE_DIR):
-        base = os.path.join(_root, source, str(comic_id))
-        for _ext in _COVER_EXTS:
-            _p = os.path.join(base, "cover" + _ext)
-            try:
-                if os.path.getsize(_p) > 1000:   # 同图片缓存判定：过小视为坏文件
-                    return _p
-            except OSError:
-                continue
+        for alias in aliases:
+            base = os.path.join(_root, alias, str(comic_id))
+            for _ext in _COVER_EXTS:
+                _p = os.path.join(base, "cover" + _ext)
+                try:
+                    if os.path.getsize(_p) > 1000:   # 同图片缓存判定：过小视为坏文件
+                        return _p
+                except OSError:
+                    continue
     return None
 
 

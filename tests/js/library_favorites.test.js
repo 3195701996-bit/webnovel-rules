@@ -43,6 +43,11 @@ const comic = {
   cover: 'https://example.test/cover.jpg', unread_count: 6,
   source_name: '拷贝漫画', update_time: '2026-10-02',
 };
+assert.doesNotMatch(sandbox.__card(comic, 'local'), /https:\/\/example.test/,
+  'local favorite without a cached cover must not request its source URL');
+assert.match(sandbox.__card({...comic, local_cover_view: '/api/manga/jm/1/cover?catalog=local'}, 'local'),
+  /src="\/api\/manga\/jm\/1\/cover\?catalog=local"/);
+assert.match(sandbox.__card(comic, 'online'), /https:\/\/example.test/);
 const localUrl = new URL(sandbox.__url(comic, true), 'https://app.test');
 assert.equal(localUrl.searchParams.get('catalog'), 'local',
   'a favorite with verified local image data must open the strict local catalog');

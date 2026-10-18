@@ -176,7 +176,8 @@ function favoriteMangaCardHTML(comic, localState) {
   const localPending = localState === 'pending';
   const unread = Math.max(0, Number.parseInt(comic.unread_count, 10) || 0);
   const title = comic.title || comic.comic_id || '未命名漫画';
-  const cover = comic.cover || comic.cover_view || '';
+  const cover = localAvailable ? (comic.local_cover_view || '')
+    : (comic.cover_view || comic.cover || '');
   const unreadBadge = unread > 0
     ? `<span class="favorite-unread-badge">未读 ${unread} 话</span>` : '';
   const state = localAvailable ? '已缓存 · 仅显示本地目录'
@@ -265,7 +266,8 @@ async function loadFavoriteManga(fromPendingRetry = false) {
       if (!hasPendingCatalog) _favoriteMangaPendingRetries = 0;
     }
     const signature = JSON.stringify(favorites.map(comic => [comic.source, comic.comic_id,
-      comic.title, comic.cover, comic.update_time, comic.unread_count, comic.checked_at,
+      comic.title, comic.cover, comic.cover_view, comic.local_cover_view,
+      comic.update_time, comic.unread_count, comic.checked_at,
       comic.local_downloaded_chapters, comic.local_catalog_pending]));
     if (signature === _favoriteMangaSig) return favorites;
     _favoriteMangaSig = signature;
