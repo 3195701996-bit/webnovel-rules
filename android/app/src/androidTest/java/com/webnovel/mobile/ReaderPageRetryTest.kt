@@ -55,6 +55,8 @@ class ReaderPageRetryTest {
 
     @Before
     fun setUp() {
+        assertTrue("Synthetic reader retry test is forbidden on physical devices",
+            Shell.run("getprop ro.kernel.qemu").trim() == "1")
         // 阅读方向是跨进程持久化偏好；让该测试显式固定为纵向，避免前一用例
         // 留下横向翻页设置后，这里滚动 LazyColumn 时永远找不到失败页。
         ReaderPrefs.save(ctx, ReaderPrefs.load(ctx).copy(horizontalPaging = false))

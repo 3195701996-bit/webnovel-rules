@@ -1,6 +1,7 @@
 package com.webnovel.mobile
 
-import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
@@ -21,6 +22,8 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertTrue
+import org.junit.Before
+import org.junit.After
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -31,7 +34,28 @@ import org.junit.runner.RunWith
 class MangaSearchScrollUiTest {
 
     @get:Rule
-    val rule = createAndroidComposeRule<ComponentActivity>()
+    val rule = createAndroidComposeRule<MainActivity>()
+    private lateinit var loader: ImageLoader
+    private var pendingSearch: InterleavedGateway? = null
+
+    @Before fun requireEmulator() {
+        assertTrue("Offline search fixture is forbidden on physical devices",
+            Shell.run("getprop ro.kernel.qemu").trim() == "1")
+    }
+
+    @After fun cleanup() {
+        pendingSearch?.releaseOld?.complete(Unit)
+        if (::loader.isInitialized) loader.shutdown()
+    }
+
+    private fun showSearch(gateway: MangaSearchGateway) {
+        loader = ImageLoader.Builder(rule.activity).build()
+        rule.activityRule.scenario.onActivity { activity -> activity.setContent {
+            MaterialTheme {
+                MangaSearchScreen(gateway, EngineEndpoint("offline-fixture", 1, ""), loader, {}, {})
+            }
+        } }
+    }
 
     private class FixtureGateway : MangaSearchGateway {
         override suspend fun httpText(port: Int, path: String, auth: Boolean) =
@@ -116,16 +140,7 @@ class MangaSearchScrollUiTest {
     @Test
     fun searchHeaderScrollsAwayWithLongResults() {
         val gateway = FixtureGateway()
-        val loader = ImageLoader.Builder(rule.activity).build()
-        rule.setContent {
-            MangaSearchScreen(
-                gateway = gateway,
-                ep = EngineEndpoint("offline-fixture", 1, ""),
-                loader = loader,
-                onOpen = {},
-                onBack = {},
-            )
-        }
+        showSearch(gateway)
 
         rule.onNodeWithTag("manga_search_field").performTextInput("离线验收")
         rule.onNodeWithTag("manga_search_btn").performClick()
@@ -163,16 +178,8 @@ class MangaSearchScrollUiTest {
     @Test
     fun lateOldSearchCannotReplaceNewResults() {
         val gateway = InterleavedGateway()
-        val loader = ImageLoader.Builder(rule.activity).build()
-        rule.setContent {
-            MangaSearchScreen(
-                gateway = gateway,
-                ep = EngineEndpoint("offline-fixture", 1, ""),
-                loader = loader,
-                onOpen = {},
-                onBack = {},
-            )
-        }
+        pendingSearch = gateway
+        showSearch(gateway)
         val field = rule.onNodeWithTag("manga_search_field")
         field.performTextInput("旧查询")
         rule.onNodeWithTag("manga_search_btn").performClick()
