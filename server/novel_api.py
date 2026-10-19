@@ -1531,6 +1531,48 @@ def api_book_detail(book_key):
     })
 
 
+@bp.route("/api/books/<book_key>/metadata/preview", methods=["GET"])
+def api_book_metadata_preview(book_key):
+    """Fetch proposed name/author only; never replace catalogs or cached text."""
+    book_key = _safe_seg(book_key, "书籍")
+    path = os.path.join(BOOKS_DIR, book_key, "_state.json")
+    try:
+        with open(path, "rb") as stream:
+            raw = stream.read()
+        state = json.loads(raw)
+        info = state.get("book") if isinstance(state, dict) else None
+        if not isinstance(info, dict):
+            raise ValueError("书籍元数据格式异常")
+    except FileNotFoundError:
+        return _err_json("书籍不存在", 404)
+    except (OSError, ValueError, TypeError):
+        return _err_json("书籍数据无法读取，原数据已保留", 503)
+    book_url = info.get("book_url")
+    if not isinstance(book_url, str) or not book_url.strip():
+        return _err_json("书籍缺少原站地址，无法刷新元数据", 409)
+    source = get_by_uid(info.get("source_uid") or "") or find_source(book_url)
+    if not source:
+        return _err_json("原书源已不可用；本地内容未修改", 409)
+    try:
+        book = SourceCrawler(source).get_book(book_url, fast=True, deadline=12)
+        proposed = {}
+        for field in ("name", "author"):
+            value = getattr(book, field, "")
+            if not isinstance(value, str):
+                continue
+            value = re.sub(r'\s+', ' ', value).strip()
+            if value and value != book_url and not value.lower().startswith(("http://", "https://")):
+                proposed[field] = value
+        changes = [{"field": field, "before": str(info.get(field) or ""), "after": value}
+                   for field, value in proposed.items() if value != info.get(field)]
+        if not proposed.get("name"):
+            return _err_json("源站未返回可信书名，未修改本地数据", 502)
+        return jsonify({"ok": True, "read_only": True, "changes": changes,
+                        "proposed": proposed, "state_revision": hashlib.sha256(raw).hexdigest()})
+    except Exception as exc:
+        return _err_response(exc, 502, "读取源站元数据失败；本地内容未修改")
+
+
 @bp.route("/api/books/<book_key>/chapter/<int:idx>", methods=["POST"])
 def api_book_chapter_retry(book_key, idx):
 
