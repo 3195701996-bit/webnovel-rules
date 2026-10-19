@@ -507,6 +507,10 @@
 
 ### Web 阅读版 TXT 导出验收（未发布）
 
+- 冻结实现26d4b2b18dfeedc4e5343a47340e606313ffdfb1本地集成：2010 passed、2 skipped（150.51秒），41组JS通过、读契约27接口/写契约18接口48调用点0问题（仍保留空态覆盖披露），HTTP冒烟20/20、Ruff/diff通过。Release JVM/主APK21秒成功，Web包内资源一致；该HEAD已推开发分支。远端此前0d976620两条CI 39282620300/39282613628仍queued，不借用本地结果关闭远端门。
+- 用户重连并确认可测试后，重新校验冻结rc13-d1aefed7同签名/递增码/cleanSHA，adb install -r成功；手机确认2.1.0-rc13/code172，lastUpdateTime2026-10-20 00:27:40，firstInstallTime仍2026-09-14 19:47:32。首屏可见历史《社長與酒與星》第42话P25、《妹妹是知道的》第52话P17，已缓存3本小说/39漫画，《柯南之我真不是内鬼》1380/1380读93保留。只是可见状态核对，非全私有数据哈希备份。
+- 真机本地小说158625详情593/593章，进入阅读版TXT弹窗→默认去广告/不排除推广→生成真实本地预览，显示导出593/排除0/缺失0及连续标题映射；切换排除推广后旧预览与保存许可撤销、要求重预览，再取消返回。截图/private/tmp/webnovel-rc13-{launch,cached,novel-detail,reader-preview-result,reader-options}.png已查看。没有点保存、清洗、恢复、删除或进入阅读器；未对私有文件逐字节核对，不把预览当实际SAF导出成功。观察到历史两本小说书名仍为URL，需后续元数据体验改进。rc13早于近期下载反馈/收藏写保护/阅读器缓存修复，真机结果不替代这些新修改验收；没有公开Release或3.0发布。
+
 - 新增ReaderRebuildCacheUiTest，真实Compose、EngineGateway和回环HTTP传输，合成响应而非源站/真实引擎重建。首屏从MangaReadCache旧URL直接命中，必须出现旧处理横幅且URL GET为0；点重建成功后URL GET恰1、共享缓存变当前版本、横幅消失；失败500必须出现实际错误文案、URL GET仍0且共享缓存原对象保留。仅内存/回环夹具，不创建/删除漫画媒体，qemu前置守卫。
 - 首轮两项未进入测试体，因ComponentActivity在Release测试环境未注册而启动失败；改为MainActivity承载隔离界面，仪器包重建11秒后专用ReaderAudit_API36/5570实际2/2 passed（1.862秒）。测试回环服务器@After关闭、共享夹具缓存失效，模拟器已关闭，diff通过。该证据是原生按钮→真实HTTP→共享缓存集成，不证明Python重建实现/源站图片或真机网络；这些边界不放宽，未发布。
 
