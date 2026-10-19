@@ -3847,41 +3847,32 @@ def api_manga_zip(source, comic_id):
     base = _manga_media_root(source, comic_id)
     if not os.path.isdir(base):
         abort(404, "未下载")
-    # P3-8: 不再 BytesIO 全量入内存（整部漫画数百 MB 内存尖峰）——
-    # 打包到临时文件后 send_file 流式发送；call_on_close 在 WSGI 响应
-    # 迭代完毕后触发，此时清理临时文件（提前删会让响应体读不到数据）。
+    # 匿名磁盘临时文件避免大漫画全量入内存，也不依赖响应回调删除命名文件。
     import tempfile as _tf
-    _fd, _tmp = _tf.mkstemp(prefix="manga_zip_", suffix=".zip")
-    os.close(_fd)
+    artifact = None
     try:
-        with zipfile.ZipFile(_tmp, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+        artifact = _tf.TemporaryFile(mode="w+b")
+        image_count = 0
+        with zipfile.ZipFile(artifact, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
             for root, _dirs, files in os.walk(base):
                 for fn in sorted(files):
                     p = os.path.join(root, fn)
                     if _is_manga_image_file(p):
                         rel = os.path.relpath(p, base)
                         zf.write(p, rel)
+                        image_count += 1
+        if not image_count:
+            artifact.close()
+            return _err_json("本地没有可导出的有效图片，请先完成下载或修复缓存", 404)
+        artifact.seek(0)
+        from flask import send_file
+        resp = send_file(artifact, mimetype="application/zip",
+                         download_name=f"{comic_id}.zip", as_attachment=True)
     except Exception as _e:
-        try:
-            os.remove(_tmp)
-        except OSError:
-            pass
+        if artifact is not None:
+            artifact.close()
         return _err_response(_e, 500, "打包失败")
-    from flask import send_file
-    _zf = open(_tmp, "rb")
-    resp = send_file(_zf, mimetype="application/zip",
-                     download_name=f"{comic_id}.zip", as_attachment=True)
-
-    @resp.call_on_close
-    def _cleanup_zip():
-        try:
-            _zf.close()
-        except OSError:
-            pass
-        try:
-            os.remove(_tmp)
-        except OSError:
-            pass
+    resp.call_on_close(artifact.close)
     return resp
 
 

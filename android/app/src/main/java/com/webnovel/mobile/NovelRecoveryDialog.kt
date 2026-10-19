@@ -92,7 +92,7 @@ fun NovelRecoveryDialog(bookKey: String, port: Int, gateway: EngineGateway, onCl
                     busy = true
                     try {
                         val request = JSONObject().put("ids", JSONArray(identities)).put("dry_run", dry)
-                        val response = gateway.httpPost(port, "$base/restore", request.toString())
+                        val response = gateway.httpPost(port, "/api/books/${Uri.encode(bookKey)}/reclean/restore", request.toString())
                         require(response.ok) { "请求失败：HTTP ${response.code}" }
                         val result = JSONObject(response.body)
                         require(result.opt("ok") == true && result.opt("dry_run") == dry) { "恢复响应无效" }

@@ -241,6 +241,55 @@ def test_download_zip_omits_corrupt_image_payloads(env):
         assert archive.namelist() == [f"{CH1}/0000.webp"]
 
 
+def test_download_zip_without_valid_images_is_not_a_successful_empty_archive(env, tmp_path):
+    import tempfile
+    chapter_dir = os.path.join(str(env["dl"]), "jm", CID, CH1)
+    os.makedirs(chapter_dir, exist_ok=True)
+    with open(os.path.join(chapter_dir, "0000.jpg"), "wb") as image:
+        image.write(b"<html>download failed</html>")
+    real_temporary_file = tempfile.TemporaryFile
+    created = []
+    def tracked_tempfile(*args, **kwargs):
+        kwargs['dir'] = str(tmp_path)
+        result = real_temporary_file(*args, **kwargs)
+        created.append(result)
+        return result
+    env['monkeypatch'].setattr(tempfile, 'TemporaryFile', tracked_tempfile)
+    response = env['c'].get(f'/api/manga/jm/{CID}/zip')
+    assert response.status_code == 404
+    assert '有效图片' in response.get_json()['error']
+    assert created and all(artifact.closed for artifact in created)
+    assert os.path.isfile(os.path.join(chapter_dir, '0000.jpg'))
+
+
+@pytest.mark.parametrize('failure', [None, 'pack', 'response'])
+def test_download_zip_closes_temporary_artifact_on_completion_or_failure(env, tmp_path, failure):
+    import tempfile
+    import zipfile
+    _touch_pages(os.path.join(str(env['dl']), 'jm', CID, CH1), 1)
+    real_temporary_file = tempfile.TemporaryFile
+    artifacts = []
+    def tracked(*args, **kwargs):
+        kwargs['dir'] = str(tmp_path)
+        artifact = real_temporary_file(*args, **kwargs)
+        artifacts.append(artifact)
+        return artifact
+    def fail(*args, **kwargs):
+        raise OSError('isolated ZIP failure')
+    env['monkeypatch'].setattr(tempfile, 'TemporaryFile', tracked)
+    if failure == 'pack':
+        env['monkeypatch'].setattr(zipfile.ZipFile, 'write', fail)
+    elif failure == 'response':
+        env['monkeypatch'].setattr('flask.send_file', fail)
+    response = env['c'].get(f'/api/manga/jm/{CID}/zip')
+    assert response.status_code == (500 if failure else 200)
+    if not failure:
+        assert response.get_data().startswith(b'PK')
+    response.close()
+    assert artifacts and all(artifact.closed for artifact in artifacts)
+    assert os.path.isfile(os.path.join(str(env['dl']), 'jm', CID, CH1, '0000.jpg'))
+
+
 def test_legacy_chapter_endpoint_honors_local_catalog_without_remote_fetch(env):
     _mark_current(_touch_pages(
         os.path.join(str(env["dl"]), "jm", CID, CH1), 3))
