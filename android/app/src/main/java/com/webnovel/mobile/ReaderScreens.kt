@@ -374,7 +374,7 @@ fun BookDetailScreen(
                         for (i in 0 until samples.length()) {
                             Text("· " + samples.optString(i).take(60),
                                 style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.outline)
+                                color = WnColors.inkDim)
                         }
                     }
                     Spacer(Modifier.height(6.dp))
@@ -397,7 +397,7 @@ fun BookDetailScreen(
                     Text("将改写本地正文缓存，请核对样例后执行；章节目录与阅读进度不变。" +
                         "推广章节仅供审查，不会自动删除；已下载的书不需要重下。",
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.outline)
+                        color = WnColors.inkDim)
                 }
             },
             confirmButton = {

@@ -94,16 +94,16 @@ internal fun EngineBanner(stage: String, detail: String, onRetry: () -> Unit,
             Text("本机引擎未就绪", style = MaterialTheme.typography.bodyMedium,
                 fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.error)
             Text("阶段：$stage", style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.outline)
+                color = WnColors.inkDim)
             if (detail.isNotBlank()) {
                 Text(detail, style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.outline, maxLines = 2,
+                    color = WnColors.inkDim, maxLines = 2,
                     overflow = TextOverflow.Ellipsis)
             }
             Spacer(Modifier.height(WnSpace.xs))
             Text("离线可用：书架与「已下载」的小说正文、漫画图片；搜索/详情/下载需要引擎。",
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.outline)
+                color = WnColors.inkDim)
             Spacer(Modifier.height(6.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(WnSpace.sm)) {
                 Button(onClick = onRetry, modifier = Modifier.testTag("engine_banner_retry")) {
@@ -134,17 +134,17 @@ internal fun OfflineShelfContent(
                 "下面只列出**本机已下载**的内容（小说正文缓存、漫画图片）。" +
                     "未下载的章节需要引擎与网络，这里点不开。",
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.outline)
+                color = WnColors.inkDim)
             Spacer(Modifier.height(WnSpace.xs))
             Text(data.novels.size.toString() + " 本小说 · " + data.manga.size + " 部漫画",
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.outline)
+                color = WnColors.inkDim)
         }
         if (data.isEmpty) {
             item {
                 Text("本地还没有已下载的内容。等引擎恢复后可以在书架/详情页下载，之后即使引擎不可用也能在这里读。",
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.outline)
+                    color = WnColors.inkDim)
             }
         }
         items(data.novels, key = { "n_" + it.key }) { n ->
@@ -154,7 +154,7 @@ internal fun OfflineShelfContent(
                         fontWeight = FontWeight.Medium, maxLines = 1,
                         overflow = TextOverflow.Ellipsis)
                     Text(n.label, style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.outline)
+                        color = WnColors.inkDim)
                 }
             }
         }
@@ -165,7 +165,7 @@ internal fun OfflineShelfContent(
                         fontWeight = FontWeight.Medium, maxLines = 2,
                         overflow = TextOverflow.Ellipsis)
                     Text(m.label + " · " + m.source, style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.outline)
+                        color = WnColors.inkDim)
                 }
             }
         }
@@ -209,7 +209,7 @@ internal fun OfflineNovelReaderScreen(
         Column(Modifier.padding(pad).fillMaxSize()) {
             Text("离线阅读（引擎未就绪）：正文来自本机缓存，$index / $total",
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.outline,
+                color = WnColors.inkDim,
                 modifier = Modifier.padding(horizontal = WnSpace.md, vertical = WnSpace.xs))
             if (chapter == null) {
                 Column(Modifier.fillMaxSize().padding(WnSpace.xl), Arrangement.Center) {
@@ -218,7 +218,7 @@ internal fun OfflineNovelReaderScreen(
                     Text("离线模式只能读已下载的章节（已下载：${downloaded.joinToString("、")}）。" +
                         "等引擎恢复后可以补下载。",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.outline)
+                        color = WnColors.inkDim)
                 }
             } else {
                 LazyColumn(Modifier.fillMaxSize().testTag("offline_novel_body"),
@@ -299,7 +299,7 @@ internal fun OfflineMangaReaderScreen(
         Column(Modifier.padding(pad).fillMaxSize()) {
             Text("离线阅读（引擎未就绪）：${images.size} 张图片来自本机",
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.outline,
+                color = WnColors.inkDim,
                 modifier = Modifier.padding(horizontal = WnSpace.md, vertical = WnSpace.xs))
             Box(
                 Modifier.fillMaxSize().weight(1f)
@@ -377,7 +377,7 @@ internal fun OfflineSettingsScreen(onOpenReaderPrefs: () -> Unit) {
             Text("阅读排版、产物信息与本地诊断不依赖引擎；书源管理、备份恢复、" +
                 "任务恢复需要引擎就绪。",
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.outline)
+                color = WnColors.inkDim)
         }
         item {
             WnHairlineCard(modifier = Modifier.testTag("offline_reader_prefs"),
@@ -387,7 +387,7 @@ internal fun OfflineSettingsScreen(onOpenReaderPrefs: () -> Unit) {
                         fontWeight = FontWeight.Medium)
                     Text("字号 / 行距 / 主题；漫画纵向连续或横向翻页",
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.outline)
+                        color = WnColors.inkDim)
                 }
             }
         }
@@ -398,7 +398,7 @@ internal fun OfflineSettingsScreen(onOpenReaderPrefs: () -> Unit) {
                     Text("产物信息", style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.Medium)
                     Text(BuildInfo.summary, style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.outline)
+                        color = WnColors.inkDim)
                 }
             }
         }
@@ -412,7 +412,7 @@ internal fun OfflineSettingsScreen(onOpenReaderPrefs: () -> Unit) {
                         "设备 ${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}\n" +
                         "引擎：未就绪（离线模式）",
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.outline,
+                    color = WnColors.inkDim,
                     modifier = Modifier.testTag("offline_diag_text"))
             }
         }

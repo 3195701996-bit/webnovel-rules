@@ -12,6 +12,12 @@ assert.doesNotMatch(downloads, /color\s*=\s*MaterialTheme\.colorScheme\.outline\
   'download explanations and task metadata must use readable text colors, not pale border colors');
 assert.match(downloads, /Text\("暂停全部漫画"\)/);
 assert.match(downloads, /Text\("继续全部漫画"\)/);
+for (const file of ['StorageScreens.kt', 'ReaderScreens.kt', 'MainActivity.kt',
+  'NetworkScreens.kt', 'OfflineScreens.kt', 'ExploreScreens.kt']) {
+  const source = fs.readFileSync(path.join(root, 'android/app/src/main/java/com/webnovel/mobile', file), 'utf8');
+  assert.doesNotMatch(source, /color\s*=\s*MaterialTheme\.colorScheme\.outline\b/,
+    `${file}: explanatory text must not use the pale border color`);
+}
 const novelDetail = fs.readFileSync(path.join(root, 'templates/novel_detail.html'), 'utf8');
 const library = fs.readFileSync(path.join(root, 'templates/library.html'), 'utf8');
 const reader = fs.readFileSync(path.join(root, 'templates/reader.html'), 'utf8');
@@ -73,6 +79,11 @@ function contrast(a, b) {
 for (const foreground of [design.ink, design.secondary_text, design.accent]) {
   assert.ok(contrast(foreground, design.background) >= 4.5,
     `${foreground} normal-size text must meet 4.5:1 on the daily-use canvas`);
+}
+const nativeColor = name => '#' + theme.match(new RegExp(`val ${name} = Color\\(0xFF([0-9a-fA-F]{6})\\)`))[1];
+for (const background of ['bg', 'surface', 'surfaceVar']) {
+  assert.ok(contrast(nativeColor('inkDim'), nativeColor(background)) >= 4.5,
+    `secondary native text must remain readable on ${background}`);
 }
 assert.ok(contrast('#ffffff', design.accent) >= 4.5, 'primary action text must remain readable');
 for (const name of ['light', 'sepia', 'dark']) {

@@ -227,7 +227,7 @@ internal fun ExploreScreen(
                 category != null -> Column(Modifier.fillMaxSize()) {
                     if (msg.isNotBlank()) {
                         Text(msg, style = MaterialTheme.typography.labelMedium,
-                             color = MaterialTheme.colorScheme.outline,
+                             color = WnColors.inkDim,
                              modifier = Modifier.padding(WnSpace.md))
                     }
                     if (loadingBooks && books.isEmpty()) {
@@ -250,7 +250,7 @@ internal fun ExploreScreen(
                                                     b.lastChapter.takeIf { it.isNotBlank() },
                                                 ).joinToString(" · ").ifBlank { b.sourceName },
                                                 style = MaterialTheme.typography.labelSmall,
-                                                color = MaterialTheme.colorScheme.outline,
+                                                color = WnColors.inkDim,
                                                 maxLines = 1, overflow = TextOverflow.Ellipsis)
                                         }
                                         OutlinedButton(onClick = {
@@ -277,7 +277,7 @@ internal fun ExploreScreen(
                     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(WnSpace.md)) {
                         Text("${src.name} · ${src.categories.size} 个分类",
                              style = MaterialTheme.typography.labelMedium,
-                             color = MaterialTheme.colorScheme.outline)
+                             color = WnColors.inkDim)
                         Spacer(Modifier.height(WnSpace.sm))
                         src.categories.forEach { c ->
                             // 分组标题只在首次出现时显示（源自己的分组结构照原样）
@@ -308,13 +308,13 @@ internal fun ExploreScreen(
                             "当前 ${counts.first} 个内置源里只有 ${counts.second} 个声明了探索规则。" +
                             "没有数据的源不会被编造出榜单。",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.outline,
+                        color = WnColors.inkDim,
                     )
                     if (mangaNote.second.isNotBlank()) {
                         Spacer(Modifier.height(6.dp))
                         Text("漫画侧：" + mangaNote.second,
                              style = MaterialTheme.typography.bodySmall,
-                             color = MaterialTheme.colorScheme.outline)
+                             color = WnColors.inkDim)
                     }
                 }
                 else -> LazyColumn(Modifier.fillMaxSize().testTag("explore_sources"),
@@ -373,7 +373,7 @@ internal fun ExploreScreen(
                                         if (!s.enabled) "（该源当前已停用）" else null,
                                     ).joinToString(" · "),
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.outline,
+                                    color = WnColors.inkDim,
                                 )
                             }
                         }
@@ -515,7 +515,7 @@ internal fun MangaBrowseResultsScreen(
                 if (hits.isNotEmpty()) "第 $page${if (totalPages > 0) " / $totalPages" else ""} 页" else null,
             ).joinToString(" · "),
             style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.outline,
+            color = WnColors.inkDim,
             modifier = Modifier.padding(start = WnSpace.md, top = WnSpace.sm, end = WnSpace.md)
                 .testTag("manga_browse_caption"),
         )
@@ -531,7 +531,7 @@ internal fun MangaBrowseResultsScreen(
             hits.isEmpty() -> Text(
                 "「${cat.title}」本次没有取到内容（源站可能暂时不可达，稍后再试）。",
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.outline,
+                color = WnColors.inkDim,
                 modifier = Modifier.padding(WnSpace.lg),
             )
             else -> LazyColumn(Modifier.fillMaxSize().testTag("manga_browse_list"),
@@ -603,7 +603,7 @@ private fun MangaBrowseCard(
                 h.sourceName.takeIf { it.isNotBlank() },
             ).joinToString(" · "),
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.outline,
+            color = WnColors.inkDim,
             maxLines = 1, overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(horizontal = WnSpace.sm, vertical = 2.dp),
         )

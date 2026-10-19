@@ -185,7 +185,7 @@ internal fun StorageScreen(
                             Spacer(Modifier.height(WnSpace.xs))
                             Text("统计时间：${u.generatedAt}（数字来自磁盘实扫）",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.outline)
+                                color = WnColors.inkDim)
                         }
                     }
                 }
@@ -202,7 +202,7 @@ internal fun StorageScreen(
                                     if (imgCacheBytes >= 0) Export.human(imgCacheBytes)
                                     else "统计中…",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.outline,
+                                color = WnColors.inkDim,
                                 modifier = Modifier.testTag("img_cache_size"))
                             Spacer(Modifier.height(WnSpace.sm))
                             Row(Modifier.fillMaxWidth(),
@@ -238,7 +238,7 @@ internal fun StorageScreen(
                             Text("手机端不限制缓存占用；上限只决定自动淘汰的起点。" +
                                 "清除不影响已下载的正文与漫画图片。",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.outline)
+                                color = WnColors.inkDim)
                             Spacer(Modifier.height(WnSpace.sm))
                             OutlinedButton(onClick = { imgConfirmClear = true },
                                 modifier = Modifier.testTag("img_cache_clear")) {
@@ -252,7 +252,7 @@ internal fun StorageScreen(
                         "已下载的小说正文与漫画图片是你的数据：**只有你明确点名才会删**。" +
                             "清理缓存不会影响它们。",
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.outline,
+                        color = WnColors.inkDim,
                     )
                 }
                 // 分类总览 + 各分类的清理入口
@@ -268,7 +268,7 @@ internal fun StorageScreen(
                             }
                             if (c.note.isNotBlank()) {
                                 Text(c.note, style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.outline)
+                                    color = WnColors.inkDim)
                             }
                             Spacer(Modifier.height(6.dp))
                             Row(horizontalArrangement = Arrangement.spacedBy(WnSpace.sm)) {
@@ -324,11 +324,11 @@ internal fun StorageScreen(
                                         (if (b.failed > 0) " · 失败 ${b.failed} 章" else "") +
                                         " · ${Export.human(b.bytes)}",
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.outline,
+                                    color = WnColors.inkDim,
                                 )
                                 if (b.stopReason.isNotBlank()) {
                                     Text(b.stopReason, style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.outline)
+                                        color = WnColors.inkDim)
                                 }
                                 Spacer(Modifier.height(6.dp))
                                 Row(horizontalArrangement = Arrangement.spacedBy(WnSpace.sm)) {
@@ -359,7 +359,7 @@ internal fun StorageScreen(
                                         "已缓存章节：${b.cachedIndexes.joinToString("、").ifBlank { "无" }}" +
                                             "（点某一章只删那一章的缓存）",
                                         style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.outline,
+                                        color = WnColors.inkDim,
                                     )
                                     Spacer(Modifier.height(WnSpace.xs))
                                     // 章节按钮按 10 个一批换行，避免长目录把界面撑爆
@@ -401,7 +401,7 @@ internal fun StorageScreen(
                                     Text(m.source, style = MaterialTheme.typography.bodyMedium)
                                     Text("${m.works} 个作品 · ${Export.human(m.bytes)}",
                                         style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.outline)
+                                        color = WnColors.inkDim)
                                 }
                                 OutlinedButton(
                                     enabled = !busy,
@@ -425,11 +425,11 @@ internal fun StorageScreen(
                                     maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 Text("${m.source} · ${m.images} 张 · ${Export.human(m.bytes)}",
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.outline)
+                                    color = WnColors.inkDim)
                                 Spacer(Modifier.height(WnSpace.xs))
                                 Text("删除已下载图片请到书库移除该作品（那里会问要不要连文件一起删）",
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.outline)
+                                    color = WnColors.inkDim)
                             }
                         }
                     }
@@ -443,7 +443,7 @@ internal fun StorageScreen(
                                 maxLines = 1, overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.weight(1f))
                             Text(Export.human(t.bytes), style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.outline)
+                                color = WnColors.inkDim)
                         }
                     }
                 }

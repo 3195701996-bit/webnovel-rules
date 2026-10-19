@@ -297,6 +297,9 @@ api.SourceCrawler = fixture_crawler
         rule.waitUntil(60_000) { nodes("novel_recovery_button") > 0 }
         rule.onAllNodesWithTag("novel_recovery_button")[0].performScrollTo().performClick()
         rule.waitUntil(20_000) { nodes("novel_recovery_select_all") > 0 }
+        // The control is composed while the HTTP listing is still loading and disabled.
+        // Wait for successful data readiness, not merely the presence of the button.
+        rule.waitUntil(20_000) { texts("请选择需要恢复的存档。") > 0 }
         rule.onAllNodesWithTag("novel_recovery_select_all")[0].performScrollTo().performClick()
         rule.waitUntil(5_000) { texts("预览恢复（100）") > 0 }
         rule.onAllNodesWithTag("novel_recovery_list")[0].performScrollToIndex(100)

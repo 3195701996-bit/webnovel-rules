@@ -192,7 +192,7 @@ internal fun ProxySettingsScreen(
             "支持 HTTP / SOCKS5（含 socks5h）；带用户名密码就写 用户名:密码@主机:端口。" +
                 "保存后立即生效（会重置各通道连接，下次请求就走新路径），不需要重启引擎。",
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.outline,
+            color = WnColors.inkDim,
         )
         Text(
             "没有自己的代理就别配：默认直连就是这个 App 的正常运行方式，" +
@@ -265,7 +265,7 @@ internal fun ProxySettingsScreen(
         ) { Text(if (testing) "探测中…" else "测试连通性（含直连对照）") }
         testText?.let {
             Text(it, style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.outline,
+                color = WnColors.inkDim,
                 modifier = Modifier.testTag("proxy_test_result"))
         }
         msg?.let {
@@ -279,7 +279,7 @@ internal fun ProxySettingsScreen(
             "边界说明：代理只是一条网络路径——它不绕过任何站点的风控（例如拷贝漫画的 " +
                 "210「破解版」标记与代理无关），经代理时本机也不再对目标做 IP 绑定。",
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.outline,
+            color = WnColors.inkDim,
         )
     }
     }

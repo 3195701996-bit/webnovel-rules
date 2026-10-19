@@ -455,7 +455,7 @@ private fun HomeScaffold(
                         Spacer(Modifier.height(6.dp))
                         Text("先返回并点「重试」；离线时可以在「书架」里读已下载的内容。",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.outline)
+                            color = WnColors.inkDim)
                         Spacer(Modifier.height(8.dp))
                         Button(onClick = pop) { Text("返回") }
                     }
@@ -582,7 +582,7 @@ private fun HomeScaffold(
                                 Spacer(Modifier.height(6.dp))
                                 Text("先点上方「重试」；离线时可以在「书架」里读已下载的内容。",
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.outline)
+                                    color = WnColors.inkDim)
                             }
                         } else {
                             BrowseScreen(gateway, ep, push)
@@ -594,7 +594,7 @@ private fun HomeScaffold(
                                 Spacer(Modifier.height(6.dp))
                                 Text("已下载的内容仍可在「书架」离线阅读。",
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.outline)
+                                    color = WnColors.inkDim)
                             }
                         } else {
                             DownloadsScreen(gateway, ep, push)
@@ -1501,7 +1501,7 @@ private fun BrowseScreen(gateway: EngineGateway, ep: EngineEndpoint,
                     "已实测通过 ${sources.count { it.verifyStatus == "verified" }} / " +
                         "共 ${sources.size}",
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.outline,
+                    color = WnColors.inkDim,
                 )
             }
             msg?.let {
@@ -1527,7 +1527,7 @@ private fun BrowseScreen(gateway: EngineGateway, ep: EngineEndpoint,
                     "没有实测过的源显示「未实测」，不代表不可用、也不代表可用。" +
                     "点上面的按钮即可在本机跑下一批实测，不需要打开网页。",
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.outline,
+                color = WnColors.inkDim,
             )
         }
     }
@@ -1565,7 +1565,7 @@ private fun SettingsScreen(gateway: EngineGateway, ep: EngineEndpoint,
         Text("Python：3.13（内嵌）", style = MaterialTheme.typography.bodySmall)
         // 产物基线（P0-A）：版本 + 源码 revision + 构建时间，用户截图可直接核对
         Text(BuildInfo.summary, style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.outline,
+            color = WnColors.inkDim,
             modifier = Modifier.testTag("build_info"))
         if (!s?.third.isNullOrEmpty()) {
             Spacer(Modifier.height(6.dp))
@@ -1574,7 +1574,7 @@ private fun SettingsScreen(gateway: EngineGateway, ep: EngineEndpoint,
                 color = MaterialTheme.colorScheme.error)
             Text("受影响的源已标注为「部分可用/不可用」；小说搜索与已下载内容不受影响。",
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.outline)
+                color = WnColors.inkDim)
         }
         Spacer(Modifier.height(8.dp))
         // 导出脱敏诊断（方向基线 §7.1）：用户在手机上导一次，就能定位故障分层
@@ -1662,7 +1662,7 @@ private fun SettingsScreen(gateway: EngineGateway, ep: EngineEndpoint,
         diagMsg?.let {
             Spacer(Modifier.height(4.dp))
             Text(it, style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.outline)
+                color = WnColors.inkDim)
         }
         Spacer(Modifier.height(8.dp))
         OutlinedButton(
@@ -1688,7 +1688,7 @@ private fun SettingsScreen(gateway: EngineGateway, ep: EngineEndpoint,
         speedMsg?.let {
             Spacer(Modifier.height(4.dp))
             Text(it, style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.outline)
+                color = WnColors.inkDim)
         }
         Spacer(Modifier.height(12.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1727,7 +1727,7 @@ private fun SettingsScreen(gateway: EngineGateway, ep: EngineEndpoint,
         Text(
             "引擎重启会把中断的任务收敛为「已停止」并保留记录，不会自动续跑——" +
                 "是否继续由你决定，避免在不知情的情况下消耗流量。",
-            style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline,
+            style = MaterialTheme.typography.labelSmall, color = WnColors.inkDim,
         )
         Spacer(Modifier.height(6.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1777,7 +1777,7 @@ private fun SettingsScreen(gateway: EngineGateway, ep: EngineEndpoint,
             onOpen(Dest.ReaderPrefs)
         }
         Text("设置立刻生效并保存在本机，引擎重启或失败都不会丢。",
-            style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
+            style = MaterialTheme.typography.labelSmall, color = WnColors.inkDim)
 
         Spacer(Modifier.height(12.dp))
         SectionTitle("书源与数据")
@@ -1795,7 +1795,7 @@ private fun SettingsScreen(gateway: EngineGateway, ep: EngineEndpoint,
         SectionTitle("高级（网页诊断）")
         Text("下面这个网页只是诊断与兜底入口（书源规则编辑、任务原始列表），" +
             "不是日常使用界面：搜索、详情、阅读、下载、浏览都走原生页面，不需要网页。",
-            style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
+            style = MaterialTheme.typography.labelSmall, color = WnColors.inkDim)
         Spacer(Modifier.height(6.dp))
         ListRow("打开网页诊断页", "带 ?mobile=1：不加载桌面局域网地址提示") {
             onOpen(Dest.Web("/?mobile=1", "网页诊断"))
