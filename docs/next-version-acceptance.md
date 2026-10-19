@@ -4,6 +4,13 @@
 
 ## 2026-10-20 元数据修复跨端验收与全量回归
 
+### rc18整合候选与新增布局异常（发布阻断，未宣称修复）
+
+- 版本递增为2.1.0-rc18/code177，准确源码 **9068970870d6540bde2c3dab76f4dff161f95717**，clean构建19s及Release JVM通过；冻结APK `/private/tmp/webnovel-iqoo-inspect-gs7YcH/rc18-90689708.apk`，SHA256 **385baad3119a46e460a2ace8c18827a0364bb5bf90744861f7466553afda089a**，与rc17同证书141ec0be…a93b4，完整签名/ZIP/递增版本/构建身份及Web资源校验通过。该提交已推送，准确SHA CI39338432833及39338426888启动，末次观察仍运行，未据此声称通过。
+- 同一冻结APK再次合跑56项，在第21项TextPurifyUiTest.ui_longRecoverySelectionPreviewCancelPreservesFiles发生主线程 **IllegalStateException: layout state is not idle before measure starts**，栈为DialogLayout/AndroidComposeView测量，GET recovery成功后崩溃，整批未完成；不能用先前工作区56/56替代。日志保留 `/private/tmp/webnovel-rc18-layout-crash.log`。原包单独重跑此项1/1（2.584s）及完整TextPurify类7/7（13.101s）通过，表明尚未稳定复现，**根因和修复未确认，正式发布继续阻断**。未通过删除断言、重试绿灯或随意升级依赖掩盖异常。
+- iQOO当前在本应用且未锁屏，按用户睡前授权点击实际vivo风险确认和继续安装，adb install -r成功，系统显示rc18/code177、更新时间2026-10-20 06:58:33、初次安装2026-09-14 19:47:32未变。升级后实际最近阅读五项身份/页码和可见3小说/39漫画、593/1147/1380章计数/93章进度保持；真实柯南详情主操作两列、更多工具默认收起、1380目录显示正常，随后返回缓存书架。只读观察未进入阅读/清洗/删除/下载，不等于全部私有文件已备份或校验。未改VPN/安全设置，不运行合成测试于手机。
+- 未发布3.0.0、未部署用户Web。专用模拟器在测试结束后关闭；后续先收敛上述异常，再继续最终候选关键路径及准确CI核对。
+
 ### Android搜索整页滚动与失败页原地重试补验
 
 - 随后以未改Python源码/测试的同一工作区进行整合回归：完整后端 **2055 passed / 2 skipped，145.03s**；Release JVM **141/141、零失败/错误/跳过**，主包及仪器构建17s；45组Web JS、请求/响应契约、HTTP smoke21/21、Ruff错误门及APK Web资源逐项一致通过。专用ReaderAudit_API36上重新安装主包/仪器包，16类核心合跑 **56/56，115.904s**，含最新探索返回、小说更多工具与本轮搜索/重试测试。该APK仍是rc17版本名的工作区测试包，不用于手机覆盖或分发；正式递增身份、准确SHA CI和真机整合验收仍待完成。
