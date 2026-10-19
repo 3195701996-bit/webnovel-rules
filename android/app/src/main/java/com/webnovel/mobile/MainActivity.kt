@@ -781,6 +781,11 @@ private fun ShelfScreen(gateway: EngineGateway, ep: EngineEndpoint, loader: Imag
     // 没检查过就没有标记——不编造"有更新"。
     var mangaUpdates by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     var favorites by remember { mutableStateOf<List<MangaFavorite>>(emptyList()) }
+    var favoriteQuery by rememberSaveable { mutableStateOf("") }
+    var favoriteUnreadOnly by rememberSaveable { mutableStateOf(false) }
+    val visibleFavorites = remember(favorites, favoriteQuery, favoriteUnreadOnly) {
+        filterMangaFavorites(favorites, favoriteQuery, favoriteUnreadOnly)
+    }
     var favoriteUpdateMessage by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(true) }
     var refreshing by remember { mutableStateOf(false) }
@@ -1097,6 +1102,27 @@ private fun ShelfScreen(gateway: EngineGateway, ep: EngineEndpoint, loader: Imag
                                 modifier = Modifier.fillMaxSize().padding(WnSpace.md),
                                 horizontalArrangement = Arrangement.spacedBy(WnSpace.sm),
                                 verticalArrangement = Arrangement.spacedBy(WnSpace.sm)) {
+                                item(span = { GridItemSpan(maxLineSpan) }) {
+                                    Column(verticalArrangement = Arrangement.spacedBy(WnSpace.xs)) {
+                                        OutlinedTextField(value = favoriteQuery,
+                                            onValueChange = { favoriteQuery = it },
+                                            label = { Text("查找收藏（作品名或源）") },
+                                            singleLine = true,
+                                            modifier = Modifier.fillMaxWidth().testTag("favorite_filter_query"))
+                                        Row(horizontalArrangement = Arrangement.spacedBy(WnSpace.sm)) {
+                                            FilterChip(selected = !favoriteUnreadOnly,
+                                                onClick = { favoriteUnreadOnly = false },
+                                                label = { Text("全部 ${favorites.size}") })
+                                            FilterChip(selected = favoriteUnreadOnly,
+                                                onClick = { favoriteUnreadOnly = true },
+                                                label = { Text("有未读 ${favorites.count { it.unreadCount > 0 }}") },
+                                                modifier = Modifier.testTag("favorite_filter_unread"))
+                                        }
+                                        Text("未读数以最近检查和实际阅读记录为准",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                }
                                 if (favoriteUpdateMessage != null) {
                                     item(span = { GridItemSpan(maxLineSpan) }) {
                                         Row(Modifier.fillMaxWidth(),
@@ -1122,10 +1148,10 @@ private fun ShelfScreen(gateway: EngineGateway, ep: EngineEndpoint, loader: Imag
                                         }
                                     }
                                 }
-                                items(favorites.size, key = { i ->
-                                    "${favorites[i].source}:${favorites[i].comicId}"
+                                items(visibleFavorites.size, key = { i ->
+                                    "${visibleFavorites[i].source}:${visibleFavorites[i].comicId}"
                                 }) { i ->
-                                    val f = favorites[i]
+                                    val f = visibleFavorites[i]
                                     FavoriteCard(f, ep, loader) {
                                         onOpen(Dest.MangaDetail(f.source, f.comicId))
                                     }
@@ -1142,6 +1168,16 @@ private fun ShelfScreen(gateway: EngineGateway, ep: EngineEndpoint, loader: Imag
                                 } else if (favorites.isEmpty()) {
                                     item { Text("暂无收藏漫画", color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         modifier = Modifier.padding(WnSpace.lg)) }
+                                } else if (visibleFavorites.isEmpty()) {
+                                    item(span = { GridItemSpan(maxLineSpan) }) {
+                                        Column(Modifier.padding(WnSpace.md)) {
+                                            Text("没有符合当前筛选的收藏")
+                                            TextButton(onClick = {
+                                                favoriteQuery = ""
+                                                favoriteUnreadOnly = false
+                                            }) { Text("清除筛选") }
+                                        }
+                                    }
                                 }
                             }
                         }
