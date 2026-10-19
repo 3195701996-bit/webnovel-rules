@@ -52,6 +52,10 @@
     },
     "mobile_detail": {
       "file": "concepts/v3-mobile-detail.png",
+      "implementation_status": "primary_read_manage_row_and_wrapping_utility_actions_implemented_full_detail_pending",
+      "primary_actions": {"layout": "reading 1.5fr / local download management 1fr", "minimum_height_dp": 48, "corner_radius_dp": 8},
+      "utility_actions": "FlowRow: check updates, export ZIP, More; top-up only when current catalog has missing units",
+      "intentional_incremental_differences": ["No new icon assets in this action-only increment", "Book header, favorite placement, metadata and catalog heading still require the remaining redesign", "Generated cover/counts remain concept-only; test screenshot uses no-cover fixture", "AVD capture 1080x2400 differs from 1024x1536 concept; no pixel-perfect full-page claim"],
       "primary_action": "继续阅读",
       "secondary_action": "下载管理",
       "utilities": ["检查更新", "导出 ZIP", "更多"],

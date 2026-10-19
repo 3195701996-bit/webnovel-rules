@@ -106,6 +106,20 @@ class Release203RegressionTest {
             rule.onAllNodesWithTag("manga_detail_list").fetchSemanticsNodes().isNotEmpty()
         }
         rule.onNodeWithTag("manga_detail_list").performScrollToNode(hasTestTag("manage_downloaded"))
+        val readBounds = rule.onNodeWithTag("manga_read_primary").getUnclippedBoundsInRoot()
+        val manageBounds = rule.onNodeWithTag("manage_downloaded").getUnclippedBoundsInRoot()
+        assertTrue("阅读和下载管理应并排", kotlin.math.abs(readBounds.top.value - manageBounds.top.value) < 1f)
+        assertTrue("主要操作必须保留触控高度",
+            (readBounds.bottom - readBounds.top).value >= 48f &&
+                (manageBounds.bottom - manageBounds.top).value >= 48f)
+        val checkBounds = rule.onNodeWithTag("check_update").getUnclippedBoundsInRoot()
+        val moreBounds = rule.onNodeWithTag("manga_detail_more").getUnclippedBoundsInRoot()
+        assertTrue("标准手机宽度次要操作应在同一行", kotlin.math.abs(checkBounds.top.value - moreBounds.top.value) < 1f)
+        if (InstrumentationRegistry.getArguments().getString("captureDetailUi") == "true") {
+            val output = InstrumentationRegistry.getInstrumentation().uiAutomation
+                .executeShellCommand("screencap -p /sdcard/Download/webnovel-detail-actions-qa.png")
+            android.os.ParcelFileDescriptor.AutoCloseInputStream(output).use { it.readBytes() }
+        }
         rule.onNodeWithTag("manage_downloaded").performClick()
         rule.onNodeWithTag("manga_detail_list").performScrollToNode(hasTestTag("select_all_downloaded"))
         rule.onNodeWithTag("select_all_downloaded").performClick()

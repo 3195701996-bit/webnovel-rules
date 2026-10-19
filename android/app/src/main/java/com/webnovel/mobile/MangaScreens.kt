@@ -1,4 +1,4 @@
-@file:OptIn(ExperimentalMaterial3Api::class)
+@file:OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 
 package com.webnovel.mobile
 
@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -27,6 +28,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -639,7 +641,8 @@ fun MangaDetailScreen(
                             else -> false
                         }
                         val note = res?.note.orEmpty()
-                        Row(Modifier.fillMaxWidth().padding(horizontal = WnSpace.lg)) {
+                        Row(Modifier.fillMaxWidth().padding(horizontal = WnSpace.lg),
+                            horizontalArrangement = Arrangement.spacedBy(WnSpace.sm)) {
                             Button(
                                 onClick = {
                                     // 页码也要续（记录形如 "第47话 P30"，书库那行就写着
@@ -656,8 +659,10 @@ fun MangaDetailScreen(
                                                note, ch.id, ch.label)
                                     }
                                 },
-                                enabled = resume >= 0,
-                                modifier = Modifier.weight(1f),
+                                enabled = resume >= 0 && !deleting,
+                                shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+                                modifier = Modifier.weight(1.5f).heightIn(min = 48.dp)
+                                    .testTag("manga_read_primary"),
                             ) {
                                 Text(
                                     when {
@@ -668,6 +673,21 @@ fun MangaDetailScreen(
                                     },
                                     maxLines = 1, overflow = TextOverflow.Ellipsis,
                                 )
+                            }
+                            if (d.downloadedCount > 0 || d.partialDownloaded.isNotEmpty()) {
+                                OutlinedButton(
+                                    onClick = {
+                                        manageMode = !manageMode
+                                        if (!manageMode) deleteSel = emptySet()
+                                    },
+                                    enabled = !deleting,
+                                    shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+                                    modifier = Modifier.weight(1f).heightIn(min = 48.dp)
+                                        .testTag("manage_downloaded"),
+                                ) {
+                                    Text(if (manageMode) "完成管理" else "下载管理",
+                                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                }
                             }
                         }
                         if (note.isNotBlank() && hasRecord) {
@@ -680,19 +700,46 @@ fun MangaDetailScreen(
                             )
                         }
                         Spacer(Modifier.height(6.dp))
-                        Row(Modifier.fillMaxWidth().padding(horizontal = WnSpace.lg),
+                        FlowRow(Modifier.fillMaxWidth().padding(horizontal = WnSpace.lg),
                             horizontalArrangement = Arrangement.spacedBy(WnSpace.sm)) {
-                            OutlinedButton(
+                            TextButton(
+                                onClick = {
+                                    scope.launch {
+                                        checking = true
+                                        update = null
+                                        val r = gateway.httpPost(ep.port,
+                                            mangaPath(d.source, d.comicId, "/check-update"))
+                                        update = if (r.ok) EngineData.mangaUpdateCheck(r.body)
+                                                 else MangaUpdateCheck(
+                                                     false, false, 0, "", "HTTP ${r.code}", emptyList())
+                                        checking = false
+                                    }
+                                },
+                                enabled = !checking && !deleting,
+                                modifier = Modifier.testTag("check_update"),
+                            ) { Text(if (checking) "检查中…" else "检查更新") }
+                            TextButton(
                                 onClick = {
                                     zipLauncher.launch(Export.safeFileName(d.title, comicId) + ".zip")
                                 },
-                                enabled = !exporting && d.downloadedCount > 0,
-                                modifier = Modifier.weight(1f),
-                            ) { Text(if (exporting) "导出中…" else "导出 ZIP（${d.downloadedCount} 话）") }
-                            OutlinedButton(
+                                enabled = !exporting && !deleting && d.downloadedCount > 0,
+                            ) { Text(if (exporting) "导出中…" else "导出 ZIP") }
+                            MangaDetailMoreMenu(onRemove = { confirmRemove = true }, onCopyCatalog = {
+                                runCatching {
+                                    val clipboard = ctx.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
+                                        as android.content.ClipboardManager
+                                    clipboard.setPrimaryClip(android.content.ClipData.newPlainText(
+                                        "漫画章节核对", mangaCatalogReport(d, update)))
+                                }.onSuccess {
+                                    actionMsg = "章节核对信息已复制（含作品名与章节 ID，无图片）；请确认后分享。"
+                                }.onFailure {
+                                    actionMsg = "复制章节核对信息失败，请重试。"
+                                }
+                            })
+                            if (d.readingChapters.any { !d.downloaded.contains(it.id) }) {
+                            TextButton(
                                 onClick = {
-                                    // 只统计「话」——整卷需用户在下方整卷区块自行勾选，
-                                    // 不参与"下载未下载话"的默认清单
+                                    // 补齐当前阅读目录的缺失单元（含整卷），按原 ID 提交。
                                     val missing = d.readingChapters
                                         .filterNot { d.downloaded.contains(it.id) }
                                     if (missing.isEmpty()) {
@@ -714,29 +761,13 @@ fun MangaDetailScreen(
                                         }
                                     }
                                 },
-                                enabled = d.readingChapters.any { !d.downloaded.contains(it.id) },
-                                modifier = Modifier.weight(1f),
+                                enabled = !deleting && d.readingChapters.any { !d.downloaded.contains(it.id) },
                             ) { Text("补齐下载") }
+                            }
                         }
                         Spacer(Modifier.height(6.dp))
                         Row(Modifier.fillMaxWidth().padding(horizontal = WnSpace.lg),
                             horizontalArrangement = Arrangement.spacedBy(WnSpace.sm)) {
-                            OutlinedButton(
-                                onClick = {
-                                    scope.launch {
-                                        checking = true
-                                        update = null
-                                        val r = gateway.httpPost(ep.port,
-                                            mangaPath(d.source, d.comicId, "/check-update"))
-                                        update = if (r.ok) EngineData.mangaUpdateCheck(r.body)
-                                                 else MangaUpdateCheck(
-                                                     false, false, 0, "", "HTTP ${r.code}", emptyList())
-                                        checking = false
-                                    }
-                                },
-                                enabled = !checking,
-                                modifier = Modifier.weight(1f).testTag("check_update"),
-                            ) { Text(if (checking) "检查中…" else "检查更新") }
                             update?.let { u ->
                                 if (u.ok && (u.hasUpdate || u.missingCount > 0)) {
                                     Button(
@@ -836,37 +867,11 @@ fun MangaDetailScreen(
                                 ) { Text("清空选择") }
                             }
                         }
-                        Spacer(Modifier.height(6.dp))
-                        Row(Modifier.fillMaxWidth().padding(horizontal = WnSpace.lg)) {
-                            MangaDetailMoreMenu(onRemove = { confirmRemove = true }, onCopyCatalog = {
-                                runCatching {
-                                    val clipboard = ctx.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
-                                        as android.content.ClipboardManager
-                                    clipboard.setPrimaryClip(android.content.ClipData.newPlainText(
-                                        "漫画章节核对", mangaCatalogReport(d, update)))
-                                }.onSuccess {
-                                    actionMsg = "章节核对信息已复制（含作品名与章节 ID，无图片）；请确认后分享。"
-                                }.onFailure {
-                                    actionMsg = "复制章节核对信息失败，请重试。"
-                                }
-                            })
-                        }
                         // 删除管理入口：已下载的话/整卷可勾选后删除（用户明确点名才删）
-                        if (d.downloadedCount > 0 || d.partialDownloaded.isNotEmpty()) {
+                        if (manageMode && (d.downloadedCount > 0 || d.partialDownloaded.isNotEmpty())) {
                             Spacer(Modifier.height(6.dp))
                             Row(Modifier.fillMaxWidth().padding(horizontal = WnSpace.lg),
                                 horizontalArrangement = Arrangement.spacedBy(WnSpace.sm)) {
-                                OutlinedButton(
-                                    onClick = {
-                                        manageMode = !manageMode
-                                        if (!manageMode) deleteSel = emptySet()
-                                    },
-                                    enabled = !deleting,
-                                    modifier = Modifier.weight(1f)
-                                        .testTag("manage_downloaded"),
-                                ) {
-                                    Text(if (manageMode) "完成管理" else "管理已下载（选择删除）")
-                                }
                                 if (manageMode) {
                                     OutlinedButton(
                                         onClick = { if (deleteSel.isNotEmpty())
