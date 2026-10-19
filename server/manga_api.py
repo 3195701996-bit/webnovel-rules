@@ -3538,7 +3538,8 @@ def _manga_auto_favorite(source, comic_id, title, cover="", touch=False):
     now = time.time()
 
     def _merge(data):
-        data = data if isinstance(data, dict) else {}
+        if not isinstance(data, dict):
+            raise ValueError("漫画收藏格式异常，原数据已保留，已取消写入")
         item = _manga_identity_record(data, source, comic_id)
         if title:
             item["title"] = str(title)
@@ -3805,12 +3806,17 @@ def api_manga_favorites_check_updates_status():
 @bp.route("/api/manga/favorites", methods=["POST"])
 def api_manga_favorites_add():
     data = request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+        return _err_json("收藏参数必须是对象", 400)
     source = data.get("source", "")
     comic_id = data.get("comic_id", "")
     title = data.get("title", comic_id)
     cover = data.get("cover", "")
-    if not source or not comic_id:
+    if (not isinstance(source, str) or not isinstance(comic_id, str)
+            or not source.strip() or not comic_id.strip()):
         return _err_json("参数不完整")
+    source = _safe_seg(source, "漫画源")
+    comic_id = _safe_comic_id(source, comic_id)
     try:
         _manga_auto_favorite(source, comic_id, title, cover, touch=True)
     except Exception as e:
@@ -3826,7 +3832,8 @@ def api_manga_favorites_del(source, comic_id):
     _k = f"{source}:{comic_id}"
 
     def _del(d):
-        d = d if isinstance(d, dict) else {}
+        if not isinstance(d, dict):
+            raise ValueError("漫画收藏格式异常，原数据已保留，已取消写入")
         for legacy_key, _ in _manga_identity_rows(d, source, comic_id):
             d.pop(legacy_key, None)
         return d
