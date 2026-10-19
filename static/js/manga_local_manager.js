@@ -4,6 +4,8 @@
     host.replaceChildren();
     let ids = [];
     let names = new Map();
+    let searchable = new Map();
+    let visibleIds = [];
     const base = '/api/manga/' + encodeURIComponent(source) + '/' + encodeURIComponent(comicId);
     const selected = new Set();
     const toggle = document.createElement('button');
@@ -22,6 +24,14 @@
     const list = document.createElement('div');
     list.className = 'chap-list';
     const checks = [];
+    const search = document.createElement('input');
+    search.type = 'search';
+    search.placeholder = '筛选标题或 ID';
+    search.setAttribute('aria-label', '筛选本地缓存标题或 ID');
+    search.className = 'local-media-search';
+    search.value = '';
+    const summary = document.createElement('p');
+    summary.setAttribute('aria-live', 'polite');
     let busy = false;
     let loading = false;
     let failed = false;
@@ -44,6 +54,7 @@
               typeof row.partial === 'boolean' && row.downloaded !== row.partial &&
               !seen.has(row.id) && seen.add(row.id))) throw new Error('本地缓存清单格式不正确');
         ids = data.media.map(row => row.id);
+        searchable = new Map(data.media.map(row => [row.id, (row.name + ' ' + row.id).toLowerCase()]));
         const counts = new Map();
         data.media.forEach(row => counts.set(row.name, (counts.get(row.name) || 0) + 1));
         names = new Map(data.media.map(row => [row.id, (row.name || row.id) +
@@ -58,10 +69,18 @@
       } finally { loading = false; render(); }
     }
     function render() {
-      all.textContent = ids.length && selected.size === ids.length ? '取消全选' : '全选本地内容';
+      const filtering = search.value.trim().length > 0;
+      all.textContent = visibleIds.length && visibleIds.every(id => selected.has(id)) ? '取消全选' :
+        filtering ? '全选筛选结果' : '全选本地内容';
       remove.textContent = '删除选中（' + selected.size + '）';
       remove.disabled = busy || loading || failed || !selected.size;
-      all.disabled = busy || loading || failed || !ids.length;
+      all.disabled = busy || loading || failed || !visibleIds.length;
+      search.hidden = ids.length <= 10 && !search.value;
+      search.disabled = busy || loading || failed;
+      summary.hidden = !filtering;
+      const visibleSet = new Set(visibleIds);
+      summary.textContent = '匹配 ' + visibleIds.length + ' 项 · 筛选外已选 ' +
+        [...selected].filter(id => !visibleSet.has(id)).length + ' 项';
       toggle.disabled = busy || loading;
       retry.hidden = !failed;
       retry.disabled = busy || loading;
@@ -70,7 +89,9 @@
     function buildList() {
       checks.length = 0;
       list.replaceChildren();
-      ids.forEach(rawId => {
+      const terms = search.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+      visibleIds = ids.filter(id => terms.every(term => searchable.get(id).includes(term)));
+      visibleIds.forEach(rawId => {
       const id = String(rawId);
       const label = document.createElement('label');
       label.className = 'chap-item';
@@ -84,7 +105,17 @@
       list.append(label);
       checks.push([input, id]);
       });
+      if (ids.length && !visibleIds.length) {
+        const empty = document.createElement('p');
+        empty.textContent = '没有匹配的本地内容，可修改筛选词';
+        list.append(empty);
+      }
     }
+    search.addEventListener('input', () => {
+      if (search.disabled) return;
+      buildList();
+      render();
+    });
     toggle.onclick = () => {
       if (busy || loading) return;
       panel.hidden = !panel.hidden;
@@ -94,15 +125,17 @@
     retry.onclick = refresh;
     all.onclick = () => {
       if (all.disabled) return;
-      const wasAll = selected.size === ids.length;
-      selected.clear();
-      if (!wasAll) ids.forEach(id => selected.add(String(id)));
+      const wasAll = visibleIds.every(id => selected.has(id));
+      visibleIds.forEach(id => { if (wasAll) selected.delete(id); else selected.add(id); });
       render();
     };
     remove.onclick = async () => {
       const chapterIds = [...selected];
+      const visibleSet = new Set(visibleIds);
+      const hiddenCount = chapterIds.filter(id => !visibleSet.has(id)).length;
       if (busy || loading || failed || !chapterIds.length || !confirm('删除选中的 ' + chapterIds.length +
-          ' 个章节的本地图片？收藏和阅读历史保留。此操作不可撤销。')) return;
+          ' 个章节的本地图片？' + (hiddenCount ? '其中 ' + hiddenCount + ' 项位于当前筛选之外。' : '') +
+          '收藏和阅读历史保留。此操作不可撤销。')) return;
       busy = true;
       render();
       try {
@@ -130,7 +163,7 @@
       } finally { busy = false; render(); }
     };
     controls.append(all, remove);
-    panel.append(controls, status, retry, list);
+    panel.append(search, summary, controls, status, retry, list);
     host.append(toggle, panel);
     render();
   };

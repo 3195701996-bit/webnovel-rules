@@ -15,9 +15,10 @@ class Node {
   let readFails = true;
   let deleteFails = true, reloads = 0;
   let malformed = false;
+  let confirmation = '';
   const context = {window: {}, document: {
     createElement: tag => new Node(tag), createTextNode: text => ({text}),
-  }, confirm: () => confirmed, requestJSON: async (url, opts) => {
+  }, confirm: message => { confirmation = message; return confirmed; }, requestJSON: async (url, opts) => {
     if (url.endsWith('/local-media')) {
       if (readFails) throw new Error('清单不可用');
       if (malformed) return {ok:true, local_only:false, source:'demo', comic_id:'comic', count:0, media:[]};
@@ -40,7 +41,7 @@ class Node {
   assert.equal(panel.hidden, true);
   await toggle.onclick();
   assert.equal(panel.hidden, false);
-  const [controls, status, retry, list] = panel.children;
+  const [search, summary, controls, status, retry, list] = panel.children;
   const [all, remove] = controls.children;
   assert.match(status.textContent, /未使用在线目录代替/);
   assert.equal(list.children.length, 0);
@@ -49,6 +50,23 @@ class Node {
   await retry.onclick();
   assert.equal(list.children.length, 2);
   assert.equal(remove.disabled, true);
+  search.value = '同名 ONE';
+  search.input();
+  assert.equal(list.children.length, 1);
+  all.onclick();
+  assert.equal(remove.textContent, '删除选中（1）');
+  search.value = 'two';
+  search.input();
+  assert.match(summary.textContent, /筛选外已选 1 项/);
+  await remove.onclick();
+  assert.match(confirmation, /其中 1 项位于当前筛选之外/);
+  assert.equal(requests, 0);
+  all.onclick();
+  assert.equal(remove.textContent, '删除选中（2）');
+  all.onclick();
+  assert.equal(remove.textContent, '删除选中（1）');
+  search.value = '';
+  search.input();
   all.onclick();
   assert.equal(remove.textContent, '删除选中（2）');
   await remove.onclick();
