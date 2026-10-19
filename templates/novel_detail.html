@@ -105,6 +105,7 @@
     <button class="op-btn" id="clean-btn" type="button">清洗预览</button>
     <button class="op-btn" id="recovery-btn" type="button">恢复清洗前原文</button>
     <button class="op-btn" id="reader-export-btn" type="button">导出阅读版 TXT</button>
+    <button class="op-btn" id="metadata-btn" type="button">刷新书名与作者</button>
     <button class="op-btn danger" id="del-btn">🗑 删除</button>
     <select class="op-btn" id="src-select" style="display:none;" title="切换书源"></select>
   </div>
@@ -126,6 +127,7 @@
 <script src="/static/js/novel_cleaning.js"></script>
 <script src="/static/js/novel_recovery.js"></script>
 <script src="/static/js/reader_export.js"></script>
+<script src="/static/js/novel_metadata.js"></script>
 <script>
 const params = new URLSearchParams(location.search);
 const KEY = params.get('key') || '';
@@ -430,6 +432,7 @@ async function loadSearchDetail(src, gen, signal) {
 }
 
 if (KEY) {
+  mountNovelMetadata({button: $('#metadata-btn'), key: KEY, request: requestJSON, reload: loadLibraryMode});
   mountNovelCleaning({button: $('#clean-btn'), key: KEY, request: requestJSON, reload: loadLibraryMode});
   mountNovelRecovery({button: $('#recovery-btn'), key: KEY, request: requestJSON, reload: loadLibraryMode});
   mountReaderExport({button: $('#reader-export-btn'), key: KEY, request: requestJSON, name: () => $('#title').textContent});
