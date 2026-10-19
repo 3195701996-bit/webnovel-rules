@@ -62,6 +62,19 @@ for (const foreground of [design.ink, design.secondary_text, design.accent]) {
     `${foreground} normal-size text must meet 4.5:1 on the daily-use canvas`);
 }
 assert.ok(contrast('#ffffff', design.accent) >= 4.5, 'primary action text must remain readable');
+for (const name of ['light', 'sepia', 'dark']) {
+  const block = reader.match(new RegExp(`html\\[data-theme="${name}"\\]\\s*\\{([^}]+)\\}`))[1];
+  const token = key => block.match(new RegExp(`${key}:\\s*(#[0-9a-fA-F]{6})`))[1];
+  assert.ok(contrast(token('--on-accent'), token('--accent')) >= 4.5,
+    `${name} reader next-chapter action must have readable text`);
+}
+assert.match(reader, /\.mobile-bar \.bar-btn\.primary\s*\{[^}]*color:\s*var\(--on-accent\)/);
+assert.match(reader, /@media \(max-width: 768px\)\s*\{\s*\.reader-desktop-settings\s*\{\s*display:none/,
+  'mobile reader must not show a duplicate desktop settings trigger');
+assert.doesNotMatch(css, /\.reader-side\s*\{[^}]*position:\s*static\s*!important/,
+  'old mobile layout must not override the fixed chapter drawer');
+assert.match(css, /\.reader-side\s*\{[^}]*visibility:\s*hidden[^}]*pointer-events:\s*none/s,
+  'closed drawer must not intercept reading or settings clicks');
 assert.match(theme, /lightColorScheme\(/,
   'Android and Web share the editorial light surface by default');
 assert.match(css, /--on-accent:\s*#ffffff/i,

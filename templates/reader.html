@@ -15,6 +15,7 @@ html[data-theme="light"] {
   --bg-hover: #efe8dc; --bg-2: var(--bg-elevated); --border: #e3d9cc;
   --text-primary: #29251f; --text-secondary: #70665b;
   --accent: #a84f35; --accent-hover: #923f2a; --accent-pressed: #7d3524;
+  --on-accent: #ffffff;
   --accent-2: #4f746c; --accent-soft: rgba(168,79,53,.10); --accent-2-soft: rgba(79,116,108,.10);
   --green: #47734d; --green-soft: rgba(71,115,77,.10); --red: #b4473f; --red-soft: rgba(180,71,63,.09);
   --bg: var(--bg-base); --bg-soft: var(--bg-elevated); --bg-card: var(--bg-overlay);
@@ -27,6 +28,7 @@ html[data-theme="sepia"] {
   --bg-hover: #ebe0c9; --bg-2: var(--bg-elevated); --border: #d8c9a8;
   --text-primary: #3d3220; --text-secondary: #75664d;
   --accent: #8a5d35; --accent-hover: #744b2b; --accent-pressed: #603d23;
+  --on-accent: #ffffff;
   --accent-2: #63735a; --accent-soft: rgba(138,93,53,.12); --accent-2-soft: rgba(99,115,90,.12);
   --green: #547044; --green-soft: rgba(84,112,68,.12); --red: #a34d3f; --red-soft: rgba(163,77,63,.10);
   --bg: var(--bg-base); --bg-soft: var(--bg-elevated); --bg-card: var(--bg-overlay);
@@ -39,6 +41,7 @@ html[data-theme="dark"] {
   --bg-hover: #303638; --bg-2: var(--bg-elevated); --border: #3a4243;
   --text-primary: #e7e4dc; --text-secondary: #b4b1a8;
   --accent: #e0a084; --accent-hover: #eab196; --accent-pressed: #cf896a;
+  --on-accent: #1a1400;
   --accent-2: #a6c4b8; --accent-soft: rgba(224,160,132,.15); --accent-2-soft: rgba(166,196,184,.14);
   --green: #9dc49d; --green-soft: rgba(157,196,157,.14); --red: #e59b91; --red-soft: rgba(229,155,145,.14);
   --bg: var(--bg-base); --bg-soft: var(--bg-elevated); --bg-card: var(--bg-overlay);
@@ -54,6 +57,7 @@ html, body { transition: background .2s, color .2s; }
 }
 .reader-side .toc-expand:hover { color: var(--accent); border-color: var(--accent); text-decoration: none; }
 @media (max-width: 768px) {
+  .reader-desktop-settings { display:none; }
   .reader-paper .body { font-size: var(--reader-fs) !important; line-height: var(--reader-lh) !important; }
   .reader-paper h1 { font-size: 1.22rem !important; }
   .reader-nav { display: none !important; }  /* 桌面导航在手机隐藏，用底部固定栏 */
@@ -74,7 +78,7 @@ html, body { transition: background .2s, color .2s; }
     color: var(--text); font-size: .92rem; font-weight: 600; cursor: pointer;
   }
   .mobile-bar .bar-btn:disabled { opacity: .35; }
-  .mobile-bar .bar-btn.primary { background: var(--accent); color: #1a1400; border-color: transparent; }
+  .mobile-bar .bar-btn.primary { background: var(--accent); color: var(--on-accent); border-color: transparent; }
   .mobile-bar .bar-info {
     display: flex; flex-direction: column; align-items: center; justify-content: center;
     min-width: 70px; color: var(--text-dim); font-size: .72rem; line-height: 1.4;

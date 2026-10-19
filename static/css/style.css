@@ -550,7 +550,7 @@ html:has(body.manga-page), body.manga-page { overflow-x: clip; }
 
   /* 小说阅读器：三栏 → 单栏 */
   .reader { flex-direction: column; gap: 12px; }
-  .reader-side { width: 100% !important; position: static !important; max-height: 40vh !important; order: 2; }
+  .reader-side { order: 2; }
   .reader-main { order: 1; width: 100%; }
   .reader-paper { padding: 22px 16px 34px; min-height: 55vh; }
   .reader-paper h1 { font-size: 1.2rem; margin-bottom: 22px; }
@@ -920,12 +920,16 @@ html:has(body.manga-page), body.manga-page { overflow-x: clip; }
     width: 100%;
     max-height: 60vh;
     z-index: 200;
+    visibility: hidden;
+    pointer-events: none;
     transform: translateY(100%);
     transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
     border-radius: 16px 16px 0 0;
     box-shadow: 0 -8px 32px rgba(0,0,0,0.4);
   }
   .reader-side.open {
+    visibility: visible;
+    pointer-events: auto;
     transform: translateY(0);
   }
   .reader-side-toggle {
