@@ -5,6 +5,30 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 
 class MangaHistoryIdentityTest {
+    @Test fun chapterRebuildEvictsBothCatalogModesButPreservesOtherChapters() {
+        val source = "fixture-rebuild"
+        val comic = "target"
+        val pages = MangaChapterPages(1, false, listOf("old"), staleProcessing = true)
+        for (local in listOf(false, true)) {
+            MangaReadCache.putUrls(source, comic, "rebuild", pages.copy(local = local), local)
+            MangaReadCache.putUrls(source, comic, "keep", pages.copy(local = local), local)
+        }
+        try {
+            MangaReadCache.invalidateChapterUrls(source, comic, "rebuild")
+            for (local in listOf(false, true)) {
+                assertNull(MangaReadCache.getUrls(source, comic, "rebuild", local))
+                assertEquals(pages.copy(local = local), MangaReadCache.getUrls(source, comic, "keep", local))
+            }
+        } finally { MangaReadCache.invalidate(source, comic) }
+    }
+
+    @Test fun staleReasonFollowsCurrentPagesForNetworkAndCacheHits() {
+        val pages = MangaChapterPages(1, true, listOf("local"), staleProcessing = true, staleReason = "旧版本图片")
+        assertEquals("旧版本图片", readerStaleProcessingReason(pages))
+        assertEquals("本章图片是旧版处理缓存，需联网重新获取", readerStaleProcessingReason(pages.copy(staleReason = "")))
+        assertEquals("", readerStaleProcessingReason(pages.copy(staleProcessing = false)))
+    }
+
     @Test fun readerControlHotZoneIsSmallAndCentered() {
         val width = 1000f
         val height = 2000f

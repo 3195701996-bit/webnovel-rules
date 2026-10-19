@@ -235,6 +235,11 @@ internal object MangaReadCache {
                 localCatalog: Boolean = false) =
         put(urls, uk(source, comicId, chapterId, localCatalog), p)
 
+    fun invalidateChapterUrls(source: String, comicId: String, chapterId: String) = synchronized(lock) {
+        urls.remove(uk(source, comicId, chapterId, false))
+        urls.remove(uk(source, comicId, chapterId, true))
+    }
+
     /** Download completion/deletion changes local-vs-network image routing. */
     fun invalidate(source: String, comicId: String) = synchronized(lock) {
         details.remove(dk(source, comicId, false))
@@ -1321,6 +1326,9 @@ internal fun mangaReaderKeyAction(keyCode: Int, paged: Boolean): MangaReaderKeyA
 internal fun readerCacheMatchesCatalog(pages: MangaChapterPages, localCatalog: Boolean): Boolean =
     pages.local == localCatalog
 
+internal fun readerStaleProcessingReason(pages: MangaChapterPages): String =
+    if (pages.staleProcessing) pages.staleReason.ifBlank { "本章图片是旧版处理缓存，需联网重新获取" } else ""
+
 // ── 原生漫画阅读器（纵向连续）────────────────────────────────
 
 @Composable
@@ -1492,12 +1500,13 @@ fun MangaReaderScreen(
         liveChapterLabel = ch.label
         // 本屏"进入"这一话：此后即使图片取不到，也允许把"读到这一话"记下来
         loadedChapterId = ch.id
-        loading = true; error = null
+        loading = true; error = null; staleReason = ""
         val hit = cache[ch.id]?.takeIf { readerCacheMatchesCatalog(it, localCatalog) }
             ?: MangaReadCache.getUrls(d.source, d.comicId, ch.id, localCatalog)
         if (hit != null) {
             cache[ch.id] = hit
             pages = hit
+            staleReason = readerStaleProcessingReason(hit)
             chapterIndex = idx
             pageNo = requestedPage.coerceIn(1, hit.count.coerceAtLeast(1))
             loading = false
@@ -1525,9 +1534,7 @@ fun MangaReaderScreen(
             cache[ch.id] = p
             MangaReadCache.putUrls(d.source, d.comicId, ch.id, p, localCatalog)
             pages = p
-            staleReason = if (p.staleProcessing) {
-                p.staleReason.ifBlank { "本章图片是旧版处理缓存，需联网重新获取" }
-            } else ""
+            staleReason = readerStaleProcessingReason(p)
             chapterIndex = idx
             pageNo = requestedPage.coerceIn(1, p.count.coerceAtLeast(1))
         }
@@ -2084,11 +2091,12 @@ SubcomposeAsyncImage(
                                         mangaPath(d!!.source, d.comicId,
                                             "/rebuild-images?chapter=${Uri.encode(cur)}"),
                                     )
-                                    cache.remove(cur)
                                     rebuilding = false
                                     if (!r.ok) {
                                         error = "重新获取失败：HTTP ${r.code} " + r.body.take(120)
                                     } else {
+                                        cache.remove(cur)
+                                        MangaReadCache.invalidateChapterUrls(d.source, d.comicId, cur)
                                         loadChapter(chapterIndex)
                                     }
                                 }
