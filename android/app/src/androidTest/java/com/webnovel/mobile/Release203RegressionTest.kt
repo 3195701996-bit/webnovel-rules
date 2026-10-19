@@ -15,6 +15,9 @@ import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsOn
+import androidx.compose.ui.test.assertIsOff
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.test.platform.app.InstrumentationRegistry
 import kotlinx.coroutines.runBlocking
@@ -150,6 +153,41 @@ class Release203RegressionTest {
             assertTrue(report.getJSONArray("chapters").length() == 2)
             assertTrue(!report.has("cover") && !report.has("images"))
         }
+    }
+
+    @Test fun partialVolumeCanBeSelectedAndDeselectedWithoutChangingMedia() {
+        connect()
+        val c = SelfTestComic(resumeAtChapter = 2).also { comic = it; it.create(); it.makeFirstUnitPartialVolume() }
+        val before = c.mediaDigest()
+        // Local reading catalogs deliberately exclude incomplete media. Manage
+        // the partial unit from the full catalog/history entry, not by weakening
+        // that strict local-reading contract.
+        val response = runBlocking { gateway.httpText(endpoint.port, c.detailUrl.substringBefore('?')) }
+        assertTrue(response.ok)
+        val detail = EngineData.mangaDetail(response.body)!!
+        assertTrue("夹具必须真实被服务端判为部分整卷：${response.body}",
+            detail.volumes.any { it.id == SelfTestComic.CH1_ID } &&
+                detail.partialDownloaded.contains(SelfTestComic.CH1_ID) &&
+                !detail.downloaded.contains(SelfTestComic.CH1_ID))
+        rule.openCachedShelf()
+        rule.onAllNodesWithText("最近阅读")[0].performClick()
+        rule.waitUntil(60_000) { rule.onAllNodesWithText(SelfTestComic.TITLE).fetchSemanticsNodes().isNotEmpty() }
+        rule.onAllNodesWithText(SelfTestComic.TITLE)[0].performClick()
+        rule.waitUntil(30_000) { rule.onAllNodesWithTag("manage_downloaded").fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithTag("manage_downloaded").performClick()
+        rule.onNodeWithTag("manga_detail_list").performScrollToNode(hasTestTag("pick_${SelfTestComic.CH1_ID}"))
+        rule.onNodeWithTag("volume_status_${SelfTestComic.CH1_ID}", useUnmergedTree = true)
+            .assertTextEquals("部分下载 · 可补齐")
+        rule.onNodeWithTag("pick_${SelfTestComic.CH1_ID}").assertIsOff().performClick().assertIsOn()
+        rule.onNodeWithTag("manga_detail_list").performScrollToNode(hasTestTag("select_all_downloaded"))
+        rule.onNodeWithText("删除选中（1）").assertIsDisplayed()
+        rule.onNodeWithTag("select_all_downloaded").performClick()
+        rule.onNodeWithText("删除选中（2）").assertIsDisplayed()
+        rule.onNodeWithTag("manga_detail_list").performScrollToNode(hasTestTag("pick_${SelfTestComic.CH1_ID}"))
+        rule.onNodeWithTag("pick_${SelfTestComic.CH1_ID}").assertIsOn().performClick().assertIsOff()
+        rule.onNodeWithTag("manga_detail_list").performScrollToNode(hasTestTag("select_all_downloaded"))
+        rule.onNodeWithText("删除选中（1）").assertIsDisplayed()
+        assertTrue("选择与取消不得改变本地图片字节", before == c.mediaDigest())
     }
 
     @Test fun failedDeleteKeepsSelectionAndAllowsRetry() {

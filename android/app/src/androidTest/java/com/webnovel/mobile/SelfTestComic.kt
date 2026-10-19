@@ -201,6 +201,39 @@ class SelfTestComic(
     fun imageSize(chapterId: String, idx: Int): Long =
         File(comicDir, chapterId + "/" + String.format("%04d.jpg", idx)).length()
 
+    /** Convert only this UUID fixture's first unit into an incomplete volume. */
+    fun makeFirstUnitPartialVolume() {
+        fun convert(info: JSONObject, splitVolumes: Boolean) {
+            val chapters = info.getJSONArray("chapters")
+            val first = chapters.getJSONObject(0)
+            first.put("name", "第01卷").put("download_page_count", 3)
+            // Download manifests store all units in chapters; only API detail
+            // caches split volumes. Match that production schema exactly.
+            if (!splitVolumes) return
+            info.put("volumes", JSONArray().put(first))
+            info.put("chapters", JSONArray().apply {
+                for (index in 1 until chapters.length()) put(chapters.getJSONObject(index))
+            })
+        }
+        val local = File(comicDir, "_info.json")
+        val info = JSONObject(local.readText(Charsets.UTF_8))
+        convert(info, false)
+        local.writeText(info.toString(), Charsets.UTF_8)
+        val cached = JSONObject(fullDetailCache.readText(Charsets.UTF_8))
+        convert(cached.getJSONObject("data"), true)
+        fullDetailCache.writeText(cached.toString(), Charsets.UTF_8)
+    }
+
+    fun mediaDigest(): String {
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+        comicDir.walkTopDown().filter { it.isFile && it.extension == "jpg" }
+            .sortedBy { it.relativeTo(comicDir).path }.forEach {
+                digest.update(it.relativeTo(comicDir).path.toByteArray(Charsets.UTF_8))
+                digest.update(it.readBytes())
+            }
+        return digest.digest().joinToString("") { "%02x".format(it.toInt() and 255) }
+    }
+
     private fun readJsonArray(f: File): JSONArray =
         if (f.exists()) runCatching { JSONArray(f.readText(Charsets.UTF_8)) }.getOrNull()
             ?: JSONArray() else JSONArray()

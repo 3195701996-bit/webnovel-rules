@@ -1060,13 +1060,16 @@ fun MangaDetailScreen(
                                     maxLines = 1, overflow = TextOverflow.Ellipsis,
                                     modifier = Modifier.weight(1f))
                                 Text(
-                                    when {
-                                        vActive && vInDl && vDownloaded -> "下载中"
-                                        vActive && vInDl -> "排队中"
-                                        vDownloaded -> "已下载"
-                                        else -> "整卷"
-                                    },
+                                    mangaChapterStatusLabel(
+                                        isReading = vi == readIdx,
+                                        inDownloadTask = vActive && vInDl,
+                                        taskRunning = dl?.status == "running",
+                                        isCurrentDownloadChapter = dl?.currentChapterId == v.id,
+                                        downloaded = vDownloaded,
+                                        partiallyDownloaded = d.partialDownloaded.contains(v.id),
+                                    ),
                                     style = MaterialTheme.typography.labelSmall,
+                                    modifier = Modifier.testTag("volume_status_${v.id}"),
                                     color = when {
                                         vActive && vInDl && vDownloaded -> WnColors.accent
                                         vActive && vInDl ->
