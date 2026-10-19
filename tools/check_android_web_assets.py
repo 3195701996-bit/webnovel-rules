@@ -14,7 +14,12 @@ def check_web_assets(apk_path, root):
                 if path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc"}
     if not expected:
         return ["No source Web resources found"]
-    with ZipFile(apk_path) as apk, ZipFile(BytesIO(apk.read("assets/chaquopy/app.imy"))) as bundle:
+    with ZipFile(apk_path) as apk:
+        entries = [info for info in apk.infolist() if info.filename == "assets/chaquopy/app.imy"]
+        if len(entries) != 1:
+            return [f"Expected exactly one application bundle, found {len(entries)}"]
+        contents = apk.read(entries[0])
+    with ZipFile(BytesIO(contents)) as bundle:
         names = [name for name in bundle.namelist()
                  if name.startswith(("static/", "templates/")) and not name.endswith("/")]
         problems = [f"Duplicate: {name}" for name, count in Counter(names).items() if count > 1]

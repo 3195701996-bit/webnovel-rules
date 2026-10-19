@@ -229,6 +229,9 @@ configurations.configureEach {
 def snapshotDir = layout.buildDirectory.dir('generated/python-snapshot')
 def repoRoot = rootProject.file('..')
 tasks.register('syncPythonSnapshot', Sync) {
+    // Gradle ignores extra files added to an output directory when deciding UP-TO-DATE.
+    // Always reconcile this owned whitelist; unchanged source bytes remain unchanged.
+    outputs.upToDateWhen { false }
     // Python 业务包与静态资源
     from(repoRoot) {
         include 'app.py'

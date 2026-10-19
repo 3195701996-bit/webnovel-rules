@@ -1,5 +1,8 @@
 from io import BytesIO
 from zipfile import ZipFile
+from pathlib import Path
+import subprocess
+import sys
 import pytest
 
 from tools.check_android_web_assets import check_web_assets
@@ -42,3 +45,27 @@ def test_duplicate_archive_entries_are_rejected(tmp_path):
     with pytest.warns(UserWarning, match="Duplicate name"):
         apk = bundle(tmp_path, [("static/new.js", b"new"), ("static/new.js", b"new")])
     assert check_web_assets(apk, tmp_path) == ["Duplicate: static/new.js"]
+
+
+@pytest.mark.parametrize("failure", ["corrupt_apk", "missing_bundle", "corrupt_bundle", "duplicate_bundle"])
+def test_cli_fails_closed_for_invalid_application_archives(tmp_path, failure):
+    (tmp_path / "static").mkdir()
+    (tmp_path / "static/new.js").write_bytes(b"new")
+    apk = tmp_path / "fixture.apk"
+    if failure == "corrupt_apk":
+        apk.write_bytes(b"not an apk")
+    else:
+        with ZipFile(apk, "w") as archive:
+            if failure == "corrupt_bundle":
+                archive.writestr("assets/chaquopy/app.imy", b"not a bundle")
+            elif failure == "duplicate_bundle":
+                archive.writestr("assets/chaquopy/app.imy", b"first")
+                with pytest.warns(UserWarning, match="Duplicate name"):
+                    archive.writestr("assets/chaquopy/app.imy", b"last")
+    tool = Path(__file__).resolve().parents[1] / "tools/check_android_web_assets.py"
+    result = subprocess.run([sys.executable, str(tool), str(apk), "--root", str(tmp_path)],
+                            capture_output=True, text=True, timeout=15)
+    assert result.returncode == 1
+    assert "match source exactly" not in result.stdout
+    assert result.stderr.strip()
+    assert "Traceback" not in result.stderr

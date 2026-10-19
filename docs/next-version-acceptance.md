@@ -463,3 +463,6 @@
 - 增加只读工具 `tools/check_android_web_assets.py`，读取APK内Chaquopy app.imy，对static/templates每个文件与当前源码逐字节核对，并拒绝缺失、额外残留、重复ZIP条目、内容不一致及空源码误通过。它不解压写盘、不构建/安装/发布，不替代签名和版本身份校验。
 - 实际Release构建22秒、Debug构建18秒成功，两个APK均通过全部Web资源一致性校验。单独核对新详情CSS、简介脚本、本地管理脚本和模板内容一致，测试残留不在包内。新增工具/快照及读写契约专项 **31 passed（4.66秒）**，错误级Ruff与diff检查通过。
 - CI Android构建后增加实际包内资源校验步骤，YAML由系统Ruby解析确认（本地venv未安装PyYAML，未为此新增依赖）。后续远端CI仍需准确SHA结果；本轮查询GitHub遇EOF，未据此判定CI失败或成功。未启动设备、未分发本轮dirty构建产物，完整3.0.0验收仍开放。
+- 后续异常输入CLI回归覆盖损坏APK、缺失/损坏app.imy、外层同名app.imy重复；均退出1、无成功提示和无裸Traceback。工具新增“外层应用资源包恰好一个”检查，避免只读取重复项之一。正常实际Release/Debug包仍通过。
+- **修正上轮Sync证据边界**：此前任务配置改动会强制执行，不能证明增量情形。配置不变时再次向专用输出注入旧文件，真实任务显示UP-TO-DATE且文件仍在，复现Gradle对额外输出不触发任务的问题。加入outputs.upToDateWhen(false)后真实Debug构建成功12秒，合并Python仍UP-TO-DATE；再次在配置完全不变时注入同一测试文件，Sync明确执行（3秒）、残留被清除。仅清理专用生成快照；不碰用户缓存或设备数据。
+- 本轮冻结Python源码执行全量 **1948 passed、2 skipped（151.22秒）**；之后追加Sync任务约束断言并重跑工具/快照专项 **9 passed（0.14秒）**。实际Debug包全部Web资源与源码一致，无测试残留；错误级Ruff与diff检查通过。真机当前未连接，已异步请求重新连接，期间继续其他开发；未发布。

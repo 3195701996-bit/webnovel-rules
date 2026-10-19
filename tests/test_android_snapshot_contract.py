@@ -7,6 +7,7 @@ def test_android_python_snapshot_is_a_whitelisted_sync():
     gradle = (root / "android/app/build.gradle").read_text(encoding="utf-8")
     snapshot = gradle.split("tasks.register('syncPythonSnapshot', Sync) {", 1)[1]
     snapshot = snapshot.split("// 内置书源", 1)[0]
+    assert "outputs.upToDateWhen { false }" in snapshot
     for pattern in ("app.py", "server/**", "engine/**", "templates/**", "static/**"):
         assert f"include '{pattern}'" in snapshot
     assert "into snapshotDir" in snapshot
