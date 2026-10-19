@@ -162,6 +162,32 @@ class TextPurifyUiTest {
     }
 
     @Test
+    fun ui_cleanThenRestoreOriginalWithExplicitPreview() {
+        val cache = File(bookDir, cacheKeyOf(URL2) + ".cache")
+        val original = cache.readBytes()
+        val ep = gateway.currentEndpoint()!!
+        runBlocking { gateway.httpPost(ep.port, "/api/books/$key/reclean", "{\"dry_run\":false}") }
+        val cleaned = cache.readBytes()
+        assertFalse(original.contentEquals(cleaned))
+        val listing = runBlocking { gateway.httpText(ep.port, "/api/books/$key/reclean/recovery") }
+        val identity = JSONObject(listing.body).getJSONArray("items").getJSONObject(0).getString("id")
+        rule.openCachedShelf()
+        rule.waitUntil(60_000) { texts(BOOK_NAME) > 0 }
+        rule.onAllNodesWithText(BOOK_NAME)[0].performScrollTo().performClick()
+        rule.waitUntil(60_000) { nodes("novel_recovery_button") > 0 }
+        rule.onAllNodesWithTag("novel_recovery_button")[0].performScrollTo().performClick()
+        rule.waitUntil(20_000) { nodes("novel_recovery_pick_$identity") > 0 }
+        rule.onAllNodesWithTag("novel_recovery_pick_$identity")[0].performClick()
+        rule.onAllNodesWithTag("novel_recovery_confirm")[0].performClick()
+        rule.waitUntil(20_000) { texts("预览通过", substring = true) > 0 }
+        assertTrue("恢复预览不应改文件", cleaned.contentEquals(cache.readBytes()))
+        rule.onAllNodesWithTag("novel_recovery_confirm")[0].performClick()
+        rule.waitUntil(20_000) { texts("已恢复 1 项", substring = true) > 0 }
+        assertTrue("确认恢复必须逐字节还原原文", original.contentEquals(cache.readBytes()))
+        assertTrue(File(bookDir, "book.txt").readText().contains("huanyuanap"))
+    }
+
+    @Test
     fun ui_promotionReviewCanBeCancelledWithoutWriting() {
         val cache = File(bookDir, cacheKeyOf(URL2) + ".cache")
         val before = cache.readBytes()

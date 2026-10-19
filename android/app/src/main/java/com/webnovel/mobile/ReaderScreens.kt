@@ -108,6 +108,7 @@ fun BookDetailScreen(
     // 净化预检结果（dry-run）：确认前不写盘
     var cleaning by remember { mutableStateOf(false) }
     var cleanPreview by remember { mutableStateOf<org.json.JSONObject?>(null) }
+    var showOriginalRecovery by remember { mutableStateOf(false) }
     var missingCount by remember { mutableIntStateOf(0) }
     var confirmDelete by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
@@ -257,7 +258,7 @@ fun BookDetailScreen(
                                                         "已下载正文不需要净化（没有检测到广告或分隔线）"
                                                     } else {
                                                         "预检：$ch 章需要净化，将删除 $lines 行垃圾、" +
-                                                            "约 $chars 字（作者正文不会动）"
+                                                            "约 $chars 字（请先核对样例）"
                                                     }
                                                 }
                                             }
@@ -268,6 +269,8 @@ fun BookDetailScreen(
                                             .testTag("reclean_button"),
                                     ) { Text(if (cleaning) "统计中…" else "净化正文") }
                                 }
+                                TextButton(onClick = { showOriginalRecovery = true }, enabled = !cleaning && !checking,
+                                    modifier = Modifier.testTag("novel_recovery_button")) { Text("恢复清洗前原文") }
                                 if (missingCount > 0) {
                                     Spacer(Modifier.height(WnSpace.sm))
                                     OutlinedButton(
@@ -324,6 +327,10 @@ fun BookDetailScreen(
                 }
             }
         }
+    }
+    if (showOriginalRecovery) {
+        NovelRecoveryDialog(bookKey, ep.port, gateway, onClose = { showOriginalRecovery = false },
+            onChanged = { scope.launch { reload() } })
     }
     cleanPreview?.let { o ->
         AlertDialog(

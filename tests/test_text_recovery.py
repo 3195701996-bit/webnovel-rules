@@ -13,7 +13,7 @@ def test_cleaning_archive_roundtrip_and_dry_run_preserve_exact_bytes(tmp_path):
     path.write_bytes(original.encode())
     identity = recovery.save_cleaned_cache(str(tmp_path), path.name, original, '标题\n原文。')
     assert recovery.restore_cleaned_cache(str(tmp_path), identity) == {
-        'restored': False, 'already_original': False}
+        'restored': False, 'already_original': False, 'filename': path.name}
     assert path.read_bytes() == '标题\n原文。'.encode()
     assert recovery.restore_cleaned_cache(str(tmp_path), identity, dry_run=False)['restored']
     assert path.read_bytes() == original.encode()

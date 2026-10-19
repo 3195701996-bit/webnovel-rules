@@ -68,9 +68,9 @@ def restore_cleaned_cache(book_dir, identity, dry_run=True):
         with open(path, encoding='utf-8', newline='') as f:
             current = f.read()
         if _sha(current) == record['original_sha256']:
-            return {'restored': False, 'already_original': True}
+            return {'restored': False, 'already_original': True, 'filename': record['filename']}
         if _sha(current) != record.get('cleaned_sha256'):
             raise ValueError('章节已有后续修改，拒绝覆盖，请人工核对')
         if not dry_run:
             atomic_write_text(path, record['original'])
-        return {'restored': not dry_run, 'already_original': False}
+        return {'restored': not dry_run, 'already_original': False, 'filename': record['filename']}

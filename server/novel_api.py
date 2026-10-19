@@ -1962,7 +1962,8 @@ def api_book_reclean_recovery(book_key):
     from engine.text_recovery import restore_cleaned_cache
     book_key = _safe_seg(book_key, "书籍")
     d = os.path.join(BOOKS_DIR, book_key)
-    if not load_book_state(os.path.join(d, "_state.json")):
+    state = load_book_state(os.path.join(d, "_state.json"))
+    if not state:
         abort(404, "书籍不存在")
     archive_dir = os.path.join(d, ".reclean-originals")
     if os.path.islink(archive_dir):
@@ -1971,6 +1972,11 @@ def api_book_reclean_recovery(book_key):
         names = sorted(os.listdir(archive_dir))
     except FileNotFoundError:
         names = []
+    labels = {}
+    for index, chapter in enumerate(state.get("chapters") or [], 1):
+        if isinstance(chapter, dict) and chapter.get("url"):
+            filename = _cache_key(chapter["url"]) + ".cache"
+            labels.setdefault(filename, []).append(f"第{index}项 · {chapter.get('name') or '未命名章节'}")
     items = []
     for name in names:
         if not re.fullmatch(r'[0-9a-f]{64}\.json', name):
@@ -1979,7 +1985,8 @@ def api_book_reclean_recovery(book_key):
         try:
             preview = restore_cleaned_cache(d, identity)
             items.append({"id": identity, "restorable": not preview["already_original"],
-                          "already_original": preview["already_original"]})
+                          "already_original": preview["already_original"],
+                          "label": " / ".join(labels.get(preview["filename"], ["历史章节（目录已变化）"]))})
         except (ValueError, OSError, TypeError):
             items.append({"id": identity, "restorable": False, "conflict": True})
     return jsonify({"ok": True, "items": items, "count": len(items)})
