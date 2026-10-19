@@ -34,6 +34,8 @@ def now_iso():
 #   rev = md5(每章 "序位:mtime_ns:size" 序列 + 总数)
 # 直接反映"当前磁盘上可导出的内容"，跨进程/重启有效，无需在各写点埋钩子。
 EXPORT_META_NAME = "_export.json"
+# 合并算法变化必须使旧全文失效，即使章节缓存的mtime/size未变化。
+EXPORT_FORMAT_VERSION = 2
 
 
 def content_revision(book_dir, chapters):
@@ -67,7 +69,7 @@ def content_revision(book_dir, chapters):
         records.append([idx, str(url), name, st.st_mtime_ns, st.st_size])
     if not records:
         return ""
-    blob = json.dumps(records, separators=(",", ":")).encode()
+    blob = json.dumps([EXPORT_FORMAT_VERSION, records], separators=(",", ":")).encode()
     return hashlib.md5(blob).hexdigest()[:16]
 
 
@@ -185,7 +187,6 @@ def merge_book_txt(book_dir, chapters, force=False):
         if not force and rev and export_is_fresh(book_dir, chapters, out):
             return out
         texts = []
-        seen_sig = set()   # 内容指纹去重：防止分页爬虫把后续章节内容拼入本章导致重复
         for idx, c in enumerate(chapters, 1):
             url = (c or {}).get('url') if isinstance(c, dict) else None
             if not url:
@@ -232,12 +233,8 @@ def merge_book_txt(book_dir, chapters, force=False):
                             continue
                         break
                     body = "\n".join(_lines[_j:]).strip() or body
-            # 指纹 = 正文中部 300 字（跨页拼接重复时中段最稳定）
-            _mid = body[len(body) // 2: len(body) // 2 + 300]
-            _sig = hashlib.md5(_mid.encode()).hexdigest()[:16]
-            if _sig in seen_sig:
-                continue  # 与前面章节内容重叠 → 跳过（防重复）
-            seen_sig.add(_sig)
+            # 每条权威目录都保留。内容相似不是章节身份相同的证据；
+            # 分页内去重在cleaner处理，不得在全文合并时静默删除整章。
             texts.append(f"{name}\n{body}")
         if not texts:
             return None

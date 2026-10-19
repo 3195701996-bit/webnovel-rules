@@ -197,6 +197,41 @@ def test_merge_writes_meta_and_skips_when_fresh(tmp_path):
     assert CR.export_is_fresh(d, _named(CHS), out) is True
 
 
+def test_export_preserves_distinct_chapters_with_identical_middle(tmp_path):
+    """共同回忆/引用不能让另一章从全文目录消失。"""
+    d = str(tmp_path / "book")
+    common = "共同引用的内容。" * 150
+    texts = {url: f"开头{i}。{common}结尾{i}。"
+             for i, (_, url) in enumerate(CHS)}
+    _mk_book(d, CHS, texts)
+    out = _merge(d, CHS)
+    with open(out, encoding="utf-8") as f:
+        exported = f.read()
+    for i, (name, _) in enumerate(CHS):
+        assert name in exported
+        assert f"开头{i}。" in exported and f"结尾{i}。" in exported
+
+
+def test_export_preserves_distinct_ids_even_with_identical_body(tmp_path):
+    d = str(tmp_path / "book")
+    _mk_book(d, CHS, {url: "同样的正文。" * 40 for _, url in CHS})
+    out = _merge(d, CHS)
+    with open(out, encoding="utf-8") as f:
+        exported = f.read()
+    assert all(name in exported for name, _ in CHS)
+
+
+def test_export_algorithm_change_invalidates_unchanged_cache(tmp_path, monkeypatch):
+    d = str(tmp_path / "book")
+    _mk_book(d, CHS, TXT)
+    out = _merge(d, CHS)
+    assert CR.export_is_fresh(d, _named(CHS), out)
+    monkeypatch.setattr(CR, "EXPORT_FORMAT_VERSION", CR.EXPORT_FORMAT_VERSION + 1)
+    assert not CR.export_is_fresh(d, _named(CHS), out)
+    assert _merge(d, CHS) == out
+    assert CR.export_is_fresh(d, _named(CHS), out)
+
+
 def test_export_fresh_detects_txt_tampering(tmp_path):
     d = str(tmp_path / "book")
     _mk_book(d, CHS, TXT)

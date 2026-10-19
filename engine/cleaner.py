@@ -85,6 +85,13 @@ RECOMMEND_RE = re.compile(
     r'^(?:推荐|推荐阅读|书单|好书推荐|其他作品|同类型|猜你喜欢|热门推荐|完本推荐|人气推荐|编辑推荐|最新书单|以下推荐)[:：]?\s*.{0,20}$'
 )
 
+# 2026-10-19 手机真实导出：站点尾注缺失域名时旧规则漏清。
+# 只接受完整独立模板；不得把正文中引用该文案的对白一起删除。
+MEASURED_SITE_FOOTER_RE = re.compile(
+    r'^《[^《》\n]{1,100}》爱下书小说网全文字更新[,，]牢记网址[:：]'
+    r'\s*(?:(?:https?://|www\.)[^\s“”‘’「」『』]+)?\s*$'
+)
+
 # 章末作者的话/题外话
 AUTHOR_NOTE_RE = re.compile(r'^[（(]?(?:作者|笔者|写手|码字)[:：]?的话?[）)]?[:：]?$|^(?:PS|ps|P.S)[:：]')
 
@@ -250,6 +257,10 @@ def clean_text(text, replace_regex=''):
         return ''
     # L1 基础
     text = _L1_basic(text)
+    text = '\n'.join(
+        line for line in text.split('\n')
+        if not MEASURED_SITE_FOOTER_RE.fullmatch(line.strip())
+    )
     # L8 整块重复去重（分页把同一页追加了两遍时，去掉后面那一份）。
     # **必须紧跟 L1**：分页重复是**逐行精确**的，而 L2/L4 会改动行内容，
     # 之后再找就找不到精确重复了（实测：放在末尾时漏掉一半）。
@@ -513,7 +524,8 @@ def _L3_lines(text):
         if DECOR_LINE.match(compact):
             continue
         # 站名+网址整行（残留未清）
-        if re.match(r'^[^\n]{0,25}(?:网址|地址|域名|发布页|收藏|看书)[^\n]*[.:：]\s*\S', sl):
+        if (not re.search(r'[“”‘’「」『』]', sl)
+                and re.match(r'^[^\n]{0,25}(?:网址|地址|域名|发布页|收藏|看书)[^\n]*[.:：]\s*\S', sl)):
             continue
         # 章节标题分页标记："第三章 xxx (第1/3页)" → 去标记
         sl = re.sub(r'\s*[（(]?第\d+/\d+页[）)]?\s*$', '', sl)
