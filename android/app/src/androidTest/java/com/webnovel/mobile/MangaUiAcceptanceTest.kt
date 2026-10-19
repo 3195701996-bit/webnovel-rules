@@ -187,8 +187,11 @@ class MangaUiAcceptanceTest {
             .performClick()
         waitReaderEntry()
 
-        // 2b) 详情页应提供"从书库移除"入口（本用例只断言入口在位）
+        // Low-frequency management is discoverable through More, not a large primary CTA.
+        rule.onNodeWithTag("manga_detail_list").performScrollToNode(hasText("更多"))
+        rule.onNodeWithTag("manga_detail_more").performClick()
         rule.onNodeWithText("从书库移除").assertIsDisplayed()
+        rule.onNodeWithTag("copy_catalog_report").performClick()
         ev("详情页含『从书库移除』入口")
 
         // 从真实阅读器生成历史后，再从阅读历史入口进入同一作品：

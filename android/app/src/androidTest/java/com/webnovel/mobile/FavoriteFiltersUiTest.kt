@@ -9,6 +9,8 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextReplacement
+import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.test.hasTestTag
 import com.chaquo.python.Python
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -77,6 +79,17 @@ class FavoriteFiltersUiTest {
         assertTrue(nodes("其他作品") == 0)
         rule.onNodeWithText("自检漫画 未读").performClick()
         rule.waitUntil(30_000) { nodes("查找章节") > 0 }
+        rule.onNodeWithTag("manga_detail_list").performScrollToNode(hasTestTag("manga_detail_more"))
+        rule.onNodeWithTag("manga_detail_more").performClick()
+        rule.onNodeWithText("从书库移除").assertExists()
+        rule.onNodeWithTag("copy_catalog_report").performClick()
+        rule.waitUntil(10_000) { nodes("章节核对信息已复制（含作品名与章节 ID，无图片）；请确认后分享。") > 0 }
+        rule.onNodeWithTag("manga_detail_more").performClick()
+        rule.onNodeWithText("从书库移除").performClick()
+        rule.onNodeWithText("从书库移除？").assertExists()
+        rule.onNodeWithTag("remove_keep_files").assertExists()
+        rule.onNodeWithText("取消").performClick()
+        assertTrue("取消管理操作不能移除本地漫画", comic.libraryEntryCount() == 1)
         rule.runOnUiThread { rule.activity.onBackPressedDispatcher.onBackPressed() }
         rule.waitUntil(30_000) {
             rule.onAllNodesWithTag("favorite_filter_query").fetchSemanticsNodes().isNotEmpty()

@@ -838,10 +838,18 @@ fun MangaDetailScreen(
                         }
                         Spacer(Modifier.height(6.dp))
                         Row(Modifier.fillMaxWidth().padding(horizontal = WnSpace.lg)) {
-                            OutlinedButton(
-                                onClick = { confirmRemove = true },
-                                modifier = Modifier.weight(1f),
-                            ) { Text("从书库移除") }
+                            MangaDetailMoreMenu(onRemove = { confirmRemove = true }, onCopyCatalog = {
+                                runCatching {
+                                    val clipboard = ctx.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
+                                        as android.content.ClipboardManager
+                                    clipboard.setPrimaryClip(android.content.ClipData.newPlainText(
+                                        "漫画章节核对", mangaCatalogReport(d, update)))
+                                }.onSuccess {
+                                    actionMsg = "章节核对信息已复制（含作品名与章节 ID，无图片）；请确认后分享。"
+                                }.onFailure {
+                                    actionMsg = "复制章节核对信息失败，请重试。"
+                                }
+                            })
                         }
                         // 删除管理入口：已下载的话/整卷可勾选后删除（用户明确点名才删）
                         if (d.downloadedCount > 0 || d.partialDownloaded.isNotEmpty()) {
@@ -894,22 +902,6 @@ fun MangaDetailScreen(
                                 modifier = Modifier.padding(horizontal = WnSpace.lg)
                                     .testTag("open_chapter_finder")) { Text("查找章节") }
                         }
-                        TextButton(
-                            onClick = {
-                                runCatching {
-                                    val clipboard = ctx.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
-                                        as android.content.ClipboardManager
-                                    clipboard.setPrimaryClip(android.content.ClipData.newPlainText(
-                                        "漫画章节核对", mangaCatalogReport(d, update)))
-                                }.onSuccess {
-                                    actionMsg = "章节核对信息已复制（含作品名与章节 ID，无图片）；请确认后分享。"
-                                }.onFailure {
-                                    actionMsg = "复制章节核对信息失败，请重试。"
-                                }
-                            },
-                            modifier = Modifier.padding(horizontal = WnSpace.lg)
-                                .testTag("copy_catalog_report"),
-                        ) { Text("复制章节核对信息") }
                         actionMsg?.let {
                             Spacer(Modifier.height(6.dp))
                             Text(it, style = MaterialTheme.typography.labelMedium,
