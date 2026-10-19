@@ -4,6 +4,13 @@
 
 ## 2026-10-20 元数据修复跨端验收与全量回归
 
+### 探索页线程约束与迟到回包保护
+
+- ExploreScreen界面协程明确采用Dispatchers.Main.immediate，源清单LaunchedEffect也切主线程执行状态更新；HTTP传输仍由EngineGateway切IO。此前异常栈含Compose测试ApplyingContinuationInterceptor/帧时钟；[AndroidX官方实现](https://android.googlesource.com/platform/frameworks/support/+/12e883d79a224deef42c05b255821dfab292bf96%5E%21/)说明该测试拦截器会在continuation恢复后发送snapshot通知，与栈一致，但不是已证明所有生产环境异常的根因。没有升级依赖、吞异常、关闭预取或删除原断言。
+- 同时修复可从代码确认的榜单请求竞态：请求带递增代次，返回导航立刻使旧代次失效并清理临时提示/加载状态，回包须代次和源/分类身份均匹配才可改写书单。防止旧错误遮住新页面、旧成功覆盖新分类，以及离开后重入同一分类时旧结果仍被接纳。
+- 新增qemu保护的ExploreStaleResponseUiTest，隔离HTTP服务用事件扣住第一次响应，先返回并打开新分类/同分类新访问，再释放旧成功或502，确认当前作品不变且不显示旧错误，测试后释放等待、关闭服务与图片loader。前两项+原14项 **16/16（26.941s）**；加入同分类重入后整组 **17/17（28.178s）**，均未重现Looper异常。并非宣称所有线程问题永不复现，真机和更多压力轮次仍需后续验收。
+- 本轮Release JVM/主APK/仪器构建25s通过，新测试仪器包追加构建13s通过；APK Web资源一致，读契约27接口零问题（7处空/条件跳过）。本轮只改Kotlin和仪器测试，未重跑Python全套，不把上一轮2036计为新增代码设备验证。未覆盖用户手机、未发布；专用模拟器测试后关闭。
+
 ### 当前集成基线 b5b7ab95 的发布前整体验证（未发布）
 
 - 精确运行时代码b5b7ab95f9645d932b3997fd7879450d5daac1cc，工作区clean；完整Python **2036 passed、2 skipped，153.18s**。43组JS、写契约19端点49调用、读契约27端点（7处空/条件跳过）、HTTP smoke20/20、Ruff错误门均通过。远端准确SHA CI **39313951442 / 39313945688均success**。本轮不修改运行时代码，不将历史2036结果代替本次实跑。

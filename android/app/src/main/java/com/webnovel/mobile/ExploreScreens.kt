@@ -56,6 +56,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.ImageLoader
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.util.concurrent.atomic.AtomicLong
 import org.json.JSONObject
 
 /**
@@ -89,7 +92,10 @@ internal fun ExploreScreen(
     var page by rememberSaveable { mutableIntStateOf(1) }
     var error by rememberSaveable { mutableStateOf("") }
     var msg by rememberSaveable { mutableStateOf("") }
-    val scope = rememberCoroutineScope()
+    // UI continuations must resume on the Android main looper, including under
+    // instrumentation's frame-clock/continuation interceptor.
+    val scope = rememberCoroutineScope { Dispatchers.Main.immediate }
+    val bookRequestGeneration = remember { AtomicLong() }
 
     val (sources, counts) = remember(sourcesBody) {
         if (sourcesBody.isBlank()) emptyList<ExploreSource>() to (0 to 0)
@@ -136,13 +142,20 @@ internal fun ExploreScreen(
         loading = false
     }
     // 已有清单就不再重拉（返回时不能被一次刷新盖掉）；需要最新时用「重试/刷新」
-    LaunchedEffect(ep) { if (sourcesBody.isBlank()) loadSources() else loading = false }
+    LaunchedEffect(ep) {
+        withContext(Dispatchers.Main.immediate) {
+            if (sourcesBody.isBlank()) loadSources() else loading = false
+        }
+    }
 
     fun loadBooks(src: ExploreSource, cat: ExploreCategory, nextPage: Int) {
+        val generation = bookRequestGeneration.incrementAndGet()
         scope.launch {
             loadingBooks = true; error = ""; msg = ""
             val r = gateway.httpText(ep.port,
                 "/api/explore?source=${Uri.encode(src.uid)}&url=${Uri.encode(cat.url)}&page=$nextPage")
+            if (generation != bookRequestGeneration.get() ||
+                currentUid != src.uid || categoryUrl != cat.url) return@launch
             if (!r.ok) {
                 val why = runCatching { JSONObject(r.body).optString("error") }.getOrDefault("")
                 error = "读取榜单失败：HTTP ${r.code}" + if (why.isNotBlank()) " · $why" else ""
@@ -176,6 +189,9 @@ internal fun ExploreScreen(
             },
             navigationIcon = {
                 IconButton(onClick = {
+                    bookRequestGeneration.incrementAndGet()
+                    loadingBooks = false
+                    error = ""; msg = ""
                     when {
                         mangaSel != null -> { mangaSelSrc = ""; mangaSelCat = "" }
                         categoryUrl.isNotBlank() -> { categoryUrl = ""; bookPages = arrayListOf() }
