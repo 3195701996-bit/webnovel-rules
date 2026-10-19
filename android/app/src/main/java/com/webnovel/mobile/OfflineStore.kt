@@ -183,11 +183,15 @@ object OfflineStore {
             // files and never apply a record belonging to another book URL.
             val metadata = readJson(File(dir, "_metadata.json"))
             val bookUrl = info.optString("book_url")
+            val fields = metadata?.optJSONObject("metadata")
+            val fieldNames = fields?.keys()?.asSequence()?.toList().orEmpty()
             if (bookUrl.isNotBlank() && metadata?.opt("version") == 1 &&
-                metadata.optString("book_url") == bookUrl) {
-                val fields = metadata.optJSONObject("metadata")
+                metadata.optString("book_url") == bookUrl && fields != null &&
+                fieldNames.isNotEmpty() && fieldNames.all { it in listOf("name", "author") } &&
+                fieldNames.all { name -> fields.opt(name).let { it is String && it.length <= 300 } } &&
+                (fields.opt("name") as? String)?.isNotBlank() == true) {
                 for (field in listOf("name", "author")) {
-                    val value = fields?.opt(field)
+                    val value = fields.opt(field)
                     if (value is String && value.isNotBlank()) info.put(field, value)
                 }
             }

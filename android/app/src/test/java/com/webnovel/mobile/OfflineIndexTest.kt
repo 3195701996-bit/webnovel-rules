@@ -30,7 +30,7 @@ class OfflineIndexTest {
             stateFile.writeText(state.toString())
             writeProgress(root, "metadata", JSONObject().put("idx", 2))
             val record = File(dir, "_metadata.json")
-            record.writeText("""{"version":1,"book_url":"https://metadata.invalid/one","metadata":{"name":"确认书名","author":"确认作者","chapters":[]}}""")
+            record.writeText("""{"version":1,"book_url":"https://metadata.invalid/one","metadata":{"name":"确认书名","author":"确认作者"}}""")
             val before = root.walkTopDown().filter { it.isFile }.associate { it.relativeTo(root).path to it.readBytes().toList() }
             val novel = OfflineStore.novelsFrom(root).single()
             assertEquals("确认书名", novel.name)
@@ -44,6 +44,25 @@ class OfflineIndexTest {
             record.writeText("{broken")
             assertEquals("metadata", OfflineStore.novelsFrom(root).single().name)
             assertEquals("{broken", record.readText())
+            for (invalid in listOf(
+                "", " ", "null", "[]",
+                """{"version":true,"book_url":"https://metadata.invalid/one","metadata":{"name":"错误书名"}}""",
+                """{"version":1,"book_url":"https://metadata.invalid/one","metadata":{}}""",
+                """{"version":1,"book_url":"https://metadata.invalid/one","metadata":{"name":"错误书名","chapters":[]}}""",
+                """{"version":1,"book_url":"https://metadata.invalid/one","metadata":{"name":7}}""",
+                """{"version":1,"book_url":"https://metadata.invalid/one","metadata":{"name":"错误书名","author":7}}""",
+                JSONObject().put("version", 1).put("book_url", "https://metadata.invalid/one")
+                    .put("metadata", JSONObject().put("name", "字".repeat(301))).toString(),
+            )) {
+                record.writeText(invalid)
+                val original = record.readBytes().toList()
+                val fallback = OfflineStore.novelsFrom(root).single()
+                assertEquals("metadata", fallback.name)
+                assertEquals(3, fallback.chapterCount)
+                assertEquals(2, fallback.downloadedCount)
+                assertEquals(2, fallback.startIndex)
+                assertEquals(original, record.readBytes().toList())
+            }
         } finally { root.deleteRecursively() }
     }
 
