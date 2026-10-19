@@ -147,7 +147,7 @@ def device_offline_hint():
         v = (request.headers.get("X-Device-Net") or "").strip().lower()
     except Exception:
         return None
-    return True if v == "offline" else None
+    return True if v in ("offline", "offline_confirmed") else None
 
 
 def _err_json(msg, code=400):

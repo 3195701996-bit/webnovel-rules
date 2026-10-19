@@ -253,6 +253,36 @@ def test_resume_missing_task_is_idempotent_noop(client, monkeypatch):
     assert r.get_json() == {"ok": True, "resumed": False, "reason": "no_task"}
 
 
+@pytest.mark.parametrize("path", [
+    "/api/manga/download/resume?source=mangadex&cid=offline-task",
+    "/api/manga/download/resume-all",
+])
+def test_explicit_offline_resume_does_not_touch_queue_or_download_index(client, monkeypatch, path):
+    import server.manga_api as mapi
+
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("明确离线时不得启动任务、枚举队列或失效本地索引")
+
+    monkeypatch.setattr(mapi._manga_dl, "resume_result", forbidden)
+    monkeypatch.setattr(mapi._manga_dl, "paused_keys", forbidden)
+    monkeypatch.setattr(mapi, "_invalidate_manga_download_scan", forbidden)
+    response = client.post(path, headers={"X-Device-Net": "offline_confirmed"})
+    assert response.status_code == 409
+    assert "本机当前没有网络" in response.get_json()["error"]
+    assert "保持不变" in response.get_json()["error"]
+
+
+@pytest.mark.parametrize("hint", [None, "online", "unknown", "offline"])
+def test_resume_without_definite_offline_hint_keeps_existing_behavior(client, monkeypatch, hint):
+    import server.manga_api as mapi
+    calls = []
+    monkeypatch.setattr(mapi._manga_dl, "resume_result", lambda key: calls.append(key) or "resumed")
+    response = client.post("/api/manga/download/resume?source=mangadex&cid=offline-task",
+                           headers={"X-Device-Net": hint} if hint is not None else {})
+    assert response.get_json() == {"ok": True, "resumed": True}
+    assert calls == ["mangadex:offline-task"]
+
+
 def test_purge_without_files_on_disk_is_not_an_error(client):
     """没有已下载文件时也不报错（purged 为空、freed=0）"""
     lib_p = cfg.MANGA_LIBRARY_FILE

@@ -158,7 +158,9 @@ internal fun DownloadsScreen(
                             }.getOrDefault(0)
                             actionMsg = if (r.ok) "已恢复 $n 个漫画下载" +
                                 (if (skipped > 0) "，$skipped 个未启动（任务状态已变化）" else "")
-                            else "全部继续失败：HTTP ${r.code}"
+                            else "全部继续失败：" + (runCatching {
+                                org.json.JSONObject(r.body).optString("error").ifBlank { "HTTP ${r.code}" }
+                            }.getOrDefault("HTTP ${r.code}"))
                             refresh()
                         }
                     },
@@ -370,7 +372,9 @@ private suspend fun doAction(
                 result?.opt("resumed") == true, result?.optString("reason").orEmpty())
         }
         return if (r.ok) "已请求${if (action == "pause") "暂停" else "继续"}：${t.title}"
-        else "操作失败：HTTP ${r.code} ${r.body.take(160)}"
+        else "操作失败：" + (runCatching {
+            org.json.JSONObject(r.body).optString("error").ifBlank { "HTTP ${r.code}" }
+        }.getOrDefault("HTTP ${r.code}"))
     }
     val r = gateway.httpPost(ep.port, "/api/tasks/${android.net.Uri.encode(t.id)}/$action")
     return if (r.ok) "已请求${when (action) {

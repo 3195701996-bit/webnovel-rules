@@ -243,7 +243,7 @@ class DownloadResilienceTest {
 
         val resume = gateway.httpPost(ep.port,
             "/api/manga/download/resume?source=$source&cid=$comicId")
-        assertTrue("低空间时继续任务应被接受：HTTP ${resume.code}", resume.ok)
+        assertTrue("低空间时继续任务应被接受：HTTP ${resume.code} ${resume.body}", resume.ok)
         var status = JSONObject()
         for (attempt in 0 until 90) {
             status = taskStatus(ep.port)
@@ -337,24 +337,20 @@ class DownloadResilienceTest {
             assertTrue("组合验收需要故障前已有真实图片", originalPages.isNotEmpty())
             try {
                 assertTrue("必须实际断网，不只修改系统标志", Airplane.set(true))
+                val taskSnapshot = taskFile.readBytes()
+                val clickedAt = System.currentTimeMillis()
                 rule.onAllNodes(resumeButton)[0].performScrollTo().assertIsDisplayed()
                     .assertIsEnabled().performClick()
-                var offline = JSONObject()
-                for (attempt in 0 until 240) {
-                    rule.mainClock.advanceTimeByFrame()
-                    rule.waitForIdle()
-                    offline = taskStatus(ep.port)
-                    assertTrue("断网不可误报完成", offline.optString("status") != "done")
-                    if (offline.optString("status") == "error" &&
-                        offline.optString("error") != recovered.optString("error")) break
-                    delay(1000)
+                rule.waitUntil(5_000) {
+                    rule.onAllNodesWithText("本机当前没有网络", substring = true)
+                        .fetchSemanticsNodes().isNotEmpty()
                 }
-                assertTrue("断网重试必须有新的失败终态，而非停留旧存储错误",
+                val feedbackMs = System.currentTimeMillis() - clickedAt
+                val offline = taskStatus(ep.port)
+                assertTrue("明确断网时不得启动任务或丢失原始失败原因",
                     offline.optString("status") == "error" &&
-                        offline.optString("error").isNotBlank() &&
-                        offline.optString("error") != recovered.optString("error"))
-                val offlineSaved = JSONObject(taskFile.readText(Charsets.UTF_8)).getJSONObject(key)
-                assertTrue("断网失败必须落盘", offlineSaved.optString("status") == "error")
+                        offline.optString("error") == recovered.optString("error"))
+                assertTrue("拒绝离线启动不得改写任务快照", taskFile.readBytes().contentEquals(taskSnapshot))
                 assertTrue("断网不得新增假图片", images().map { it.name }.toSet() == originalPages.keys)
                 for (file in images()) {
                     val original = originalPages.getValue(file.name)
@@ -362,8 +358,7 @@ class DownloadResilienceTest {
                         MessageDigest.getInstance("SHA-256").digest(file.readBytes()).toList() == original.first &&
                             file.lastModified() == original.second)
                 }
-                reportEvidence("enospcOffline", "PASS ${originalPages.size} 张原图哈希及时间保持，失败已落盘：" +
-                    offline.optString("error").take(160))
+                reportEvidence("enospcOffline", "PASS 离线反馈${feedbackMs}ms，${originalPages.size} 张原图哈希及时间、任务快照保持")
             } finally {
                 assertTrue("专用模拟器网络必须恢复", Airplane.set(false))
             }

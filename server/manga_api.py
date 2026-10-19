@@ -3215,6 +3215,8 @@ def api_manga_download_pause_all():
 def api_manga_download_resume():
     source = _safe_seg(request.args.get("source", ""), "漫画源")
     comic_id = _safe_comic_id(source, request.args.get("cid", ""))
+    if request.headers.get("X-Device-Net", "").strip().lower() == "offline_confirmed":
+        return _err_json("本机当前没有网络，未启动下载；已下载内容和任务记录保持不变，联网后点「继续」", 409)
     key = _manga_dl_key(source, comic_id)
     _invalidate_manga_download_scan(source, comic_id)
     outcome = _manga_dl.resume_result(key)
@@ -3232,6 +3234,8 @@ def api_manga_download_resume():
 @bp.route("/api/manga/download/resume-all", methods=["POST"])
 def api_manga_download_resume_all():
     """批量启动所有暂停/停止的漫画下载"""
+    if request.headers.get("X-Device-Net", "").strip().lower() == "offline_confirmed":
+        return _err_json("本机当前没有网络，未启动下载；已下载内容和任务记录保持不变，联网后点「继续」", 409)
     n = 0
     skipped = 0
     for key in _manga_dl.paused_keys():

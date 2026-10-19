@@ -23,29 +23,19 @@ import android.provider.Settings
  */
 object NetState {
 
-    /** "offline" / "online" / ""（未知，不发这个头） */
+    /** offline is advisory; offline_confirmed also has an explicit radios-off signal. */
     fun header(ctx: Context): String {
-        // 飞行模式切换期间 ConnectivityManager 可能仍报告刚失效的 validated 网络；
-        // 系统标志本身是明确的设备级断网证据。
-        if (runCatching {
-                Settings.Global.getInt(
-                    ctx.contentResolver,
-                    Settings.Global.AIRPLANE_MODE_ON,
-                    0,
-                ) == 1
-            }.getOrDefault(false)
-        ) return "offline"
+        // Airplane mode alone is not proof of disconnection: Wi-Fi (and VPN
+        // over Wi-Fi) can legitimately remain online while cellular is off.
         val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE)
                 as? ConnectivityManager ?: return ""
-        val net = cm.activeNetwork ?: return "offline"
-        val caps = cm.getNetworkCapabilities(net) ?: return ""
-        if (!caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
-            return "offline"
-        }
-        return if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) {
-            "online"
-        } else {
-            ""      // 有网络但未验证：可能是强制门户，拿不准就不说
-        }
+        val radiosOff = runCatching {
+            Settings.Global.getInt(ctx.contentResolver, Settings.Global.AIRPLANE_MODE_ON, 0) == 1
+        }.getOrDefault(false)
+        val net = cm.activeNetwork ?: return deviceNetworkEvidence(false, null, null, radiosOff)
+        val caps = cm.getNetworkCapabilities(net)
+        return deviceNetworkEvidence(true,
+            caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET),
+            caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED), radiosOff)
     }
 }
