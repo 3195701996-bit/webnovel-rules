@@ -23,7 +23,7 @@ from server.state import (
     _norm_comic_id, _SAFE_SEG_RE, _manga_adapter, _manga_read_adapter,
     _manga_read_images,
     _load_manga_adapters, _manga_dl, _manga_dl_key,
-    _manga_adapter_name, _scan_downloaded_chapters, _manga_media_root,
+    _manga_adapter_name, _scan_downloaded_chapters, _scan_partial_downloaded_chapters, _manga_media_root,
     _manga_local_media_dirs, _manga_local_page_dir,
     _is_manga_image_file,
     _local_chapter_images, _get_chapter_images, _manga_search_cached,
@@ -2810,6 +2810,49 @@ def api_manga_library():
         pass
     # B03: 轻量快照附全局 revision——客户端据此判断无变化时跳过重绘
     return jsonify({"comics": out, "rev": manga_library_revision()})
+
+
+@bp.route("/api/manga/<source>/<comic_id>/local-media", methods=["GET"])
+def api_manga_local_media(source, comic_id):
+    """Offline management inventory, deliberately separate from readable catalogs.
+
+    Exact disk identities only: no name-based merging or adapter lookup. Partial
+    downloads stay manageable without becoming readable local chapters.
+    """
+    source = _safe_seg(source, "漫画源")
+    comic_id = _safe_comic_id(source, comic_id)
+    complete = set(_scan_downloaded_chapters(source, comic_id))
+    partial = set(_scan_partial_downloaded_chapters(source, comic_id)) - complete
+    ids = complete | partial
+    metadata = {}
+    for variant in manga_source_aliases(source):
+        for root in (MANGA_DOWNLOADS_DIR, MANGA_CACHE_DIR):
+            path = os.path.join(root, variant, comic_id, "_info.json")
+            try:
+                with open(path, encoding="utf-8") as stream:
+                    info = json.load(stream)
+                for row in info.get("chapters") or []:
+                    if not isinstance(row, dict):
+                        continue
+                    chapter_id = str(row.get("id") or "")
+                    if chapter_id in ids and chapter_id not in metadata:
+                        metadata[chapter_id] = {
+                            "id": chapter_id,
+                            "name": str(row.get("name") or chapter_id),
+                            "group": str(row.get("group") or ""),
+                        }
+            except (OSError, ValueError, TypeError, AttributeError):
+                continue
+    rows = [metadata.get(chapter_id, {"id": chapter_id, "name": chapter_id, "group": ""})
+            for chapter_id in sorted(ids)]
+    from engine.manga.download_manager import _sort_chapters, _is_volume_only
+    rows = (_sort_chapters([row for row in rows if _is_volume_only(row["name"])]) +
+            _sort_chapters([row for row in rows if not _is_volume_only(row["name"])]))
+    for row in rows:
+        row["downloaded"] = row["id"] in complete
+        row["partial"] = row["id"] in partial
+    return jsonify({"ok": True, "source": source, "comic_id": comic_id,
+                    "local_only": True, "media": rows, "count": len(rows)})
 
 
 @bp.route("/api/manga/<source>/<comic_id>/chapters/delete", methods=["POST"])
