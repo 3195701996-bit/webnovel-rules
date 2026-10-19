@@ -50,6 +50,13 @@ class TextPurifyUiTest {
     private val ctx get() = InstrumentationRegistry.getInstrumentation().targetContext
     private lateinit var gateway: EngineGateway
     private lateinit var bookDir: File
+    private var metadataFixture: com.chaquo.python.PyObject? = null
+
+    private fun metadataExec(code: String) {
+        val builtins = com.chaquo.python.Python.getInstance().getModule("builtins")
+        if (metadataFixture == null) metadataFixture = builtins.callAttr("dict")
+        builtins.callAttr("exec", code, metadataFixture)
+    }
 
     private val key = "自检_purify"
 
@@ -134,6 +141,10 @@ class TextPurifyUiTest {
 
     @After
     fun tearDown() {
+        if (metadataFixture != null) {
+            metadataExec("api.get_by_uid = original_source\napi.SourceCrawler = original_crawler")
+            metadataFixture = null
+        }
         if (!::bookDir.isInitialized) return
         bookDir.deleteRecursively()
         File(ctx.filesDir, "runtime/trash").listFiles()
@@ -223,6 +234,50 @@ class TextPurifyUiTest {
             assertTrue("旧预览必须拒绝", stale.isFailure)
             assertTrue("HTTP409不能截断目标文件", exported.contentEquals(output.readBytes()))
         } finally { output.delete() }
+    }
+
+    @Test
+    fun ui_metadataPreviewCancelStaleAndConfirmPreserveCatalog() {
+        metadataExec("""
+import server.novel_api as api
+from types import SimpleNamespace
+original_source = api.get_by_uid
+original_crawler = api.SourceCrawler
+def fixture_source(uid):
+    return {'uid': 'selftest', 'bookSourceUrl': 'https://selftest.invalid'} if uid == 'selftest' else original_source(uid)
+def fixture_crawler(source):
+    if source.get('uid') == 'selftest':
+        return SimpleNamespace(get_book=lambda *a, **k: SimpleNamespace(name='已确认测试书名', author='已确认作者'))
+    return original_crawler(source)
+api.get_by_uid = fixture_source
+api.SourceCrawler = fixture_crawler
+""".trimIndent())
+        val original = bookDir.listFiles()!!.filter { it.isFile }.associate { it.name to it.readBytes().toList() }
+        rule.openCachedShelf()
+        rule.waitUntil(60_000) { texts(BOOK_NAME) > 0 }
+        rule.onAllNodesWithText(BOOK_NAME)[0].performScrollTo().performClick()
+        rule.waitUntil(60_000) { nodes("novel_metadata_button") > 0 }
+        fun openAndPreview() {
+            rule.onAllNodesWithTag("novel_metadata_button")[0].performScrollTo().performClick()
+            rule.onAllNodesWithTag("novel_metadata_confirm")[0].performClick()
+            rule.waitUntil(20_000) { texts("确认修改") > 0 }
+        }
+        openAndPreview()
+        rule.onAllNodesWithTag("novel_metadata_cancel")[0].performClick()
+        assertEquals(original, bookDir.listFiles()!!.filter { it.isFile }.associate { it.name to it.readBytes().toList() })
+        openAndPreview()
+        File(bookDir, "_state.json").appendText(" ")
+        rule.onAllNodesWithTag("novel_metadata_confirm")[0].performClick()
+        rule.waitUntil(20_000) { texts("HTTP 409", substring = true) > 0 }
+        assertFalse(File(bookDir, "_metadata.json").exists())
+        val afterChange = bookDir.listFiles()!!.filter { it.isFile }.associate { it.name to it.readBytes().toList() }
+        rule.onAllNodesWithTag("novel_metadata_confirm")[0].performClick()
+        rule.waitUntil(20_000) { texts("确认修改") > 0 }
+        rule.onAllNodesWithTag("novel_metadata_confirm")[0].performClick()
+        rule.waitUntil(20_000) { nodes("novel_metadata_cancel") == 0 && texts("已确认测试书名") > 0 }
+        assertEquals(afterChange, bookDir.listFiles()!!.filter { it.isFile && it.name != "_metadata.json" }.associate { it.name to it.readBytes().toList() })
+        assertEquals("已确认测试书名", JSONObject(File(bookDir, "_metadata.json").readText()).getJSONObject("metadata").getString("name"))
+        assertEquals("已确认测试书名", OfflineStore.novelsFrom(OfflineStore.runtimeDir(ctx)).first { it.key == key }.name)
     }
 
     @Test
