@@ -7,10 +7,13 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.listSaver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -21,8 +24,12 @@ fun NovelRecoveryDialog(bookKey: String, port: Int, gateway: EngineGateway, onCl
     val scope = rememberCoroutineScope()
     val base = "/api/books/${Uri.encode(bookKey)}/reclean"
     var rows by remember { mutableStateOf<List<NovelOriginal>>(emptyList()) }
-    var selected by remember { mutableStateOf(setOf<String>()) }
-    var busy by remember { mutableStateOf(false) }
+    // Save identities only. A recreated dialog reloads eligibility and invalidates
+    // its preview; rotation must never restore authority to perform a write.
+    var selected by rememberSaveable(bookKey, stateSaver = listSaver<Set<String>, String>(
+        save = { it.toList() }, restore = { it.toSet() },
+    )) { mutableStateOf(emptySet()) }
+    var busy by remember { mutableStateOf(true) }
     var previewReady by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf("正在读取原文存档…") }
     suspend fun load() {
@@ -49,6 +56,7 @@ fun NovelRecoveryDialog(bookKey: String, port: Int, gateway: EngineGateway, onCl
         scope.launch {
             busy = true; previewReady = false
             try { load(); if (rows.isNotEmpty()) status = "请选择需要恢复的存档。" }
+            catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) { rows = emptyList(); selected = emptySet(); status = error.message ?: "读取失败" }
             finally { busy = false }
         }
@@ -108,6 +116,8 @@ fun NovelRecoveryDialog(bookKey: String, port: Int, gateway: EngineGateway, onCl
                             previewReady = false; selected = emptySet()
                             load(); onChanged()
                         }
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
                     } catch (error: Exception) {
                         previewReady = false
                         status = "操作未确认，请刷新存档后重试：${error.message}"

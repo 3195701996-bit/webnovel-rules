@@ -114,7 +114,7 @@ fun BookDetailScreen(
     // 净化预检结果（dry-run）：确认前不写盘
     var cleaning by remember { mutableStateOf(false) }
     var cleanPreview by remember { mutableStateOf<org.json.JSONObject?>(null) }
-    var showOriginalRecovery by remember { mutableStateOf(false) }
+    var showOriginalRecovery by rememberSaveable(bookKey) { mutableStateOf(false) }
     var showReaderEdition by remember { mutableStateOf(false) }
     var showMetadata by remember { mutableStateOf(false) }
     var toolsExpanded by rememberSaveable(bookKey) { mutableStateOf(false) }

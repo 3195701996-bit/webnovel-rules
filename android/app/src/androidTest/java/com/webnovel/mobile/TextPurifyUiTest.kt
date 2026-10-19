@@ -127,7 +127,8 @@ class TextPurifyUiTest {
             File(bookDir, cacheKeyOf(URL2) + ".cache")
                 .writeText("推书《测试作品》\n\n《测试作品》\n求帮忙追读！", Charsets.UTF_8)
         }
-        if (testName.methodName == "ui_longRecoverySelectionPreviewCancelPreservesFiles") {
+        if (testName.methodName in setOf("ui_longRecoverySelectionPreviewCancelPreservesFiles",
+                "ui_recoverySurvivesRotationAndRepeatedOpenWithoutWriting")) {
             val state = JSONObject(File(bookDir, "_state.json").readText())
             val chapters = JSONArray()
             val completed = JSONArray()
@@ -287,6 +288,66 @@ api.SourceCrawler = fixture_crawler
         assertEquals(afterChange, bookDir.listFiles()!!.filter { it.isFile && it.name != "_metadata.json" }.associate { it.name to it.readBytes().toList() })
         assertEquals("已确认测试书名", JSONObject(File(bookDir, "_metadata.json").readText()).getJSONObject("metadata").getString("name"))
         assertEquals("已确认测试书名", OfflineStore.novelsFrom(OfflineStore.runtimeDir(ctx)).first { it.key == key }.name)
+    }
+
+    @Test
+    fun ui_recoverySurvivesRotationAndRepeatedOpenWithoutWriting() {
+        val ep = gateway.currentEndpoint()!!
+        val cleaned = runBlocking {
+            gateway.httpPost(ep.port, "/api/books/$key/reclean", "{\"dry_run\":false}")
+        }
+        assertTrue(cleaned.ok)
+        val before = bookDir.walkTopDown().filter { it.isFile }
+            .associate { it.relativeTo(bookDir).path to it.readBytes() }
+        rule.openCachedShelf()
+        rule.waitUntil(60_000) { texts(BOOK_NAME) > 0 }
+        rule.onAllNodesWithText(BOOK_NAME)[0].performScrollTo().performClick()
+        expandNovelTools()
+        rule.activityRule.scenario.onActivity {
+            it.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        }
+        rule.waitUntil(15_000) {
+            rule.activity.resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_PORTRAIT
+        }
+        rule.waitUntil(20_000) { nodes("novel_recovery_button") > 0 }
+        repeat(6) { cycle ->
+            ev("recovery rotation cycle=$cycle opening")
+            rule.onAllNodesWithTag("novel_recovery_button")[0].performScrollTo().performClick()
+            // Rotate immediately after opening, not only after the async listing is idle.
+            rule.activityRule.scenario.onActivity {
+                it.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+            }
+            rule.waitUntil(15_000) {
+                rule.activity.resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+            }
+            rule.waitUntil(20_000) { texts("请选择需要恢复的存档。") > 0 }
+            rule.onAllNodesWithTag("novel_recovery_select_all")[0].performScrollTo().performClick()
+            rule.waitUntil(5_000) { texts("预览恢复（100）") > 0 }
+            rule.onAllNodesWithTag("novel_recovery_confirm")[0].assertIsDisplayed().performClick()
+            rule.waitUntil(20_000) { texts("确认恢复") > 0 }
+            // Selection survives a second recreation, but a write must still need
+            // a fresh dry-run. This test never confirms restoration of any archive.
+            rule.activityRule.scenario.onActivity {
+                it.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            }
+            rule.waitUntil(15_000) {
+                rule.activity.resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_PORTRAIT
+            }
+            rule.waitUntil(20_000) { texts("请选择需要恢复的存档。") > 0 }
+            rule.waitUntil(5_000) { texts("预览恢复（100）") > 0 }
+            assertEquals("旋转不能恢复旧预览的写入授权", 0, texts("确认恢复"))
+            rule.onAllNodesWithTag("novel_recovery_list")[0].performScrollToIndex(100)
+            rule.onAllNodesWithTag("novel_recovery_confirm")[0].assertIsDisplayed()
+            rule.onAllNodesWithTag("novel_recovery_close")[0].assertIsDisplayed().performClick()
+            rule.waitUntil(5_000) { nodes("novel_recovery_close") == 0 }
+            ev("recovery rotation cycle=$cycle closed")
+        }
+        val after = bookDir.walkTopDown().filter { it.isFile }
+            .associate { it.relativeTo(bookDir).path to it.readBytes() }
+        assertEquals(before.keys, after.keys)
+        before.forEach { (name, bytes) ->
+            assertTrue("旋转与取消不得改写$name", bytes.contentEquals(after.getValue(name)))
+        }
     }
 
     @Test
