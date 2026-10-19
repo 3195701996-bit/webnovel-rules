@@ -30,6 +30,7 @@ class Release203RegressionTest {
     private lateinit var gateway: EngineGateway
     private lateinit var endpoint: EngineEndpoint
     private var updateFixtureInstalled = false
+    private var deleteFixtureInstalled = false
     private var updateFixtureNamespace: com.chaquo.python.PyObject? = null
 
     @Before fun requireIsolatedEmulator() {
@@ -52,6 +53,9 @@ class Release203RegressionTest {
     }
 
     @After fun cleanup() {
+        if (deleteFixtureInstalled) {
+            execUpdateFixture("_qa_flask.view_functions[_qa_delete_key] = _qa_delete_original")
+        }
         if (updateFixtureInstalled) {
             execUpdateFixture("""
                 import server.manga_api as _qa_api
@@ -129,6 +133,44 @@ class Release203RegressionTest {
             assertTrue(report.getJSONArray("chapters").length() == 2)
             assertTrue(!report.has("cover") && !report.has("images"))
         }
+    }
+
+    @Test fun failedDeleteKeepsSelectionAndAllowsRetry() {
+        connect()
+        val c = SelfTestComic().also { comic = it; it.create() }
+        execUpdateFixture("""
+            import app as _qa_app_module
+            from flask import jsonify as _qa_jsonify
+            _qa_flask = _qa_app_module.app
+            _qa_delete_key = next(k for k in _qa_flask.view_functions if k.endswith('.api_manga_chapters_delete'))
+            _qa_delete_original = _qa_flask.view_functions[_qa_delete_key]
+            def _qa_failed_delete(source, comic_id):
+                if comic_id == '${c.comicIdValue}':
+                    return _qa_jsonify({'ok': False, 'error': 'fixture locked file'}), 500
+                return _qa_delete_original(source, comic_id)
+            _qa_flask.view_functions[_qa_delete_key] = _qa_failed_delete
+        """.trimIndent())
+        deleteFixtureInstalled = true
+        rule.openCachedShelf()
+        val tag = "manga_cached:${c.sourceKey}:${c.comicIdValue}"
+        rule.waitUntil(60_000) { rule.onAllNodesWithTag(tag).fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithTag(tag).performClick()
+        rule.waitUntil(30_000) { rule.onAllNodesWithTag("manga_detail_list").fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithTag("manga_detail_list").performScrollToNode(hasTestTag("manage_downloaded"))
+        rule.onNodeWithTag("manage_downloaded").performClick()
+        rule.onNodeWithTag("manga_detail_list").performScrollToNode(hasTestTag("select_all_downloaded"))
+        rule.onNodeWithTag("select_all_downloaded").performClick()
+        rule.onNodeWithTag("delete_selected").performClick()
+        rule.onNodeWithTag("delete_confirm").performClick()
+        rule.waitUntil(30_000) {
+            rule.onAllNodesWithText("删除未完成", substring = true).fetchSemanticsNodes().isNotEmpty()
+        }
+        rule.onNodeWithTag("manga_detail_list").performScrollToNode(hasTestTag("delete_selected"))
+        rule.onNodeWithText("删除选中（2）").assertIsDisplayed()
+        assertTrue("失败不能删除夹具文件", c.exists())
+        rule.onNodeWithTag("delete_selected").performClick()
+        rule.onNodeWithTag("delete_confirm").assertIsDisplayed()
+        rule.onNodeWithText("取消", substring = false).performClick()
     }
 
     @Test fun updatePreviewCanBeExpandedAndCollapsedFromLocalDetail() {

@@ -1196,21 +1196,24 @@ fun MangaDetailScreen(
                                 .toString()
                             val r = gateway.httpPost(ep.port,
                                 mangaPath(source, comicId, "/chapters/delete"), body)
-                            if (r.ok) {
-                                MangaReadCache.invalidate(source, comicId)
-                                OfflineStore.invalidateMangaIndex(
-                                    OfflineStore.runtimeDir(ctx), source, comicId)
-                            }
+                            // 失败响应也可能已删除部分媒体，不能保留旧的本地可读快照。
+                            MangaReadCache.invalidate(source, comicId)
+                            OfflineStore.invalidateMangaIndex(
+                                OfflineStore.runtimeDir(ctx), source, comicId)
                             val o = runCatching { org.json.JSONObject(r.body) }.getOrNull()
-                            actionMsg = if (r.ok && o?.optBoolean("ok") == true) {
+                            val deleteSucceeded = r.ok && o?.optBoolean("ok") == true
+                            actionMsg = if (deleteSucceeded) {
                                 "已删除 ${o.optInt("deleted")} 项，释放 " +
                                     Export.human(o.optLong("freed_bytes", 0))
                             } else {
-                                "删除失败：HTTP ${r.code} · " +
-                                    (o?.optString("error")?.take(80) ?: r.body.take(80))
+                                "删除未完成：HTTP ${r.code} · " +
+                                    (o?.optString("error")?.take(80) ?: r.body.take(80)) +
+                                    "。已保留选择，可重试；部分文件可能已删除，以刷新后的状态为准。"
                             }
-                            deleteSel = emptySet()
-                            manageMode = false
+                            if (deleteSucceeded) {
+                                deleteSel = emptySet()
+                                manageMode = false
+                            }
                             deleting = false
                             reload()
                         }
