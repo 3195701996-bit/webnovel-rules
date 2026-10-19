@@ -200,6 +200,67 @@ class DownloadResilienceTest {
     }
 
     @Test
+    fun runningDownloadCanPauseAfterNetworkLossAndResumeOnlyMissingPages() = runBlocking {
+        assumeTrue("真实断网只能由专用故障验收编排",
+            InstrumentationRegistry.getArguments().getString("enospcHarness") == "1")
+        assertStorageStressEmulator()
+        assertTrue("初始网络必须可用", !Airplane.isOn() && Airplane.outboundOk())
+        val ep = gateway.currentEndpoint()!!
+        prepareTask(ep)
+        for (attempt in 0 until 120) {
+            if (images().size >= 2) break
+            assertTrue("断网前下载不得失败", taskStatus(ep.port).optString("status") != "error")
+            delay(100)
+        }
+        assertTrue("断网前必须已有真实下载图片", images().size >= 2)
+        assertTrue("必须在运行中断网，而非完成后", taskStatus(ep.port).optString("status") == "running")
+        val preserved = images().associate { file -> file.name to
+            (MessageDigest.getInstance("SHA-256").digest(file.readBytes()).toList() to file.lastModified()) }
+        try {
+            assertTrue("必须验证实际出网已断开", Airplane.set(true))
+            val started = System.currentTimeMillis()
+            assertTrue("断网不影响回环暂停接口", gateway.httpPost(ep.port,
+                "/api/manga/download/pause?source=$source&cid=$comicId").ok)
+            var paused = JSONObject()
+            for (attempt in 0 until 90) {
+                paused = taskStatus(ep.port)
+                if (paused.optString("status") == "paused") break
+                assertTrue("暂停过程中不能误报完成", paused.optString("status") != "done")
+                delay(500)
+            }
+            assertTrue("断网后暂停必须生效，而非继续重试所有图片", paused.optString("status") == "paused")
+            val taskFile = File(OfflineStore.runtimeDir(ctx), "manga/_tasks.json")
+            assertTrue("暂停状态必须落盘", JSONObject(taskFile.readText()).getJSONObject("$source:$comicId")
+                .optString("status") == "paused")
+            delay(1500)
+            assertTrue("暂停不得自行复活", taskStatus(ep.port).optString("status") == "paused")
+            reportEvidence("networkPause", "PASS ${System.currentTimeMillis() - started}ms，暂停已持久化")
+        } finally {
+            assertTrue("必须恢复专用模拟器网络", Airplane.set(false))
+        }
+        val resume = gateway.httpPost(ep.port, "/api/manga/download/resume?source=$source&cid=$comicId")
+        assertTrue("联网后需明确接受继续请求", resume.ok && JSONObject(resume.body).optBoolean("resumed"))
+        var completed = JSONObject()
+        for (attempt in 0 until 180) {
+            completed = taskStatus(ep.port)
+            if (completed.optString("status") == "done") break
+            assertTrue("恢复下载失败：${completed.optString("error")}", completed.optString("status") != "error")
+            delay(1000)
+        }
+        assertTrue("恢复后必须完整完成", completed.optString("status") == "done")
+        assertTrue("完成计数与真实图片一致", completed.optInt("images_total") > 0 &&
+            completed.optInt("images_done") == images().size &&
+            completed.optInt("images_total") == images().size)
+        for ((name, original) in preserved) {
+            val file = File(chapterDir(), name)
+            assertTrue("续传不得改写已有图片$name",
+                MessageDigest.getInstance("SHA-256").digest(file.readBytes()).toList() == original.first &&
+                    file.lastModified() == original.second)
+        }
+        reportEvidence("networkResume", "PASS ${images().size} 张完整，${preserved.size} 张旧图哈希与时间不变")
+    }
+
+    @Test
     fun fullStorageFailurePersistsForColdRestart() = runBlocking {
         assumeTrue("真实填满存储只允许由 android_enospc_cold_start.sh 在专用 AVD 编排",
             InstrumentationRegistry.getArguments().getString("enospcHarness") == "1")

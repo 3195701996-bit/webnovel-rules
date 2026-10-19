@@ -30,7 +30,7 @@ def test_explicit_concurrency_is_an_actual_inflight_limit(
     active = 0
     peak = 0
 
-    def fake_download(url, path, timeout, chapter_id, orig_url):
+    def fake_download(url, path, timeout, chapter_id, orig_url, *, cancel_check=None):
         nonlocal active, peak
         slot = 0 if url.endswith("1.jpg") else 1
         with lock:

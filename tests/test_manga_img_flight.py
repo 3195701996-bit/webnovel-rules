@@ -212,7 +212,7 @@ def test_interactive_follower_promotes_queued_prefetch_leader(dl, monkeypatch):
     monkeypatch.setattr(gate, "acquire", tracked_acquire)
     cp = d.cache_path("c1", "same", 7, ".jpg")
 
-    def write_image(_url, path, _timeout, _chapter, _orig):
+    def write_image(_url, path, _timeout, _chapter, _orig, *, cancel_check=None):
         atomic_write_image(path, JPEG)
         return JPEG, path
 

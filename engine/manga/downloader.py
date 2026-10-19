@@ -146,6 +146,28 @@ def mark_processed_for_dir(d, adapter, chapter_id=None, comic_id=None):
         pass          # 标记只是"重建依据"，写失败不影响图片本身
 
 
+class ImageRequestCancelled(MangaError):
+    """Cooperative task cancellation, not a source or storage failure."""
+
+
+def _check_image_cancelled(cancel_check):
+    if cancel_check is not None and cancel_check():
+        raise ImageRequestCancelled("图片请求已取消")
+
+
+def _wait_image_retry(seconds, cancel_check):
+    if cancel_check is None:
+        time.sleep(seconds)
+        return
+    remaining = seconds
+    while remaining > 0:
+        _check_image_cancelled(cancel_check)
+        step = min(0.1, remaining)
+        time.sleep(step)
+        remaining -= step
+    _check_image_cancelled(cancel_check)
+
+
 class StorageWriteError(MangaError):
     """**本地写入失败**（目录不可写 / 磁盘满 / 权限不足）。
 
@@ -836,7 +858,8 @@ class ImageDownloader:
                     # R29(技术评审5.4): 章节/URL 作为显式参数传入——不再写实例属性
                     # _cur_ep/_cur_url（多线程并发下载时互相覆盖，导致按章节还原的
                     # 图片用错上下文）
-                    return self._download(image_url, cp, timeout, chapter_id, image_url)
+                    return self._download(image_url, cp, timeout, chapter_id, image_url,
+                                          cancel_check=cancel_check)
                 finally:
                     self._source_gate.release()
         finally:
@@ -847,7 +870,8 @@ class ImageDownloader:
                         self._flight.pop(cp, None)
                 _mine.set()
 
-    def _download(self, image_url, cp, timeout, chapter_id=None, orig_url=None):
+    def _download(self, image_url, cp, timeout, chapter_id=None, orig_url=None, *,
+                  cancel_check=None):
         last = None
         # 适配器可给出"单次尝试超时建议"（jm：卡住的图片域要快速失败，交给换域逻辑，
         # 不要一条慢链路硬等 20s 让阅读卡住）
@@ -858,6 +882,7 @@ class ImageDownloader:
             except Exception:
                 pass
         for attempt in range(3):
+            _check_image_cancelled(cancel_check)
             _t0 = time.time()
             try:
                 headers = self.adapter.image_headers(image_url)
@@ -865,6 +890,7 @@ class ImageDownloader:
                 # P0-1: 请求前 url_is_public_resolved + 逐跳重定向校验
                 # （禁自动跟随，封 302 跳内网）
                 resp = fetch_image_checked(url, headers, timeout=timeout)
+                _check_image_cancelled(cancel_check)
                 if resp.status_code != 200:
                     # on_image_failed 动态刷新（token 过期等）
                     cfg = self.adapter.on_image_failed(image_url)
@@ -899,6 +925,7 @@ class ImageDownloader:
                 with self._lock:
                     # P2-7: tmp + 校验 + os.replace 原子落盘，
                     # 读端只查存在性，直写会读到半图
+                    _check_image_cancelled(cancel_check)
                     try:
                         atomic_write_image(cp, content)
                     except BadImageError:
@@ -911,6 +938,8 @@ class ImageDownloader:
                             % (_we.strerror or _we.__class__.__name__)) from _we
                 self._note_image(image_url, time.time() - _t0, True)
                 return content, cp
+            except ImageRequestCancelled:
+                raise
             except BadImageError:
                 raise  # 永久失败：不重试
             except StorageWriteError:
@@ -921,11 +950,12 @@ class ImageDownloader:
                 print(f"[manga-dl] 图片地址被 SSRF 策略拒绝: {e}", flush=True)
                 raise MangaError("图片下载失败: 目标地址被安全策略拒绝") from e
             except Exception as e:
+                _check_image_cancelled(cancel_check)
                 last = e
                 # 失败也回报一次：jm 会据此把劣化域换掉，下一次取图即用新域
                 self._note_image(image_url, time.time() - _t0, False)
                 if attempt < 2:
-                    time.sleep(1.5 * (attempt + 1))
+                    _wait_image_retry(1.5 * (attempt + 1), cancel_check)
         raise MangaError(f"图片下载失败: {last}")
 
     def _note_image(self, image_url, seconds, ok):
