@@ -75,6 +75,7 @@
   .chap-list { grid-template-columns:repeat(auto-fill,minmax(140px,1fr)); max-height:60vh; }
 }
 </style>
+<link rel="stylesheet" href="/static/css/novel_cleaning.css">
 </head>
 <body>
 <div class="manga-topbar">
@@ -101,6 +102,7 @@
   <div class="ops-row" id="ops-row" style="display:none;">
     <button class="op-btn" id="check-btn">↻ 检查更新</button>
     <button class="op-btn" id="missing-btn">⤓ 补下缺失</button>
+    <button class="op-btn" id="clean-btn" type="button">清洗预览</button>
     <button class="op-btn danger" id="del-btn">🗑 删除</button>
     <select class="op-btn" id="src-select" style="display:none;" title="切换书源"></select>
   </div>
@@ -119,6 +121,7 @@
 
 <script src="/static/js/common.js"></script>
 <script src="/static/js/toc_render.js"></script>
+<script src="/static/js/novel_cleaning.js"></script>
 <script>
 const params = new URLSearchParams(location.search);
 const KEY = params.get('key') || '';
@@ -422,7 +425,10 @@ async function loadSearchDetail(src, gen, signal) {
   }
 }
 
-if (KEY) loadLibraryMode();
+if (KEY) {
+  mountNovelCleaning({button: $('#clean-btn'), key: KEY, request: requestJSON, reload: loadLibraryMode});
+  loadLibraryMode();
+}
 else if (SRC_UID && BOOK_URL) loadSearchMode();
 else {
   // 参数缺失：两种模式都无从加载，明确提示而非静默发无效请求
