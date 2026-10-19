@@ -279,6 +279,65 @@ def test_reclean_recovery_refuses_new_content_and_invalid_boolean(client, book):
                        json={"ids": [identity], "dry_run": "false"}).status_code == 400
 
 
+@pytest.mark.parametrize("already_original", [False, True])
+def test_recovery_listing_uses_catalog_order_and_keeps_unmapped_archives_last(client, book, already_original):
+    from engine.app_utils import cache_key_of
+    from engine.text_recovery import save_cleaned_cache, restore_cleaned_cache
+    import server.state as st
+
+    key, directory, _, _ = book
+    records = []
+    for index in range(4):
+        chapter = {"name": "第一章（跨卷重置）", "url": f"https://t.example.com/order/{index}"}
+        filename = cache_key_of(chapter["url"]) + ".cache"
+        original = f"章节{index}\n原文与广告。"
+        (directory / filename).write_text(original, encoding="utf-8")
+        identity = save_cleaned_cache(str(directory), filename, original, f"章节{index}\n原文。")
+        records.append((identity, chapter))
+    # Deliberately oppose hash order so this cannot pass by coincidence or by
+    # sorting repeated chapter titles rather than the real directory positions.
+    records.sort(reverse=True, key=lambda record: record[0])
+    first, second, third, historical = records
+    if already_original:
+        restore_cleaned_cache(str(directory), first[0], dry_run=False)
+    invalid_id = "0" * 64
+    (directory / ".reclean-originals" / (invalid_id + ".json")).write_text("{}", encoding="utf-8")
+    state_path = directory / "_state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["chapters"] = [first[1], second[1], first[1], third[1]]
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    st.invalidate_book_state(str(state_path))
+
+    def snapshot():
+        return {str(path.relative_to(directory)): (path.read_bytes(), path.stat().st_mtime_ns)
+                for path in directory.rglob("*") if path.is_file()}
+
+    before = snapshot()
+    response = client.get(f"/api/books/{key}/reclean/recovery")
+    assert response.status_code == 200
+    listing = response.get_json()
+    ids = [item["id"] for item in listing["items"]]
+    assert listing["count"] == 5
+    assert ids[:3] == [first[0], second[0], third[0]]
+    assert ids[3:] == sorted([historical[0], invalid_id])
+    item = listing["items"][0]
+    assert item["already_original"] is already_original
+    assert item["label"] == "第1项 · 第一章（跨卷重置） / 第3项 · 第一章（跨卷重置）"
+    assert next(item for item in listing["items"] if item["id"] == historical[0])["label"] == "历史章节（目录已变化）"
+    assert next(item for item in listing["items"] if item["id"] == invalid_id)["conflict"]
+    assert snapshot() == before
+    assert client.get(f"/api/books/{key}/reclean/recovery").get_json() == listing
+
+    state["chapters"] = [third[1], first[1], second[1]]
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    st.invalidate_book_state(str(state_path))
+    before = snapshot()
+    reordered = client.get(f"/api/books/{key}/reclean/recovery").get_json()
+    assert [item["id"] for item in reordered["items"]][:3] == [third[0], first[0], second[0]]
+    assert [item["id"] for item in reordered["items"]][3:] == ids[3:]
+    assert snapshot() == before
+
+
 def test_reclean_preview_reports_promotions_after_400_changes_without_writes(client, book):
     """预览必须扫完整本，不能把前400章的抽样冒充全书结论。"""
     from engine.app_utils import cache_key_of

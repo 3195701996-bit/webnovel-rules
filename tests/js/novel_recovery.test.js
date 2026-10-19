@@ -27,6 +27,8 @@ class Element {
   const [, all] = tools.children; const [close, confirm] = actions.children;
   await button.onclick();
   assert(list.children[0].children[1].textContent.includes('<img onerror=attack()>'));
+  assert(dialog.className.includes('novel-recovery'));
+  assert(!list.children[0].children[1].textContent.includes(id.slice(0, 8)));
   assert(list.children[1].children[0].disabled);
   all.onclick(); await confirm.onclick();
   assert(calls.at(-1).options.body.dry_run === true);
@@ -43,5 +45,16 @@ class Element {
   assert(calls.some(c => c.options?.body?.dry_run === false));
   assert(status.textContent.includes('已恢复 0 项') && status.textContent.includes('后续修改'));
   assert(confirm.disabled);
+  // The server owns catalog ordering. The client must not re-sort opaque IDs.
+  listing.items = [{id: conflict, label: '第1项 · 重置章号', restorable: true},
+    {id, label: '第2项 · 重置章号', restorable: true}];
+  close.onclick(); await button.onclick();
+  assert(list.children[0].children[1].textContent.startsWith('第1项'));
+  assert(list.children[1].children[1].textContent.startsWith('第2项'));
+  all.onclick(); mismatch = false; result = {ok: true, dry_run: true,
+    items: [{id: conflict, ok: true}, {id, ok: true}]};
+  await confirm.onclick();
+  assert.deepStrictEqual(Array.from(calls.at(-1).options.body.ids), [conflict, id]);
+  close.onclick();
   console.log('novel recovery: safe labels/conflict disable/scoped select/preview cancel/identity guard/partial failure passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

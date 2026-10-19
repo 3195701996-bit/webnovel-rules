@@ -2035,22 +2035,32 @@ def api_book_reclean_recovery(book_key):
     except FileNotFoundError:
         names = []
     labels = {}
+    positions = {}
     for index, chapter in enumerate(state.get("chapters") or [], 1):
         if isinstance(chapter, dict) and chapter.get("url"):
             filename = _cache_key(chapter["url"]) + ".cache"
+            positions.setdefault(filename, index)
             labels.setdefault(filename, []).append(f"第{index}项 · {chapter.get('name') or '未命名章节'}")
     items = []
+    ranks = {}
     for name in names:
         if not re.fullmatch(r'[0-9a-f]{64}\.json', name):
             continue
         identity = name[:-5]
         try:
             preview = restore_cleaned_cache(d, identity)
+            # Associate only after archive identity/content validation. Never use
+            # unverified metadata or repeated chapter titles to infer a position.
+            if preview["filename"] in positions:
+                ranks[identity] = positions[preview["filename"]]
             items.append({"id": identity, "restorable": not preview["already_original"],
                           "already_original": preview["already_original"],
                           "label": " / ".join(labels.get(preview["filename"], ["历史章节（目录已变化）"]))})
         except (ValueError, OSError, TypeError):
             items.append({"id": identity, "restorable": False, "conflict": True})
+    # Both clients consume this order. Historical/unverifiable archives stay
+    # visible at the end, with a stable identity tie-breaker, not guessed order.
+    items.sort(key=lambda item: (item["id"] not in ranks, ranks.get(item["id"], 0), item["id"]))
     return jsonify({"ok": True, "items": items, "count": len(items)})
 
 

@@ -10,3 +10,11 @@
 .novel-recovery-list { margin:12px 0; }
 .novel-recovery-row { display:flex; align-items:center; gap:12px; min-height:48px; border-bottom:1px solid var(--border); padding:8px 0; }
 .novel-recovery-row input { flex-shrink:0; width:20px; height:20px; }
+.novel-recovery[open] { display:flex; flex-direction:column; height:min(760px,90dvh); max-height:90dvh; overflow:hidden; }
+.novel-recovery > * { flex-shrink:0; }
+.novel-recovery .novel-recovery-list { flex:1 1 0; min-height:0; max-height:none; overscroll-behavior:contain; }
+.novel-recovery > [role="status"] { margin:8px 0; max-height:20dvh; overflow:auto; overflow-wrap:anywhere; }
+@media (max-width:600px) {
+  .novel-recovery { width:calc(100% - 16px); padding:16px; }
+  .novel-recovery h2 { margin-bottom:8px; }
+}

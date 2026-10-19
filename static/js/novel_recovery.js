@@ -1,7 +1,7 @@
 (function (root) {
   'use strict';
   root.mountNovelRecovery = function ({button, key, request, reload}) {
-    const dialog = document.createElement('dialog'); dialog.className = 'novel-cleaning';
+    const dialog = document.createElement('dialog'); dialog.className = 'novel-cleaning novel-recovery';
     const title = document.createElement('h2'); title.id = 'novel-recovery-title'; title.textContent = '恢复清洗前原文';
     dialog.setAttribute('aria-labelledby', title.id);
     const note = document.createElement('p'); note.textContent = '恢复会带回原有广告；后续下载或修改过的内容不会被覆盖。旧版本未存档的原文无法追溯。';
@@ -30,7 +30,7 @@
         const input = document.createElement('input'); input.type = 'checkbox';
         const text = document.createElement('span');
         const state = row.restorable === true ? '可恢复' : row.already_original === true ? '已经是原文' : '内容变化或存档异常';
-        text.textContent = `${row.label || '无法关联目录的存档'} · ${state} · ${row.id.slice(0, 8)}`;
+        text.textContent = `${row.label || '无法关联目录的存档'} · ${state}`;
         input.onchange = () => {
           if (busy || row.restorable !== true) return;
           if (!input.checked) selected.delete(row.id);
