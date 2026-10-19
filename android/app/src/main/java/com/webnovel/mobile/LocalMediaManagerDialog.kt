@@ -5,10 +5,14 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
@@ -27,6 +31,8 @@ internal fun LocalMediaManagerDialog(gateway: EngineGateway, ep: EngineEndpoint,
     var message by remember { mutableStateOf("") }
     var loadError by remember { mutableStateOf(false) }
     var confirm by remember { mutableStateOf(false) }
+    var query by remember(source, comicId) { mutableStateOf("") }
+    val keyboard = LocalSoftwareKeyboardController.current
     val base = "/api/manga/${Uri.encode(source)}/${Uri.encode(comicId)}"
     suspend fun refresh() {
         val recoveringFromReadError = loadError
@@ -52,6 +58,9 @@ internal fun LocalMediaManagerDialog(gateway: EngineGateway, ep: EngineEndpoint,
     }
     LaunchedEffect(source, comicId) { refresh() }
     val rows = inventory?.media.orEmpty()
+    val visible = remember(rows, query) { filterLocalMedia(rows, query) }
+    val visibleIds = remember(visible) { visible.map { it.id }.toSet() }
+    val hiddenSelected = selected.count { it !in visibleIds }
     val hints = remember(rows) { mangaChapterIdentityHints(rows.map { MangaChapter(it.id, it.name, "") }) }
     val enabled = !loading && !busy && !loadError
     AlertDialog(onDismissRequest = { if (!busy) onDismiss() },
@@ -66,14 +75,24 @@ internal fun LocalMediaManagerDialog(gateway: EngineGateway, ep: EngineEndpoint,
                 if (inventory != null && !loading) {
                     Text("${rows.size} 个单元 · 部分缓存 ${rows.count { it.partial }} 个",
                         style = MaterialTheme.typography.bodySmall)
-                    TextButton(enabled = enabled && rows.isNotEmpty(), onClick = {
-                        selected = if (selected.size == rows.size) emptySet() else rows.map { it.id }.toSet()
+                    if (rows.size > 10 || query.isNotEmpty()) OutlinedTextField(value = query,
+                        onValueChange = { query = it }, singleLine = true, enabled = enabled,
+                        label = { Text("筛选标题或 ID") },
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = { keyboard?.hide() }),
+                        modifier = Modifier.fillMaxWidth().testTag("local_media_search"))
+                    if (query.isNotBlank()) Text("匹配 ${visible.size} 项 · 筛选外已选 $hiddenSelected 项",
+                        style = MaterialTheme.typography.bodySmall)
+                    TextButton(enabled = enabled && visible.isNotEmpty(), onClick = {
+                        selected = toggleLocalMediaSelection(selected, visible)
                     }, modifier = Modifier.testTag("local_media_select_all")) {
-                        Text(if (rows.isNotEmpty() && selected.size == rows.size) "取消全选" else "全选本地内容")
+                        Text(if (visible.isNotEmpty() && selected.containsAll(visibleIds)) "取消全选"
+                            else if (query.isNotBlank()) "全选筛选结果" else "全选本地内容")
                     }
                     if (rows.isEmpty()) Text("没有可清理的本地内容")
+                    else if (visible.isEmpty()) Text("没有匹配的本地内容，可修改筛选词")
                     LazyColumn(Modifier.fillMaxWidth().heightIn(max = 280.dp).testTag("local_media_list")) {
-                        items(rows, key = { it.id }) { row ->
+                        items(visible, key = { it.id }) { row ->
                             Row(Modifier.fillMaxWidth().clickable(enabled = enabled) {
                                 selected = if (row.id in selected) selected - row.id else selected + row.id
                             }.padding(vertical = 4.dp)) {

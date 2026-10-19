@@ -7,6 +7,8 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTextClearance
+import androidx.compose.ui.test.performImeAction
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.performScrollToNode
@@ -287,6 +289,14 @@ class Release203RegressionTest {
         rule.onNodeWithTag("manga_detail_more").performClick()
         rule.onNodeWithTag("manage_local_media").performClick()
         rule.waitUntil(30_000) { rule.onAllNodesWithTag("local_media_pick_qa-long-0").fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithTag("local_media_search").performTextInput("qa-long-999")
+        rule.onNodeWithTag("local_media_search").performImeAction()
+        rule.waitUntil(30_000) { rule.onAllNodesWithTag("local_media_pick_qa-long-999").fetchSemanticsNodes().isNotEmpty() }
+        assertTrue(rule.onAllNodesWithTag("local_media_pick_qa-long-0").fetchSemanticsNodes().isEmpty())
+        rule.onNodeWithTag("local_media_select_all").performClick()
+        rule.onNodeWithTag("local_media_delete").assertTextEquals("删除选中（1）")
+        rule.onNodeWithTag("local_media_search").performTextClearance()
+        rule.onNodeWithTag("local_media_search").performImeAction()
         rule.onNodeWithTag("local_media_select_all").performClick()
         rule.onNodeWithTag("local_media_delete").assertTextEquals("删除选中（1000）").assertIsDisplayed()
         rule.onNodeWithTag("local_media_list").performScrollToIndex(999)
