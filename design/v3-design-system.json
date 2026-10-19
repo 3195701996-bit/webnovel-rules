@@ -1,0 +1,57 @@
+{
+  "status": "concept_direction_not_implemented_or_user_approved",
+  "target_version": "3.0.0",
+  "purpose": "Consumer reading app and responsive Web; not a diagnostics dashboard",
+  "tokens": {
+    "background": "#FFFFFF",
+    "surface": "#FFFFFF",
+    "ink": "#202A30",
+    "secondary_text": "#65737C",
+    "accent": "#31546B",
+    "divider": "#E6EBEE",
+    "spacing_logical_px": [4, 8, 12, 16, 24, 32],
+    "control_min_height_logical_px": 44,
+    "chapter_row_height_logical_px": 48,
+    "cover_radius_logical_px": 6,
+    "typography": "Platform Chinese sans-serif; explicit heading/body/label/control scales",
+    "icons": "Consistent outline navigation/actions; selected state uses accent",
+    "prohibited": ["beige reinterpretation", "orange accent", "decorative gradients", "nested card stacks", "fake metrics"]
+  },
+  "concepts": {
+    "mobile_detail": {
+      "file": "concepts/v3-mobile-detail.png",
+      "primary_action": "继续阅读",
+      "secondary_action": "下载管理",
+      "utilities": ["检查更新", "导出 ZIP", "更多"],
+      "overflow_must_preserve": ["取消收藏", "从书库移除", "管理已下载", "诊断与章节核对"],
+      "catalog_order": "整卷优先，单话在后；真实身份与读取入口规则不变",
+      "chapter_search": "查找章节",
+      "scroll": "Entire content scrolls; tool area must not trap chapter viewport"
+    },
+    "mobile_favorites": {
+      "file": "concepts/v3-mobile-favorites.png",
+      "tabs": ["最近阅读", "已缓存", "收藏"],
+      "navigation": ["书架", "浏览", "下载", "设置"],
+      "search": "查找收藏（作品名或源）",
+      "filters": ["全部", "有未读"],
+      "depicted_filter_state": "全部",
+      "unread_source": "Actual server read-set-based unread count, never highest chapter or resume position",
+      "grid": "Three equal cover columns on target mobile width; responsive adaptation must retain legibility"
+    }
+  },
+  "asset_constraints": [
+    "Generated covers are fictional concept illustrations, not real source covers or downloadable reading content",
+    "Never crop the concept into shipped interactive UI",
+    "Implementation must keep actual covers, real metadata and real application state",
+    "Code-native controls, text, focus, accessibility and destructive-action confirmations are mandatory"
+  ],
+  "pending_design_surfaces": ["browse and categories", "search", "downloads and recovery", "reader controls", "settings", "novel detail", "desktop Web adaptations"],
+  "verification_before_completion": [
+    "Extract final component typography and layout dimensions before implementation",
+    "Render actual app and Web with representative data",
+    "Inspect concept and implementation screenshots together",
+    "Check copy, hierarchy, colors, typography, spacing, icons and responsive behavior",
+    "Revalidate local/online catalogs, volume order, favorites, download status, explicit chapter selection and progress",
+    "No claim of complete redesign or 3.0.0 release until all main surfaces and real-device flows pass"
+  ]
+}
