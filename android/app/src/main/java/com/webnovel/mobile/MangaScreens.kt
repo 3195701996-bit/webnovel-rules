@@ -1323,6 +1323,7 @@ fun MangaReaderScreen(
     startLabel: String = "",
     localCatalog: Boolean = false,
 ) {
+    ReadingScreenAwake()
     val ctx = androidx.compose.ui.platform.LocalContext.current
     var detail by remember { mutableStateOf<MangaDetail?>(null) }
     var chapterIndex by rememberSaveable(source, comicId, localCatalog) {

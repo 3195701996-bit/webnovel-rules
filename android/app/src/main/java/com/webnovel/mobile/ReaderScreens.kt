@@ -492,6 +492,7 @@ fun NovelReaderScreen(
     startPct: Int,
     onBack: () -> Unit,
 ) {
+    ReadingScreenAwake()
     val ctx = androidx.compose.ui.platform.LocalContext.current
     var prefs by remember { mutableStateOf(ReaderPrefs.load(ctx)) }
     var index by remember { mutableIntStateOf(startIndex.coerceAtLeast(1)) }
