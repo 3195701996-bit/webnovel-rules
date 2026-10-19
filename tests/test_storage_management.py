@@ -204,6 +204,30 @@ def test_clear_trash_only_touches_trash(store):
 
 
 # ── 5) 章节级：按明确章节 / only=failed，且状态同步 ─────────────────
+def test_cleaning_archive_survives_regen_and_other_chapter_clear(store):
+    from engine.text_recovery import save_cleaned_cache, restore_cleaned_cache
+
+    S, root, books, dl, cache, trash = store
+    d, chs = _mk_book(books, "srcA_archive", chapters=2, cached=(1, 2))
+    first = d / (cache_key_of(chs[0]["url"]) + ".cache")
+    original = first.read_text(encoding="utf-8")
+    identity = save_cleaned_cache(str(d), first.name, original, "净化后的正文")
+    archive = d / ".reclean-originals" / (identity + ".json")
+    archived = archive.read_bytes()
+    before = S.usage()
+    row = next(b for b in before["novel_books"] if b["key"] == "srcA_archive")
+    expected = sum(p.stat().st_size for p in d.rglob("*") if p.is_file())
+    assert row["bytes"] == expected  # 隐藏存档计入实际小说占用
+
+    assert S.clear({"scope": "regen"})["ok"]
+    assert S.clear({"scope": "book_chapters", "key": "srcA_archive", "chapters": [2]})["ok"]
+    assert archive.read_bytes() == archived
+    assert restore_cleaned_cache(str(d), identity, dry_run=True)["restored"] is False
+    assert first.read_text(encoding="utf-8") == "净化后的正文"
+    assert restore_cleaned_cache(str(d), identity, dry_run=False)["restored"] is True
+    assert first.read_text(encoding="utf-8") == original
+
+
 def test_clear_book_chapters_explicit_list(store):
     S, root, books, dl, cache, trash = store
     d, chs = _mk_book(books, "srcA_aaaa", chapters=3, cached=(1, 2, 3))
