@@ -123,7 +123,7 @@ internal fun DownloadsScreen(
                         }
                     },
                     modifier = Modifier.weight(1f),
-                ) { Text("全部暂停") }
+                ) { Text("暂停全部漫画") }
                 OutlinedButton(
                     onClick = {
                         scope.launch {
@@ -141,7 +141,7 @@ internal fun DownloadsScreen(
                         }
                     },
                     modifier = Modifier.weight(1f),
-                ) { Text("全部继续") }
+                ) { Text("继续全部漫画") }
             }
             actionMsg?.let {
                 Spacer(Modifier.height(6.dp))
@@ -215,7 +215,7 @@ internal fun DownloadsScreen(
                      color = MaterialTheme.colorScheme.primary)
                 u.withUpdate.take(3).forEach { (title, c) ->
                     Text("· $title：${c.label}", style = MaterialTheme.typography.labelSmall,
-                         color = MaterialTheme.colorScheme.outline,
+                         color = WnColors.inkDim,
                          maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
@@ -224,7 +224,7 @@ internal fun DownloadsScreen(
                 "任务由本机引擎执行：退出界面或锁屏不会停止正在进行的任务；" +
                     "系统限制后台时会保存进度，回到应用后继续。",
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.outline,
+                color = WnColors.inkDim,
             )
         }
 
@@ -309,7 +309,7 @@ internal fun DownloadsScreen(
                 "小说任务与导出的完整操作仍在网页界面（/tasks_page）；" +
                     "此页只做队列状态与控制，不复制一套规则。",
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.outline,
+                color = WnColors.inkDim,
             )
         }
     }
@@ -396,7 +396,7 @@ private fun TaskCard(
             if (t.current.isNotBlank()) {
                 Spacer(Modifier.height(WnSpace.xs))
                 Text(t.current, style = MaterialTheme.typography.labelSmall,
-                     color = MaterialTheme.colorScheme.outline, maxLines = 1,
+                     color = WnColors.inkDim, maxLines = 1,
                      overflow = TextOverflow.Ellipsis)
             }
             // 漫画任务的图片级进度（章级 x/y 之外的真实颗粒度；数据来自服务端）
@@ -404,7 +404,7 @@ private fun TaskCard(
                 Spacer(Modifier.height(2.dp))
                 Text("图片 ${t.imagesDone}/${t.imagesTotal}",
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.outline)
+                    color = WnColors.inkDim)
             }
             if (t.isManga && t.pendingChapters > 0) {
                 Text("待补 ${t.pendingChapters} 章 · 当前批完成后继续",
@@ -418,7 +418,7 @@ private fun TaskCard(
                 Text(
                     t.stopReason,
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.outline,
+                    color = WnColors.inkDim,
                     modifier = Modifier.testTag("task_stop_reason"),
                 )
                 if (t.checkpointLabel.isNotBlank()) {
@@ -426,7 +426,7 @@ private fun TaskCard(
                     Text(
                         "${t.checkpointLabel}（继续会从断点接着下）",
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.outline,
+                        color = WnColors.inkDim,
                         modifier = Modifier.testTag("task_checkpoint"),
                     )
                 }

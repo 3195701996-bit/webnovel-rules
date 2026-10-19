@@ -141,9 +141,9 @@ class AcceptanceEntryPointsTest {
         // ── 下载页：全局控制 + 队列空态说明 ──
         waitText("下载", timeoutMs = 60_000)
         clickText("下载")
-        waitText("全部暂停", timeoutMs = 60_000)
-        assertTrue("下载页必须有「全部暂停」", texts("全部暂停") > 0)
-        assertTrue("下载页必须有「全部继续」", texts("全部继续") > 0)
+        waitText("暂停全部漫画", timeoutMs = 60_000)
+        assertTrue("下载页必须有「暂停全部漫画」", texts("暂停全部漫画") > 0)
+        assertTrue("下载页必须有「继续全部漫画」", texts("继续全部漫画") > 0)
         val empty = texts("当前没有下载任务") > 0
         val groups = listOf("进行中（", "已暂停 / 已停止（", "已结束（").any {
             texts(it, substring = true) > 0

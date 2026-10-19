@@ -7,6 +7,11 @@ const css = fs.readFileSync(path.join(root, 'static/css/style.css'), 'utf8');
 const manga = fs.readFileSync(path.join(root, 'templates/manga.html'), 'utf8');
 const theme = fs.readFileSync(
   path.join(root, 'android/app/src/main/java/com/webnovel/mobile/WnTheme.kt'), 'utf8');
+const downloads = fs.readFileSync(path.join(root, 'android/app/src/main/java/com/webnovel/mobile/DownloadScreens.kt'), 'utf8');
+assert.doesNotMatch(downloads, /color\s*=\s*MaterialTheme\.colorScheme\.outline\b/,
+  'download explanations and task metadata must use readable text colors, not pale border colors');
+assert.match(downloads, /Text\("暂停全部漫画"\)/);
+assert.match(downloads, /Text\("继续全部漫画"\)/);
 const novelDetail = fs.readFileSync(path.join(root, 'templates/novel_detail.html'), 'utf8');
 const library = fs.readFileSync(path.join(root, 'templates/library.html'), 'utf8');
 const reader = fs.readFileSync(path.join(root, 'templates/reader.html'), 'utf8');

@@ -11,6 +11,9 @@ import androidx.compose.ui.test.performScrollToNode
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.LargeTest
 import org.junit.Rule
+import org.junit.Before
+import org.junit.Assert.assertTrue
+import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -30,6 +33,15 @@ class DownloadsUiTest {
     @get:Rule
     val rule = createAndroidComposeRule<MainActivity>()
 
+    @Before
+    fun requireDedicatedEmulator() {
+        val descriptor = InstrumentationRegistry.getInstrumentation().uiAutomation
+            .executeShellCommand("getprop ro.kernel.qemu")
+        val qemu = android.os.ParcelFileDescriptor.AutoCloseInputStream(descriptor)
+            .bufferedReader().use { it.readText().trim() }
+        assertTrue("批量队列操作测试禁止运行于用户手机", qemu == "1")
+    }
+
     private fun ev(line: String) = println("DOWNLOADS_UI_EVIDENCE $line")
 
     private fun waitText(text: String, timeoutMs: Long = 150_000, substring: Boolean = false) {
@@ -46,8 +58,8 @@ class DownloadsUiTest {
         rule.onAllNodesWithText("下载")[0].performClick()
 
         // 1) 全局控制与说明在位
-        waitText("全部暂停")
-        rule.onNodeWithText("全部继续").assertIsDisplayed()
+        waitText("暂停全部漫画")
+        rule.onNodeWithText("继续全部漫画").assertIsDisplayed()
         rule.onNodeWithText("任务由本机引擎执行", substring = true).assertIsDisplayed()
         ev("下载页：全局控制与后台说明在位")
 
@@ -77,7 +89,7 @@ class DownloadsUiTest {
         }
 
         // 3) 全部暂停：真的打到服务端，并把条数展示出来（0 就说 0）
-        rule.onNodeWithText("全部暂停").performClick()
+        rule.onNodeWithText("暂停全部漫画").performClick()
         rule.waitUntil(30_000) {
             rule.onAllNodesWithText("已请求暂停", substring = true).fetchSemanticsNodes().isNotEmpty() ||
                 rule.onAllNodesWithText("全部暂停失败", substring = true).fetchSemanticsNodes().isNotEmpty()
@@ -86,7 +98,7 @@ class DownloadsUiTest {
         ev("全部暂停：已返回并显示条数")
 
         // 4) 全部继续：同理
-        rule.onNodeWithText("全部继续").performClick()
+        rule.onNodeWithText("继续全部漫画").performClick()
         rule.waitUntil(30_000) {
             rule.onAllNodesWithText("已恢复", substring = true).fetchSemanticsNodes().isNotEmpty() ||
                 rule.onAllNodesWithText("全部继续失败", substring = true).fetchSemanticsNodes().isNotEmpty()
@@ -98,7 +110,7 @@ class DownloadsUiTest {
         //    performClick / performScrollTo / performScrollToNode 在本机都不稳定
         //    （实测均失败：Failed to inject touch input / Action failed）。
         //    刷新这条路径由 DownloadPathTest 在接口层覆盖，这里只断言"页面没坏"。
-        rule.onNodeWithText("全部暂停").performClick()
+        rule.onNodeWithText("暂停全部漫画").performClick()
         rule.waitUntil(30_000) {
             rule.onAllNodesWithText("已请求暂停", substring = true).fetchSemanticsNodes().isNotEmpty()
         }
