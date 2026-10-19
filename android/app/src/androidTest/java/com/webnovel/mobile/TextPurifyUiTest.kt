@@ -6,6 +6,7 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.performScrollToIndex
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.LargeTest
 import androidx.test.platform.app.InstrumentationRegistry
@@ -112,6 +113,19 @@ class TextPurifyUiTest {
             File(bookDir, cacheKeyOf(URL2) + ".cache")
                 .writeText("推书《测试作品》\n\n《测试作品》\n求帮忙追读！", Charsets.UTF_8)
         }
+        if (testName.methodName == "ui_longRecoverySelectionPreviewCancelPreservesFiles") {
+            val state = JSONObject(File(bookDir, "_state.json").readText())
+            val chapters = JSONArray()
+            val completed = JSONArray()
+            for (index in 1..100) {
+                val url = "https://selftest.invalid/purify/long/$index"
+                chapters.put(JSONObject().put("name", "第${index}章 长目录测试").put("url", url))
+                completed.put(url)
+                File(bookDir, cacheKeyOf(url) + ".cache").writeText("第${index}章 长目录测试\n\n剧情正文${index}。\n$adLine\n")
+            }
+            state.put("chapters", chapters).put("completed", completed)
+            File(bookDir, "_state.json").writeText(state.toString())
+        }
 
         gateway = EngineGateway(ctx)
         val st = runBlocking { gateway.connect() }
@@ -209,6 +223,36 @@ class TextPurifyUiTest {
             assertTrue("旧预览必须拒绝", stale.isFailure)
             assertTrue("HTTP409不能截断目标文件", exported.contentEquals(output.readBytes()))
         } finally { output.delete() }
+    }
+
+    @Test
+    fun ui_longRecoverySelectionPreviewCancelPreservesFiles() {
+        val ep = gateway.currentEndpoint()!!
+        val cleaned = runBlocking { gateway.httpPost(ep.port, "/api/books/$key/reclean", "{\"dry_run\":false}") }
+        assertTrue(cleaned.ok)
+        val listing = JSONObject(runBlocking { gateway.httpText(ep.port, "/api/books/$key/reclean/recovery") }.body)
+        assertEquals(100, listing.getInt("count"))
+        val lastId = listing.getJSONArray("items").getJSONObject(99).getString("id")
+        val before = bookDir.walkTopDown().filter { it.isFile }.associate { it.relativeTo(bookDir).path to it.readBytes() }
+        rule.openCachedShelf()
+        rule.waitUntil(60_000) { texts(BOOK_NAME) > 0 }
+        rule.onAllNodesWithText(BOOK_NAME)[0].performScrollTo().performClick()
+        rule.waitUntil(60_000) { nodes("novel_recovery_button") > 0 }
+        landscape()
+        rule.waitUntil(60_000) { nodes("novel_recovery_button") > 0 }
+        rule.onAllNodesWithTag("novel_recovery_button")[0].performScrollTo().performClick()
+        rule.waitUntil(20_000) { nodes("novel_recovery_select_all") > 0 }
+        rule.onAllNodesWithTag("novel_recovery_select_all")[0].performScrollTo().performClick()
+        rule.waitUntil(5_000) { texts("预览恢复（100）") > 0 }
+        rule.onAllNodesWithTag("novel_recovery_list")[0].performScrollToIndex(100)
+        rule.onAllNodesWithTag("novel_recovery_pick_$lastId")[0].assertIsDisplayed()
+        rule.onAllNodesWithTag("novel_recovery_confirm")[0].assertIsDisplayed().performClick()
+        rule.waitUntil(20_000) { texts("确认恢复") > 0 }
+        rule.onAllNodesWithTag("novel_recovery_close")[0].assertIsDisplayed().performClick()
+        rule.waitUntil(5_000) { nodes("novel_recovery_close") == 0 }
+        val after = bookDir.walkTopDown().filter { it.isFile }.associate { it.relativeTo(bookDir).path to it.readBytes() }
+        assertEquals(before.keys, after.keys)
+        before.forEach { (name, bytes) -> assertTrue("取消预览不得改写$name", bytes.contentEquals(after.getValue(name))) }
     }
 
     @Test

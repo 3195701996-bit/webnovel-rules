@@ -67,7 +67,7 @@ fun NovelRecoveryDialog(bookKey: String, port: Int, gateway: EngineGateway, onCl
                     val eligible = rows.filter { it.restorable }.take(500).map { it.id }.toSet()
                     selected = if (selected.containsAll(eligible)) emptySet() else eligible
                     previewReady = false
-                }, enabled = !busy && rows.any { it.restorable }) { Text("全选 / 取消全选（最多500项）") }
+                }, enabled = !busy && rows.any { it.restorable }, modifier = Modifier.testTag("novel_recovery_select_all")) { Text("全选 / 取消全选（最多500项）") }
                 }
                     items(rows, key = { it.id }) { row ->
                         Row(Modifier.fillMaxWidth().testTag("novel_recovery_pick_${row.id}").clickable(enabled = !busy && row.restorable) {
