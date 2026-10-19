@@ -875,24 +875,38 @@ object EngineData {
         return parsed
     }
 
+    private fun checkCount(value: Any?): Int? {
+        val count = when (value) {
+            is Int -> value.toLong()
+            is Long -> value
+            else -> return null
+        }
+        return count.takeIf { it in 0..Int.MAX_VALUE.toLong() }?.toInt()
+    }
+
     fun mangaFavoriteCheckStatus(body: String): MangaFavoriteCheckStatus? {
         val o = runCatching { JSONObject(body) }.getOrNull() ?: return null
-        if (!o.has("running") || !o.has("total") || !o.has("checked") ||
-            !o.has("succeeded") || !o.has("failed")) return null
-        val total = o.optInt("total").coerceAtLeast(0)
+        if (o.opt("ok") == false) return null
+        val running = o.opt("running") as? Boolean ?: return null
+        val total = checkCount(o.opt("total")) ?: return null
+        val checked = checkCount(o.opt("checked")) ?: return null
+        val succeeded = checkCount(o.opt("succeeded")) ?: return null
+        val failed = checkCount(o.opt("failed")) ?: return null
+        val finished = succeeded.toLong() + failed
+        if (checked > total || finished > total ||
+            (!running && (checked != total || finished != checked.toLong()))) return null
         return MangaFavoriteCheckStatus(
-            running = o.optBoolean("running"), total = total,
-            checked = o.optInt("checked").coerceIn(0, total),
-            succeeded = o.optInt("succeeded").coerceAtLeast(0),
-            failed = o.optInt("failed").coerceAtLeast(0),
+            running = running, total = total, checked = checked,
+            succeeded = succeeded, failed = failed,
         )
     }
 
     fun mangaFavoriteCheckStart(body: String): MangaFavoriteCheckStart? {
         val o = runCatching { JSONObject(body) }.getOrNull() ?: return null
-        if (!o.has("started")) return null
+        if (o.opt("ok") == false || (o.has("already_running") && o.opt("already_running") !is Boolean)) return null
+        val started = checkCount(o.opt("started")) ?: return null
         return MangaFavoriteCheckStart(
-            started = o.optInt("started").coerceAtLeast(0),
+            started = started,
             alreadyRunning = o.optBoolean("already_running"),
         )
     }

@@ -3800,7 +3800,7 @@ def api_manga_favorites_check_updates():
 @bp.route("/api/manga/favorites/check-updates/status", methods=["GET"])
 def api_manga_favorites_check_updates_status():
     with _manga_favorites_check_lock:
-        return jsonify(dict(_manga_favorites_check_state))
+        return jsonify({"ok": True, **_manga_favorites_check_state})
 
 
 @bp.route("/api/manga/favorites", methods=["POST"])

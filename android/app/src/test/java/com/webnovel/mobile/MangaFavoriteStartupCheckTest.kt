@@ -83,10 +83,32 @@ class MangaFavoriteStartupCheckTest {
         assertNull(MangaFavoriteStartupCheck.statusMessage(
             MangaFavoriteCheckStatus(false, 5, 5, 5, 0)))
         assertNull(EngineData.mangaFavoriteCheckStatus("{}"))
-        val clamped = EngineData.mangaFavoriteCheckStatus(
-            """{"running":true,"total":2,"checked":8,"succeeded":-1,"failed":-3}""")!!
-        assertEquals(2, clamped.checked)
-        assertEquals(0, clamped.succeeded)
-        assertEquals(0, clamped.failed)
+        assertNull(EngineData.mangaFavoriteCheckStatus(
+            """{"running":true,"total":2,"checked":8,"succeeded":-1,"failed":-3}"""))
+    }
+
+    @Test fun malformedCountsCannotBecomeAnEmptyOrCompletedCheck() {
+        for (body in listOf("{}", """{"started":"0"}""", """{"started":-1}""",
+            """{"started":1.5}""", """{"started":2147483648}""",
+            """{"ok":false,"started":0}""", """{"started":0,"already_running":"true"}""")) {
+            assertNull(body, EngineData.mangaFavoriteCheckStart(body))
+        }
+        for (body in listOf(
+            """{"running":"false","total":0,"checked":0,"succeeded":0,"failed":0}""",
+            """{"running":false,"total":2,"checked":1,"succeeded":1,"failed":0}""",
+            """{"running":false,"total":2,"checked":2,"succeeded":1,"failed":0}""",
+            """{"running":false,"total":"0","checked":0,"succeeded":0,"failed":0}""",
+            """{"running":false,"total":0,"checked":0,"succeeded":2147483647,"failed":2147483647}""",
+            """{"ok":false,"running":false,"total":0,"checked":0,"succeeded":0,"failed":0}""")) {
+            assertNull(body, EngineData.mangaFavoriteCheckStatus(body))
+        }
+    }
+
+    @Test fun runningSnapshotAllowsNonAtomicPerItemCounterPublication() {
+        val state = EngineData.mangaFavoriteCheckStatus(
+            """{"running":true,"total":2,"checked":0,"succeeded":1,"failed":0}""")!!
+        assertTrue(state.running)
+        assertEquals(0, state.checked)
+        assertEquals(1, state.succeeded)
     }
 }

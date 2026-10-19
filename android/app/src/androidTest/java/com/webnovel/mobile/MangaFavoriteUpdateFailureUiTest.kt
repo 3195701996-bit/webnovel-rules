@@ -13,6 +13,7 @@ import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertEquals
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -34,6 +35,9 @@ class MangaFavoriteUpdateFailureUiTest {
 
     @Before
     fun setUp() = runBlocking {
+        val qemu = ProcessBuilder("getprop", "ro.kernel.qemu").start().inputStream
+            .bufferedReader().use { it.readText().trim() }
+        assertEquals("合成收藏检查仅限模拟器，禁止修改真机数据", "1", qemu)
         gateway = EngineGateway(InstrumentationRegistry.getInstrumentation().targetContext)
         endpoint = (gateway.connect() as? EngineState.Ready)?.endpoint
             ?: throw AssertionError("本机引擎未就绪")
