@@ -76,6 +76,51 @@ def test_empty_inventory_stays_empty_without_network(media_env):
     assert result.get_json()["count"] == 0
 
 
+def test_local_detail_without_adapter_or_downloads_is_an_empty_offline_catalog(media_env, monkeypatch):
+    client, _, _ = media_env
+    import server.manga_api as api
+    monkeypatch.setattr(api, "_manga_adapter", lambda source: None)
+    response = client.get("/api/manga/copymanga/removed-local?catalog=local")
+    assert response.status_code == 200
+    result = response.get_json()
+    assert result["local_only"] is True
+    assert result["chapters"] == result["volumes"] == result["downloaded"] == []
+    assert result["source"] == "copymanga" and result["comic_id"] == "removed-local"
+    assert result["source_name"]
+    assert client.get("/api/manga/copymanga/removed-local").status_code == 404
+
+
+def test_large_local_detail_reuses_verified_media_without_reopening_images(media_env, monkeypatch):
+    client, downloads, _ = media_env
+    import server.manga_api as api
+    import server.state as state
+    monkeypatch.setattr(api, "_manga_adapter", lambda source: None)
+    base = downloads / "mangadex" / "long-local-detail"
+    rows = []
+    for index in range(300):
+        chapter_id = f"chapter-{index:04d}"
+        page(base / chapter_id)
+        rows.append({"id": chapter_id, "name": f"第{index + 1}话", "download_page_count": 1})
+    (base / "_info.json").write_text(json.dumps({"title": "长本地目录", "chapters": rows}))
+    original = state._is_manga_image_file
+    checks = []
+    def check(path):
+        checks.append(str(path))
+        return original(path)
+    monkeypatch.setattr(state, "_is_manga_image_file", check)
+    url = "/api/manga/mangadex/long-local-detail?catalog=local"
+    first = client.get(url)
+    assert first.status_code == 200
+    assert len(first.get_json()["chapters"]) == 300
+    assert len(checks) == 300
+    checks.clear()
+    second = client.get(url)
+    assert second.status_code == 200
+    assert second.get_json()["chapters"] == first.get_json()["chapters"]
+    assert len(second.get_json()["downloaded"]) == 300
+    assert checks == []  # 详情装饰/续读/部分下载计算均不得再次逐页核验
+
+
 def test_legacy_alias_media_is_visible_with_exact_disk_identity(media_env):
     client, downloads, _ = media_env
     base = downloads / "copymanga_web" / "legacy-local"

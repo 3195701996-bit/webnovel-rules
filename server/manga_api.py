@@ -1529,7 +1529,7 @@ def api_manga_detail(source, comic_id):
                         continue
                 if _dl_ok:
                     break
-    if not ad and not _dl_ok:
+    if not ad and not _dl_ok and not _local_catalog:
         abort(404, "漫画源不存在")
     # 本地书库详情必须严格由可验证的下载实盘驱动。若章节媒体已删除，不能
     # 继续落入下面的完整详情缓存/SWR 路径，否则书架会把在线章节伪装成本地目录。
@@ -1550,7 +1550,7 @@ def api_manga_detail(source, comic_id):
             "title": _local_meta.get("title") or comic_id,
             "cover": _local_meta.get("cover") or "",
             "source": source,
-            "source_name": ad.name,
+            "source_name": ad.name if ad else _manga_adapter_name(source),
             "chapters": [],
             "volumes": [],
             "downloaded": [],

@@ -497,7 +497,8 @@ def test_offline_detail_uses_verified_legacy_alias_download_metadata(
         assert page.mimetype == "image/jpeg"
         assert page.data.startswith(b"\xff\xd8\xff")
 
-    # 仅有普通详情清单、没有任何章节图片的缓存，必须仍被视为不可离线打开。
+    # 只有普通详情清单不能成为可读本地目录；源停用与否均返回空目录，
+    # 便于客户端展示“本地无内容”，不将源异常与媒体缺失混为一谈。
     cached_only = cache / "copymanga_web" / "online-only"
     (cached_only / "_info.json").parent.mkdir(parents=True, exist_ok=True)
     (cached_only / "_info.json").write_text(json.dumps({
@@ -505,7 +506,11 @@ def test_offline_detail_uses_verified_legacy_alias_download_metadata(
     }), encoding="utf-8")
     missing = client.get(
         "/api/manga/copymanga/online-only?catalog=local")
-    assert missing.status_code == 404
+    assert missing.status_code == 200
+    assert missing.get_json()["local_only"] is True
+    assert missing.get_json()["chapters"] == []
+    assert missing.get_json()["volumes"] == []
+    assert missing.get_json()["downloaded"] == []
 
 
 def test_real_download_files_drive_full_and_local_catalog_status(
