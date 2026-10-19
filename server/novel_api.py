@@ -2169,10 +2169,55 @@ def _rebuild_book_txt_local(book_key, d, chapters):
     return True, ""
 
 
+def _reader_edition(book_key, preview=False):
+    from engine.reader_export import build_reader_export
+    d = os.path.join(BOOKS_DIR, book_key)
+    state = load_book_state(os.path.join(d, "_state.json"))
+    if not state:
+        abort(404, "书籍不存在")
+    clean = request.args.get("clean", "1")
+    omit = request.args.get("omit_promotions", "0")
+    revision = request.args.get("revision", "")
+    if clean not in ("0", "1") or omit not in ("0", "1"):
+        return _err_json("clean与omit_promotions必须为0或1", 400)
+    if not preview and not re.fullmatch(r'[0-9a-f]{64}', revision):
+        return _err_json("请先预览阅读版，再提交预览版本导出", 400)
+    try:
+        artifact, report = build_reader_export(d, state.get("chapters") or [],
+                                              clean=clean == "1", omit_promotions=omit == "1")
+    except ValueError as error:
+        return _err_json(str(error), 400)
+    except OSError:
+        return _err_json("阅读版生成失败，请检查本地文件和可用空间", 500)
+    if preview:
+        artifact.close()
+        return jsonify({"ok": True, **report})
+    if revision != report["revision"]:
+        artifact.close()
+        return _err_json("目录、正文或导出选项已变化，请重新预览", 409)
+    name = re.sub(r'[\r\n\x00]', ' ', str((state.get("book") or {}).get("name") or book_key))
+    try:
+        response = send_file(artifact, as_attachment=True, download_name=f"{name}-阅读版.txt",
+                             mimetype="text/plain; charset=utf-8")
+    except BaseException:
+        artifact.close()
+        raise
+    response.headers["X-Export-Revision"] = report["revision"]
+    response.call_on_close(artifact.close)
+    return response
+
+
+@bp.route("/api/books/<book_key>/txt/preview")
+def api_book_reader_txt_preview(book_key):
+    return _reader_edition(_safe_seg(book_key, "书籍"), preview=True)
+
+
 @bp.route("/api/books/<book_key>/txt")
 def api_book_txt(book_key):
 
     book_key = _safe_seg(book_key, "书籍")
+    if request.args.get("layout") == "reader":
+        return _reader_edition(book_key)
     d = os.path.join(BOOKS_DIR, book_key)
     p = os.path.join(d, "book.txt")
     state = load_book_state(os.path.join(d, "_state.json")) or {}

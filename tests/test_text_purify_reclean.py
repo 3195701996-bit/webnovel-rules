@@ -215,6 +215,36 @@ def test_reclean_missing_book_is_404(client, book):
     assert r.status_code == 404
 
 
+def test_reader_txt_preview_and_download_never_change_local_files(client, book):
+    key, d, _, _ = book
+    (d / 'book.txt').write_text('原始导出保留', encoding='utf-8')
+    before = {path.name: path.read_bytes() for path in d.iterdir() if path.is_file()}
+    preview = client.get(f'/api/books/{key}/txt/preview?clean=1&omit_promotions=0')
+    assert preview.status_code == 200
+    report = preview.get_json()
+    assert report['exported_count'] == 3 and report['missing_count'] == 0
+    response = client.get(f'/api/books/{key}/txt?layout=reader&clean=1&revision={report["revision"]}')
+    assert response.status_code == 200
+    text = response.get_data().decode('utf-8')
+    assert '小书亭app' not in text and '正文第一段' in text
+    assert response.headers['X-Export-Revision'] == report['revision']
+    response.close()
+    assert before == {path.name: path.read_bytes() for path in d.iterdir() if path.is_file()}
+
+
+def test_reader_txt_stale_preview_or_changed_options_are_rejected(client, book):
+    from engine.app_utils import cache_key_of
+    key, d, chapters, _ = book
+    report = client.get(f'/api/books/{key}/txt/preview').get_json()
+    revision = report['revision']
+    assert client.get(f'/api/books/{key}/txt?layout=reader&clean=0&revision={revision}').status_code == 409
+    path = d / (cache_key_of(chapters[0]['url']) + '.cache')
+    path.write_text(path.read_text() + '\n新正文。', encoding='utf-8')
+    assert client.get(f'/api/books/{key}/txt?layout=reader&revision={revision}').status_code == 409
+    assert client.get(f'/api/books/{key}/txt?layout=reader').status_code == 400
+    assert client.get(f'/api/books/{key}/txt/preview?omit_promotions=maybe').status_code == 400
+
+
 def test_reclean_original_recovery_preview_and_explicit_restore(client, book):
     from engine.app_utils import cache_key_of
     key, d, chapters, bodies = book
