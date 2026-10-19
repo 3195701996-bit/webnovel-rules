@@ -14,11 +14,13 @@ class Node {
   let confirmed = false, requests = 0;
   let readFails = true;
   let deleteFails = true, reloads = 0;
+  let malformed = false;
   const context = {window: {}, document: {
     createElement: tag => new Node(tag), createTextNode: text => ({text}),
   }, confirm: () => confirmed, requestJSON: async (url, opts) => {
     if (url.endsWith('/local-media')) {
       if (readFails) throw new Error('清单不可用');
+      if (malformed) return {ok:true, local_only:false, source:'demo', comic_id:'comic', count:0, media:[]};
       return {ok:true, local_only:true, source:'demo', comic_id:'comic', count:2,
         media:[{id:'one',name:'同名章节',downloaded:true,partial:false},
           {id:'two',name:'同名章节',downloaded:false,partial:true}]};
@@ -30,7 +32,10 @@ class Node {
   }};
   vm.runInNewContext(fs.readFileSync('static/js/manga_local_manager.js', 'utf8'), context);
   context.window.mountMangaLocalManager(host, {downloaded:['one','one'],
-    partial_downloaded:['two'], chapters:[{id:'one',name:'第1话'}]}, 'demo', 'comic', () => {reloads++;});
+    partial_downloaded:['two'], chapters:[{id:'one',name:'第1话'}]}, 'demo', 'comic', () => {
+      reloads++;
+      throw new Error('fixture detail refresh');
+    });
   const [toggle, panel] = host.children;
   assert.equal(panel.hidden, true);
   await toggle.onclick();
@@ -58,7 +63,16 @@ class Node {
   await remove.onclick();
   assert.equal(requests, 2);
   assert.equal(reloads, 1);
-  all.onclick();
+  assert.match(status.textContent, /删除完成.*详情刷新失败/);
+  assert.doesNotMatch(status.textContent, /删除失败/);
   assert.equal(remove.textContent, '删除选中（0）');
+  malformed = true;
+  await retry.onclick();
+  assert.match(status.textContent, /清单格式不正确/);
+  assert.equal(remove.disabled, true);
+  assert.equal(all.disabled, true);
+  all.onclick();
+  await remove.onclick();
+  assert.equal(requests, 2, '未经校验的清单不能触发删除');
   console.log('manga_local_manager: dedup/select/cancel/confirmation/error recovery passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

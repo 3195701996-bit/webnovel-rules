@@ -29,6 +29,7 @@
     retry.className = 'op-btn';
     retry.textContent = '重新读取本地缓存';
     async function refresh() {
+      if (loading) return;
       loading = true;
       failed = false;
       status.textContent = '正在读取本地缓存…';
@@ -109,16 +110,23 @@
           method: 'POST', headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({chapter_ids: chapterIds, identity_mode: 'disk'}), timeout: 60000,
         });
-        if (!response.ok) throw new Error(response.error || '删除未完成');
+        if (response.ok !== true) throw new Error(response.error || '删除未完成');
         if (response.missing > 0) {
+          await refresh();
           status.textContent = '部分内容未确认删除（' + response.missing +
-            ' 项），请刷新目录核对；未自动重试。';
+            ' 项），已重新核对本地缓存；未自动重试。' +
+            (failed ? '缓存清单读取失败，请重新读取后操作。' : '');
           return;
         }
-        status.textContent = '删除完成，正在刷新本地目录';
-        await reload();
+        selected.clear();
+        await refresh();
+        status.textContent = '删除完成。' + (failed ? '缓存清单读取失败，请重新读取后操作。' : '');
+        try { await reload(); }
+        catch (error) { status.textContent += '详情刷新失败：' + error.message + '。请重新打开详情，不需要重复删除。'; }
       } catch (error) {
-        status.textContent = '删除失败：' + error.message + '。已保留选择，可重试。';
+        await refresh();
+        status.textContent = '删除未完成：' + error.message + '。已保留仍存在的选择，可重试。' +
+          (failed ? '缓存清单读取失败，请重新读取后操作。' : '');
       } finally { busy = false; render(); }
     };
     controls.append(all, remove);
