@@ -207,6 +207,36 @@ def test_delete_partial_legacy_chapter_uses_same_normalized_identity_as_status(
     assert not old_chapter.exists()
 
 
+def test_selected_chapter_delete_preserves_other_media_and_reading_data(client):
+    """章节级删除不能扩大为整书删除，也不能重置逐话已读集合。"""
+    source, comic_id = "mangadex", "selected-only-delete"
+    base = _make_comic(source, comic_id)
+    other = os.path.join(base, "ch2")
+    os.makedirs(other, exist_ok=True)
+    page = os.path.join(other, "0000.jpg")
+    payload = b"\xff\xd8\xff" + b"unselected" * 1024
+    with open(page, "wb") as stream:
+        stream.write(payload)
+    paths = (cfg.MANGA_HISTORY_FILE, cfg.MANGA_FAV_FILE, cfg.MANGA_LIBRARY_FILE)
+    before = {}
+    for path in paths:
+        with open(path, encoding="utf-8") as stream:
+            before[path] = json.load(stream)
+    try:
+        response = client.post(f"/api/manga/{source}/{comic_id}/chapters/delete",
+                               json={"chapter_ids": ["ch1"]})
+        assert response.status_code == 200, response.get_data(as_text=True)
+        assert response.get_json()["deleted"] == 1
+        assert not os.path.exists(os.path.join(base, "ch1"))
+        with open(page, "rb") as stream:
+            assert stream.read() == payload
+        for path in paths:
+            with open(path, encoding="utf-8") as stream:
+                assert json.load(stream) == before[path]
+    finally:
+        _clean(source, comic_id)
+
+
 def test_resume_reports_conflict_during_media_delete(client, monkeypatch):
     import server.manga_api as mapi
     monkeypatch.setattr(mapi._manga_dl, "resume_result", lambda _key: "deleting")
