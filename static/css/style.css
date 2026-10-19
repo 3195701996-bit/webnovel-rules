@@ -1,28 +1,27 @@
-/* ═══════════ 纸感阅读设计系统 ═══════════
-   暖纸表面、墨色正文、陶土主色；旧变量名保留为兼容别名。 */
+/* ═══════════ 3.0 阅读优先设计基础 ═══════════
+   白色表面、墨色正文、蓝灰主色；旧变量名保留为兼容别名。 */
 :root {
-  /* 温暖但克制的纸张层级 */
-  --bg-base: #f5f1e9;
-  --bg-elevated: #fbf8f2;
-  --bg-overlay: #fffdf9;
-  --bg-hover: #efe8dc;
-  --border: #e3d9cc;
-  --bg-2: #fbf8f2;  /* 模板内联样式使用的正式表面层 */
+  --bg-base: #ffffff;
+  --bg-elevated: #ffffff;
+  --bg-overlay: #f4f7f9;
+  --bg-hover: #edf2f5;
+  --border: #e6ebee;
+  --bg-2: #ffffff;
 
   /* 文本层级 */
-  --text-primary: #29251f;
-  --text-secondary: #70665b;
-  --text-disabled: rgba(112, 102, 91, .48);
+  --text-primary: #202a30;
+  --text-secondary: #65737c;
+  --text-disabled: rgba(101, 115, 124, .48);
 
   /* 主色（单一来源，派生 hover/pressed） */
-  --accent: #a84f35;
-  --accent-hover: #923f2a;
-  --accent-pressed: #7d3524;
-  --on-accent: #fffaf5;
+  --accent: #31546b;
+  --accent-hover: #264358;
+  --accent-pressed: #1e3547;
+  --on-accent: #ffffff;
   --accent-2: #4f746c;
   --green: #47734d;
   --red: #b4473f;
-  --accent-soft: rgba(168, 79, 53, .10);
+  --accent-soft: rgba(49, 84, 107, .10);
   --accent-2-soft: rgba(79, 116, 108, .10);
   --green-soft: rgba(71, 115, 77, .10);
   --red-soft: rgba(180, 71, 63, .09);
@@ -60,7 +59,7 @@
   --dur-slow: 350ms;
 
   --accent-dim: rgba(79, 116, 108, .12);  /* 阅读器选中背景 */
-  --text-muted: #81766b;
+  --text-muted: #65737c;
 
   --radius: 14px;
   --radius-sm: 10px;
@@ -165,7 +164,7 @@ html:has(body.manga-page), body.manga-page { overflow-x: clip; }
 }
 .btn:hover { border-color: var(--accent-2); background: var(--bg-elevated); box-shadow: 0 3px 10px rgba(66,48,31,.07); }
 .btn:active { transform: translateY(1px); }
-.btn.primary { background: var(--accent); color: #fffaf5; border: 1px solid var(--accent); font-weight: 650; }
+.btn.primary { background: var(--accent); color: var(--on-accent); border: 1px solid var(--accent); font-weight: 650; }
 .btn.primary:hover { filter: brightness(1.08); }
 .btn.danger { border-color: rgba(224,92,92,.5); color: var(--red); background: rgba(224,92,92,.08); }
 .btn.danger:hover { background: rgba(224,92,92,.16); }
@@ -660,7 +659,7 @@ html:has(body.manga-page), body.manga-page { overflow-x: clip; }
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .src-picker-sub { font-size: .8rem; color: var(--text-dim); margin: 4px 0 10px; }
 .src-picker-btn { display: block; width: 100%; text-align: left; padding: 12px 14px; margin-bottom: 6px;
-  background: var(--bg, #f5f1e9); color: var(--text); border: 1px solid var(--border);
+  background: var(--bg, #ffffff); color: var(--text); border: 1px solid var(--border);
   border-radius: 10px; font-size: .92rem; cursor: pointer; min-height: 44px; }
 .src-picker-btn:hover { border-color: var(--accent-2); color: var(--accent-2); }
 .src-picker-btn.cancel { color: var(--text-dim); }
@@ -1122,7 +1121,7 @@ html {
 .manga-card .cover-wrap { position: relative; aspect-ratio: 3/4; background: var(--bg-base); overflow: hidden; }
 .manga-card .cover-wrap img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .manga-card .cover-wrap img.error { opacity: 0; }
-.fav-unread-badge { position: absolute; top: 6px; left: 6px; z-index: 2; padding: 3px 6px; border-radius: 6px; background: var(--accent); color: #fffaf5; font-size: .68rem; font-weight: 700; line-height: 1.2; }
+.fav-unread-badge { position: absolute; top: 6px; left: 6px; z-index: 2; padding: 3px 6px; border-radius: 6px; background: var(--accent); color: var(--on-accent); font-size: .68rem; font-weight: 700; line-height: 1.2; }
 .fav-open-link { display: block; color: inherit; text-decoration: none; }
 .fav-open-link:focus-visible { outline: 3px solid var(--accent); outline-offset: -3px; }
 .fav-remove-btn { display: block; width: calc(100% - 16px); margin: 0 8px 8px; min-height: 44px; padding: 7px 10px; border: 1px solid var(--border); border-radius: 7px; background: transparent; color: var(--text-dim); font-size: .76rem; cursor: pointer; }
@@ -1144,7 +1143,7 @@ html {
 }
 #manga-pager button:hover:not(:disabled) { background: var(--bg-hover); color: var(--text); }
 #manga-pager button:disabled { opacity: .35; cursor: not-allowed; }
-#manga-pager .pager-num.active { background: var(--accent); border-color: var(--accent); color: #fffaf5; font-weight: 600; }
+#manga-pager .pager-num.active { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
 #manga-pager .pager-dots { color: var(--text-disabled); padding: 0 4px; }
 /* 手机端翻页布局：上一页/下一页占整行大按钮，页码独立一行居中 */
 @media (max-width: 768px) {

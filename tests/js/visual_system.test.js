@@ -17,6 +17,7 @@ const tasks = fs.readFileSync(path.join(root, 'templates/tasks.html'), 'utf8');
 const mangaSearch = fs.readFileSync(path.join(root, 'templates/manga.html'), 'utf8');
 const home = fs.readFileSync(path.join(root, 'templates/index.html'), 'utf8');
 const login = fs.readFileSync(path.join(root, 'templates/login.html'), 'utf8');
+const design = JSON.parse(fs.readFileSync(path.join(root, 'design/v3-design-system.json'), 'utf8')).tokens;
 
 const webTokens = {
   '--bg-base': 'bg',
@@ -40,14 +41,31 @@ for (const [webToken, androidToken] of Object.entries(webTokens)) {
     `${webToken} must match Android ${androidToken}`);
 }
 
-assert.match(css, /--bg-base:\s*#f5f1e9/i,
-  'daily-use screens use a warm paper canvas rather than a dark control-panel background');
+for (const [token, name] of Object.entries({
+  '--bg-base': 'background', '--bg-elevated': 'surface', '--text-primary': 'ink',
+  '--text-secondary': 'secondary_text', '--accent': 'accent', '--border': 'divider',
+})) {
+  assert.equal(css.match(new RegExp(`${token}:\\s*(#[0-9a-fA-F]{6})\\b`))[1].toLowerCase(),
+    design[name].toLowerCase(), `${token} must follow the versioned 3.0 design direction`);
+}
+function luminance(hex) {
+  const [r, g, b] = hex.replace('#', '').match(/../g).map(v => parseInt(v, 16) / 255)
+    .map(v => v <= .04045 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4);
+  return r * .2126 + g * .7152 + b * .0722;
+}
+function contrast(a, b) {
+  const values = [luminance(a), luminance(b)].sort((a, b) => b - a);
+  return (values[0] + .05) / (values[1] + .05);
+}
+for (const foreground of [design.ink, design.secondary_text, design.accent]) {
+  assert.ok(contrast(foreground, design.background) >= 4.5,
+    `${foreground} normal-size text must meet 4.5:1 on the daily-use canvas`);
+}
+assert.ok(contrast('#ffffff', design.accent) >= 4.5, 'primary action text must remain readable');
 assert.match(theme, /lightColorScheme\(/,
   'Android and Web share the editorial light surface by default');
-assert.match(css, /--accent:\s*#a84f35/i,
-  'primary actions use a restrained terracotta accent');
-assert.match(css, /--on-accent:\s*#fffaf5/i,
-  'primary action foreground is explicit and readable on terracotta');
+assert.match(css, /--on-accent:\s*#ffffff/i,
+  'primary action foreground is explicit and readable on slate blue');
 
 assert.match(css, /--fs-base:\s*15px/, 'web reading and control text must not fall back to dense 14px base');
 assert.match(css, /\.topbar\s*\{[^}]*background:[^;]*var\(--bg-elevated\)/s,
@@ -66,8 +84,8 @@ assert.match(css, /\.status-badge--done[\s\S]*?var\(--green-soft\)/,
   'library completion badges must use shared semantic status tokens');
 assert.doesNotMatch(css, /\.status-badge[^\n]*#(?:2563eb|dc2626|2d7d46)/i,
   'library status colors must not revert to hard-coded dashboard colors');
-assert.match(novelDetail, /\.fn-continue\s*\{[^}]*color:#fffaf5/s,
-  'novel detail primary action must retain readable text on the new terracotta surface');
+assert.match(novelDetail, /\.fn-continue\s*\{[^}]*color:var\(--on-accent\)/s,
+  'novel detail primary action must use the shared readable foreground token');
 assert.match(novelDetail, /\.chap-sec\s*\{[^}]*border:1px solid var\(--border\)/s,
   'novel detail chapter list must use the shared paper surface and border');
 assert.doesNotMatch(novelDetail, /#(?:1c2230|9b7bd6)|rgba\(232,179,75/i,

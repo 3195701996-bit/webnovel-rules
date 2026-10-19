@@ -1,13 +1,15 @@
 {
-  "status": "concept_direction_not_implemented_or_user_approved",
+  "status": "shared_color_foundation_implemented_full_layout_and_release_pending_not_user_approved",
   "target_version": "3.0.0",
   "purpose": "Consumer reading app and responsive Web; not a diagnostics dashboard",
   "tokens": {
     "background": "#FFFFFF",
     "surface": "#FFFFFF",
+    "surface_variant": "#F4F7F9",
     "ink": "#202A30",
     "secondary_text": "#65737C",
     "accent": "#31546B",
+    "on_accent": "#FFFFFF",
     "divider": "#E6EBEE",
     "spacing_logical_px": [4, 8, 12, 16, 24, 32],
     "control_min_height_logical_px": 44,

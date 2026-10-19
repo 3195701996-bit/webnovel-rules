@@ -60,18 +60,18 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
- * 纸感浅色设计体系：暖纸底、墨色正文、陶土主色与鼠尾草辅助色；
+ * 3.0 阅读优先设计基础：白色表面、墨色正文、蓝灰主色；
  * 和桌面 Web 共用同一组语义色，阅读图片仍按漫画原图呈现。
  */
 object WnColors {
-    val bg = Color(0xFFF5F1E9)
-    val surface = Color(0xFFFBF8F2)
-    val surfaceVar = Color(0xFFFFFDF9)
-    val ink = Color(0xFF29251F)
-    val inkDim = Color(0xFF70665B)
-    val line = Color(0xFFE3D9CC)
-    val accent = Color(0xFFA84F35)
-    val onAccent = Color(0xFFFFFAF5)
+    val bg = Color(0xFFFFFFFF)
+    val surface = Color(0xFFFFFFFF)
+    val surfaceVar = Color(0xFFF4F7F9)
+    val ink = Color(0xFF202A30)
+    val inkDim = Color(0xFF65737C)
+    val line = Color(0xFFE6EBEE)
+    val accent = Color(0xFF31546B)
+    val onAccent = Color(0xFFFFFFFF)
     val danger = Color(0xFFB4473F)
     val ok = Color(0xFF47734D)
     val info = Color(0xFF4F746C)
