@@ -98,3 +98,23 @@ def test_harness_keeps_real_force_stop_outside_instrumentation():
             "persistedFullStorageFailureResumesAfterColdAppStart")
     assert 'getString("enospcHarness") == "1"' in source
     assert script.count("-e enospcHarness 1") == 2
+
+
+def test_cold_recovery_requires_ui_and_persisted_completion_evidence():
+    script = HARNESS.read_text(encoding="utf-8")
+    for marker in ("enospcUiReason=PASS", "enospcUiResume=PASS",
+                   "enospcCompleted=PASS done"):
+        assert f'"INSTRUMENTATION_STATUS: {marker}"' in script
+    source = (ROOT / "android/app/src/androidTest/java/com/webnovel/mobile/"
+              "DownloadResilienceTest.kt").read_text(encoding="utf-8")
+    recovery = source.split("fun persistedFullStorageFailureResumesAfterColdAppStart()", 1)[1]
+    recovery = recovery.split("private suspend fun taskStatus", 1)[0]
+    assert 'saved.optString("status") == "done"' in recovery
+    assert 'images().size == total' in recovery
+    assert 'hasAnyAncestor(hasTestTag("task_card_$key"))' in recovery
+    assert 'performScrollTo().assertIsDisplayed()' in recovery
+    assert '.assertIsEnabled().performClick()' in recovery
+    # External network failure is a failed mandatory acceptance run, not evidence
+    # of successful recovery. The entry guard may still skip ordinary test runs.
+    after_resume = recovery.split('reportEvidence("enospcUiResume"', 1)[1]
+    assert "assumeTrue" not in after_resume

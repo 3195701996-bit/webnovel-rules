@@ -403,7 +403,7 @@ private fun TaskCard(
     onStop: (() -> Unit)?,
     onDelete: (() -> Unit)? = null,
 ) {
-    WnHairlineCard {
+    WnHairlineCard(modifier = Modifier.testTag("task_card_${if (t.isManga) t.mangaKey else t.id}")) {
         Column(Modifier.padding(WnSpace.md)) {
             Text(t.title.ifBlank { t.id }, style = MaterialTheme.typography.bodyMedium,
                  maxLines = 2, overflow = TextOverflow.Ellipsis)

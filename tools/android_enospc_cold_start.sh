@@ -92,7 +92,10 @@ if ! "${adb_cmd[@]}" shell am instrument -w -r \
   exit 1
 fi
 for evidence in "INSTRUMENTATION_STATUS: enospcRecovered=PASS error" \
-                "INSTRUMENTATION_STATUS: enospcResumed=PASS" "OK (1 test)"; do
+                "INSTRUMENTATION_STATUS: enospcUiReason=PASS" \
+                "INSTRUMENTATION_STATUS: enospcUiResume=PASS" \
+                "INSTRUMENTATION_STATUS: enospcResumed=PASS" \
+                "INSTRUMENTATION_STATUS: enospcCompleted=PASS done" "OK (1 test)"; do
   if ! grep -Fq "$evidence" "$phase2_log"; then
     cat "$phase2_log" >&2
     echo "阶段 2 缺少证据：$evidence" >&2

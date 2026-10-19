@@ -6,6 +6,12 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.hasTestTag
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.LargeTest
 import androidx.test.platform.app.InstrumentationRegistry
@@ -308,24 +314,45 @@ class DownloadResilienceTest {
         reportEvidence("enospcUiReason", "PASS 下载中心显示真实存储错误和继续指引")
 
         val before = images().size
-        rule.onAllNodesWithTag("task_resume").let { buttons ->
-            buttons[buttons.fetchSemanticsNodes().lastIndex].performClick()
-        }
+        val resumeButton = hasTestTag("task_resume") and
+            hasAnyAncestor(hasTestTag("task_card_$key"))
+        rule.onAllNodes(resumeButton).assertCountEquals(1)
+        rule.onAllNodes(resumeButton)[0].performScrollTo().assertIsDisplayed()
+            .assertIsEnabled().performClick()
+        rule.waitForIdle()
         reportEvidence("enospcUiResume", "PASS 已从下载中心点击继续")
-        var progressed = false
+        var completed = false
+        var resumeObserved = false
         var latest = JSONObject()
-        for (attempt in 0 until 90) {
-            if (images().size > before) { progressed = true; break }
+        for (attempt in 0 until 180) {
+            rule.mainClock.advanceTimeByFrame()
+            rule.waitForIdle()
             latest = taskStatus(ep.port)
-            if (latest.optString("status") == "error") {
-                assumeTrue("冷启动后恢复失败属于外部源/网络问题：" +
-                    latest.optString("error").take(100), false)
+            // Compose launches the resume HTTP request asynchronously. A GET
+            // immediately after performClick may still return the persisted old
+            // error. Allow a bounded dispatch window, never a skipped success.
+            if (latest.optString("status") != "error") resumeObserved = true
+            if (latest.optString("status") == "done") {
+                completed = true
+                break
             }
+            assertTrue("冷启动续传失败，不能作为通过或跳过：" +
+                latest.optString("error").take(160), latest.optString("status") != "error" ||
+                (!resumeObserved && attempt < 10 &&
+                    latest.optString("error") == recovered.optString("error")))
             delay(1000)
         }
-        assertTrue("重新启动后的同一任务应继续下载（状态 ${latest.optString("status")}）",
-            progressed)
+        assertTrue("重新启动后的同一任务应完整下载（状态 ${latest.optString("status")}）",
+            completed)
+        val total = latest.optInt("images_total")
+        assertTrue("完成任务必须具有图片总数", total > 0)
+        assertTrue("完成任务的图片计数必须与落盘文件一致",
+            latest.optInt("images_done") == total && images().size == total)
+        assertTrue("恢复后必须新增图片，不能只复用故障前状态", images().size > before)
+        val saved = JSONObject(taskFile.readText(Charsets.UTF_8)).getJSONObject(key)
+        assertTrue("完成状态必须持久化", saved.optString("status") == "done")
         reportEvidence("enospcResumed", "PASS ${images().size} 张有效图片")
+        reportEvidence("enospcCompleted", "PASS done $total 张，完成状态已落盘")
     }
 
     private suspend fun taskStatus(port: Int): JSONObject {
