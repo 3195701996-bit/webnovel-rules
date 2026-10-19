@@ -1466,23 +1466,41 @@ internal fun BrowseScreen(gateway: EngineGateway, ep: EngineEndpoint,
                         scope.launch {
                             busy = true
                             msg = "正在启动漫画源验证…"
+                            try {
                             val start = gateway.httpPost(ep.port, "/api/manga/sources/verify",
                                 org.json.JSONObject().put("limit", 4).toString())
-                            val already = runCatching {
-                                org.json.JSONObject(start.body).optBoolean("already_running")
-                            }.getOrDefault(false)
+                            val startBody = runCatching { org.json.JSONObject(start.body) }.getOrNull()
+                            if (start.code != 202 && start.code != 200) {
+                                msg = "启动失败：HTTP ${start.code}，可重试"
+                                return@launch
+                            }
+                            val already = startBody?.opt("already_running") == true
+                            if (startBody?.opt("started") != true && !already) {
+                                msg = "启动响应无效，未确认验证已启动，可重试"
+                                return@launch
+                            }
                             if (already) {
                                 msg = "已有一轮验证在跑，跟随它的进度"
-                            } else if (start.code != 202 && start.code != 200) {
-                                msg = "启动失败：HTTP ${start.code} ${start.body.take(80)}"
                             }
                             var done = false
                             for (i in 0 until 150) {
                                 kotlinx.coroutines.delay(2000)
                                 val st = gateway.httpText(ep.port, "/api/manga/sources/verify/status")
+                                if (st.code !in 200..299) {
+                                    msg = "读取验证进度失败：HTTP ${st.code}；后台可能仍在运行，可重试查看"
+                                    return@launch
+                                }
                                 val o = runCatching {
                                     org.json.JSONObject(st.body)
-                                }.getOrNull() ?: continue
+                                }.getOrNull()
+                                val validCounts = o?.opt("done") is Number && o.opt("total") is Number &&
+                                    o.optInt("done", -1) >= 0 && o.optInt("total", -1) >= o.optInt("done")
+                                if (o == null || o.optString("status") !in listOf("running", "error", "done") ||
+                                    (o.optString("status") != "error" && !validCounts) ||
+                                    (o.optString("status") == "done" && o.optInt("done") != o.optInt("total"))) {
+                                    msg = "验证进度响应无效，未确认完成；可重试查看"
+                                    return@launch
+                                }
                                 val s2 = o.optString("status")
                                 if (s2 == "running") {
                                     msg = "验证中 ${o.optInt("done")}/${o.optInt("total")}：" +
@@ -1491,16 +1509,21 @@ internal fun BrowseScreen(gateway: EngineGateway, ep: EngineEndpoint,
                                 }
                                 if (s2 == "error") {
                                     msg = "验证异常：${o.optString("error")}"
-                                    done = true
-                                    break
+                                    return@launch
                                 }
                                 done = true
                                 break
                             }
                             if (!done) msg = "验证仍在后台进行（可稍后刷新）"
-                            busy = false
                             reload()
-                            if (done) msg = (msg ?: "") + " · 结果已更新"
+                            if (done) msg = "本轮验证已完成，结果已更新；各源是否可用请查看实测结论"
+                            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                                throw cancelled
+                            } catch (_: Exception) {
+                                msg = "验证连接中断，未确认完成；可重试查看"
+                            } finally {
+                                busy = false
+                            }
                         }
                     },
                     enabled = !busy,

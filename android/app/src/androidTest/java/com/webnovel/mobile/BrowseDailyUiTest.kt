@@ -21,6 +21,7 @@ class BrowseDailyUiTest {
     private lateinit var server: ServerSocket
     private val gets = AtomicInteger()
     private val writes = AtomicInteger()
+    private val statusGets = AtomicInteger()
     private var opened: Dest? = null
     private var back = false
 
@@ -32,7 +33,9 @@ class BrowseDailyUiTest {
     @After fun cleanup() { if (::server.isInitialized) server.close() }
     private fun texts(value: String) = rule.onAllNodesWithText(value, substring = true).fetchSemanticsNodes().size
 
-    private fun open(diagnostics: Boolean) {
+    private fun open(diagnostics: Boolean, startCode: Int = 202,
+                     startBody: String = """{"started":true}""",
+                     statusBody: String = """{"status":"done","done":1,"total":1}""") {
         server = ServerSocket(0, 10, InetAddress.getByName("127.0.0.1"))
         Thread {
             while (!server.isClosed) {
@@ -42,9 +45,13 @@ class BrowseDailyUiTest {
                         val request = input.readLine().orEmpty()
                         while (!input.readLine().isNullOrEmpty()) { }
                         if (request.startsWith("GET ")) gets.incrementAndGet() else writes.incrementAndGet()
-                        val body = """{"sources":[{"key":"fixture","name":"隔离测试源","status":"supported","reason":"测试依赖说明"}]}""".toByteArray()
+                        val isStatus = request.contains("/verify/status")
+                        if (isStatus) statusGets.incrementAndGet()
+                        val code = if (request.startsWith("POST ")) startCode else 200
+                        val body = (if (request.startsWith("POST ")) startBody else if (isStatus) statusBody else
+                            """{"sources":[{"key":"fixture","name":"隔离测试源","status":"supported","reason":"测试依赖说明"}]}""").toByteArray()
                         socket.getOutputStream().apply {
-                            write("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: ${body.size}\r\nConnection: close\r\n\r\n".toByteArray())
+                            write("HTTP/1.1 $code Response\r\nContent-Type: application/json\r\nContent-Length: ${body.size}\r\nConnection: close\r\n\r\n".toByteArray())
                             write(body); flush()
                         }
                     }
@@ -83,5 +90,40 @@ class BrowseDailyUiTest {
         assertEquals(0, writes.get())
         rule.onNodeWithTag("manga_diagnostics_back").performClick()
         rule.runOnIdle { assertTrue(back) }
+    }
+
+    private fun runCheck() {
+        rule.waitUntil(10_000) { texts("隔离测试源") > 0 }
+        rule.onAllNodesWithText("实测下一批漫画源")[0].performScrollTo().performClick()
+    }
+    @Test fun failedStartDoesNotPollAndCanRetry() {
+        open(true, startCode = 503)
+        runCheck()
+        rule.waitUntil(10_000) { texts("启动失败：HTTP 503") > 0 }
+        assertEquals(0, statusGets.get())
+        runCheck()
+        rule.waitUntil(10_000) { writes.get() == 2 && texts("实测下一批漫画源") > 0 }
+        assertEquals(0, statusGets.get())
+    }
+    @Test fun invalidSuccessfulStartDoesNotPoll() {
+        open(true, startBody = "{}")
+        runCheck()
+        rule.waitUntil(10_000) { texts("启动响应无效") > 0 }
+        assertEquals(0, statusGets.get())
+        assertEquals(0, texts("结果已更新"))
+    }
+    @Test fun unknownStatusIsNotCompletion() {
+        open(true, statusBody = "{}")
+        runCheck()
+        rule.waitUntil(10_000) { texts("验证进度响应无效") > 0 }
+        assertEquals(1, statusGets.get())
+        assertEquals(0, texts("结果已更新"))
+    }
+    @Test fun completedRoundDoesNotClaimAllSourcesWork() {
+        open(true)
+        runCheck()
+        rule.waitUntil(10_000) { texts("各源是否可用请查看实测结论") > 0 }
+        assertEquals(1, writes.get())
+        assertEquals(1, statusGets.get())
     }
 }
