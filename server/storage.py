@@ -26,7 +26,7 @@ from server.state import load_book_state
 CATEGORIES = [
     {"key": "novel_books", "label": "小说正文缓存",
      "kind": "user_data", "regenerable": False,
-     "note": "已下载的小说章节，删了要重新联网抓；不在书中时不影响书架与阅读进度"},
+     "note": "包含小说章节、TXT与清洗前原文存档；整本移入回收站时存档随书移动，清空回收站后无法恢复；重新下载不能等价恢复原文"},
     {"key": "manga_downloads", "label": "漫画已下载（离线阅读）",
      "kind": "user_data", "regenerable": False,
      "note": "离线阅读用的图片；删除后需重新下载才能离线看"},
@@ -220,7 +220,7 @@ BACKUP_INCLUDE = [
     {"what": "漫画书库、阅读历史与收藏", "why": "保留本地作品清单、阅读位置及追更/未读基准"},
 ]
 BACKUP_EXCLUDE = [
-    {"what": "小说正文缓存", "why": "可以从书源重新下载",
+    {"what": "小说正文缓存、原始TXT与清洗前原文存档", "why": "不在配置备份范围；清洗前原文存档不可由重新下载等价恢复，请另行保留所需原文",
      "category": "novel_books"},
     {"what": "漫画已下载图片", "why": "可以从源站重新下载；体积最大",
      "category": "manga_downloads"},
@@ -269,7 +269,7 @@ def backup_scope():
         "exclude_detail": {c["category"]: by.get(c["category"], 0)
                            for c in BACKUP_EXCLUDE},
         "excluded_total_bytes": sum(by.get(c["category"], 0) for c in BACKUP_EXCLUDE),
-        "note": "备份是配置与进度，不是离线全文副本；正文与图片请用「离线阅读」功能。",
+        "note": "备份是配置与进度，不是离线全文副本；不含正文、图片、原始TXT与清洗前原文存档。需要保留的文本请另行导出；离线阅读不等于备份。",
     }
 
 

@@ -135,6 +135,11 @@ def test_backup_scope_lists_include_and_exclude(client):
     exc = " ".join(e["what"] for e in d["exclude"])
     assert "书源" in inc and "阅读进度" in inc and "漫画书库" in inc and "收藏" in inc
     assert "正文" in exc and "漫画已下载" in exc
+    assert "原始TXT" in exc and "清洗前原文存档" in exc
+    novel_excluded = [e for e in d["exclude"] if e["category"] == "novel_books"]
+    assert len(novel_excluded) == 1  # 存档已包含在小说占用中，不重复累计体积
+    assert "不可由重新下载等价恢复" in novel_excluded[0]["why"]
+    assert "离线阅读不等于备份" in d["note"]
     # 每条"不含"都要给理由（否则用户不知道删了会不会丢东西）
     for e in d["exclude"]:
         assert e["why"] and e["category"]

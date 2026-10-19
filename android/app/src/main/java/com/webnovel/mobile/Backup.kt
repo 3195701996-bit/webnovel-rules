@@ -282,7 +282,7 @@ object Backup {
         "manga/_favorites.json（漫画收藏与更新基准）",
     )
     private val EXCLUDES = listOf(
-        "书籍正文缓存（可从书源重新下载）",
+        "书籍正文缓存、原始TXT与清洗前原文存档（不在配置备份内；存档不可由重新下载等价恢复）",
         "漫画已下载图片（可从源站重新下载，体积最大）",
         "临时缓存与日志（可再生）",
         "回收站内容（已删除的东西）",
@@ -399,7 +399,7 @@ object Backup {
                 put("includes", JSONArray(INCLUDES))
                 put("excludes", JSONArray(EXCLUDES))
                 put("note", "备份是配置与进度，不是离线全文副本；" +
-                    "书籍正文与漫画图片不在备份内，可重新下载。")
+                    "不含正文、图片、原始TXT与清洗前原文存档；需要保留的文本请另行导出，离线阅读不等于备份。")
             })
             put("entries", JSONArray().apply {
                 snapshots.forEach { snapshot ->

@@ -1017,8 +1017,9 @@ fun BackupScreen(
             WnSectionHeader("备份内容")
             Text(
                 "书源配置与启用状态、小说阅读进度、漫画书库、阅读历史与收藏。\n" +
-                    "不含书籍正文与漫画图片：这些体积大且可以从书源重新下载，" +
-                    "因此备份文件很小，也不等于『离线可读的全库副本』。",
+                    "不含正文、漫画图片、原始TXT与清洗前原文存档。\n" +
+                    "清洗前存档不能靠重新下载等价恢复；需要保留的文本请另行导出。" +
+                    "离线阅读不等于备份，这也不是『离线可读的全库副本』。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
