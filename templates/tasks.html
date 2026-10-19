@@ -295,8 +295,10 @@ function bindTaskButtons(box) {
     try {
       if (b.dataset.manga) {
         // 漫画任务：继续下载（图片缓存命中=断点续传）
-        await requestJSON('/api/manga/download/resume?source=' + b.dataset.src + '&cid=' + b.dataset.cid, {method: 'POST', button: b});
-        toast('已开始继续下载', 'ok');
+        const result = await requestJSON('/api/manga/download/resume?source=' + encodeURIComponent(b.dataset.src) + '&cid=' + b.dataset.cid, {method: 'POST', button: b});
+        if (result.ok === true && result.resumed === true) toast('已请求继续下载', 'ok');
+        else if (result.ok === true && result.reason === 'no_task') toast('任务记录已不存在，未启动下载；请从漫画详情重新选择章节', 'error');
+        else toast('未确认恢复下载，请刷新任务后重试', 'error');
       } else {
         await requestJSON('/api/tasks/' + b.dataset.id + '/resume', {method: 'POST', button: b});
         toast('已请求启动', 'ok');

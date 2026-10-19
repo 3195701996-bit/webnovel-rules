@@ -6,6 +6,13 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DownloadTaskSectionsTest {
+    @Test fun resumeFeedbackRequiresConfirmedStateTransition() {
+        assertEquals("已请求继续：测试", mangaResumeMessage("测试", true, true, ""))
+        assertTrue(mangaResumeMessage("测试", true, false, "no_task").contains("任务记录已不存在，未启动下载"))
+        assertTrue(mangaResumeMessage("测试", true, false, "no_task").contains("重新选择章节"))
+        assertTrue(mangaResumeMessage("测试", false, true, "").startsWith("未确认"))
+        assertTrue(mangaResumeMessage("测试", true, false, "").startsWith("未确认"))
+    }
     private fun task(id: String, status: String = "done", running: Boolean = false) =
         EngineData.TaskItem(id, "manga", id, status, running, 1, 1, "", 0.0, 0.0, "", id)
 

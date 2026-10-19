@@ -9,6 +9,13 @@ internal data class DownloadTaskSections(
 internal fun EngineData.TaskItem.needsDownloadRefresh(): Boolean =
     running || status == "queued" || status == "cancel"
 
+internal fun mangaResumeMessage(title: String, accepted: Boolean, resumed: Boolean, reason: String): String =
+    when {
+        accepted && resumed -> "已请求继续：$title"
+        accepted && reason == "no_task" -> "任务记录已不存在，未启动下载；请从漫画详情重新选择章节：$title"
+        else -> "未确认恢复下载，请刷新任务后重试：$title"
+    }
+
 /** Preserve every server record and its order, with exactly one actionable section. */
 internal fun downloadTaskSections(tasks: List<EngineData.TaskItem>): DownloadTaskSections {
     val running = mutableListOf<EngineData.TaskItem>()

@@ -329,8 +329,13 @@ private suspend fun doAction(
         val path = "/api/manga/download/$action?source=${android.net.Uri.encode(t.mangaSource)}" +
             "&cid=${android.net.Uri.encode(t.mangaComicId)}"
         val r = gateway.httpPost(ep.port, path)
+        if (r.ok && action == "resume") {
+            val result = runCatching { org.json.JSONObject(r.body) }.getOrNull()
+            return mangaResumeMessage(t.title, result?.opt("ok") == true,
+                result?.opt("resumed") == true, result?.optString("reason").orEmpty())
+        }
         return if (r.ok) "已请求${if (action == "pause") "暂停" else "继续"}：${t.title}"
-        else "操作失败：HTTP ${r.code}"
+        else "操作失败：HTTP ${r.code} ${r.body.take(160)}"
     }
     val r = gateway.httpPost(ep.port, "/api/tasks/${android.net.Uri.encode(t.id)}/$action")
     return if (r.ok) "已请求${when (action) {

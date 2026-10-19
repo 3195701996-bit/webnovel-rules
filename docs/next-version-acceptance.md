@@ -507,6 +507,10 @@
 
 ### Web 阅读版 TXT 导出验收（未发布）
 
+- 下载操作检查发现App/Web把漫画resume接口HTTP200当恢复成功，忽略resumed:false/reason:no_task；两端改为仅ok===true且resumed===true才提示已请求继续，任务缺失明示未启动并引导详情重新选章，其他异常响应要求刷新。App HTTP失败保留有界响应原因。新增纯JVM反馈分支与JS实际回调回归，包含预编码百分号ID不得二次编码。
+- 按frontend-testing-debugging技能，Browser plugin不可用，沿用现有Python Playwright/系统Chrome；隔离真实LocalServer，任务列表仅用合成过期任务响应，resume请求不拦截，实际服务返回no_task。1280×900/390×844从下载页点击启动，明确未启动提示出现、无成功提示、按钮恢复可用、请求cid百分号一次编码、无console/pageerror与横溢。页面身份/非空/无错误覆盖通过，截图/private/tmp/webnovel-task-resume-{1280,390}.png已查看，浏览器和服务关闭；未改用户任务。
+- 41组JS及Android Release JVM通过（12秒），diff通过。未重新打包/安装，本修复不在冻结rc13-d1aefed7.apk中；未实际验证原生提示视觉或断网续传图片闭环，不当作下载验收全完成。
+
 - 内部rc13/code172从干净提交d1aefed726ac0d8fd6ec5395d45c29c74a82b925构建，Release JVM与APK23秒成功；只读发布校验器通过同包名、递增版本码、clean精确SHA及与rc12同签名。冻结主机文件/private/tmp/webnovel-iqoo-inspect-gs7YcH/rc13-d1aefed7.apk，SHA256 b38ae6bf9e075eca1f6eebe6e165dc28b2c6c432ed15939924c18ecebed9a74e；证书141ec0bef7e49d1b9b31aae3af65da2be2d124eb98641d096d53ecc86a4a93b4。APK内全部Web资源与源码一致。
 - d1aefed7已推送开发分支，不是公开Release。安装前只读检查发现iQOO设备10AD7B1GP8001BR已从USB消失，因此未安装候选，也未作数据保留/真机链路完成结论；已非阻塞请求重连，继续其他工作，不改VPN、不绕过锁屏。3.0正式发布和远端CI通过门仍开放。
 
