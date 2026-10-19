@@ -304,3 +304,10 @@
 - 从应用章节核对信息确认当前在线目录的第42话 `be6236cb-c985-11f1-80bc-fa163e02432f` 已为downloaded=true、partial=false；此前为未下载。当前60项目录均显示已下载。此证据证明本次续传及章节下载状态恢复，不证明原失败根因，也未逐张检查真机媒体解码，未按同名删除旧文件。
 - 发现原生下载中心统计完整已结束数量，却仅渲染finished.take(20)，新完成漫画可能位于旧小说记录之后而不可见。移除截断，保留LazyColumn按需组合；抽取单遍分组，让running标记优先于旧paused状态，避免同一任务出现在两个分区。新增46条记录完整保留及互斥分组单元测试；Android Debug全套单元通过。尚未将本次界面修复安装真机或公开发布。
 - 证据目录沿用 `/private/tmp/webnovel-iqoo-inspect-gs7YcH`：retry-current.png、retry-result.png、after-retry-detail.png、after-retry-catalog.xml。仅清理本次生成的手机临时截图和UI XML，主机证据保留；未删除用户漫画、诊断报告或其他下载文件。
+
+### 3.0.0范围确认后的集成候选
+
+- 用户将最终目标明确为全项目3.0.0，要求bug收敛后继续新功能及UI升级；新发布门记入升级计划，历史版本证据不充作3.0.0验收。
+- 从clean提交 `ab792addf3adbf41feaa127116313e4a78fd094e` 构建2.1.0-rc9／168集成候选，包含af507dfe下载中心修复与12a54d49同名身份提示；与旧48e759e1的rc9是不同资产，分别保留，不替换其历史证据。新APK SHA256 `0174f3edde9e22c275bf91900d15e9716d9b178ad92d9c7a904556f7a683327f`，主机文件 `rc9-ab792add.apk`，校验正式证书、完整SHA、clean状态和较rc8递增版本码通过。
+- Release全套单元、正式APK及Release instrumentation构建通过；完整Python **1918 passed／2 skipped（141.12秒）**、34个JS回归、两类接口契约0问题、HTTP冒烟20/20通过。未运行instrumentation至用户手机。
+- 按此前保留数据覆盖授权发起adb install -r，vivo停留在外部来源风险确认页，已请用户手动确认。此时安装进程尚未返回成功，手机最后核对仍rc8／167，不能声明新包已装好、界面已实测或最终发布完成；未修改安全设置。
