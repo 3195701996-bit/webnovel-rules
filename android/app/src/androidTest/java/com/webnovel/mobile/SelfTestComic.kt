@@ -201,6 +201,11 @@ class SelfTestComic(
     fun imageSize(chapterId: String, idx: Int): Long =
         File(comicDir, chapterId + "/" + String.format("%04d.jpg", idx)).length()
 
+    fun imageDigest(chapterId: String, idx: Int): String =
+        java.security.MessageDigest.getInstance("SHA-256").digest(
+            File(comicDir, chapterId + "/" + String.format("%04d.jpg", idx)).readBytes())
+            .joinToString("") { "%02x".format(it.toInt() and 255) }
+
     /** Convert only this UUID fixture's first unit into an incomplete volume. */
     fun makeFirstUnitPartialVolume() {
         fun convert(info: JSONObject, splitVolumes: Boolean) {

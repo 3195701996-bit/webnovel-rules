@@ -190,6 +190,61 @@ class Release203RegressionTest {
         assertTrue("选择与取消不得改变本地图片字节", before == c.mediaDigest())
     }
 
+    @Test fun localMediaManagerCanDeletePartialVolumeWithoutChangingReadingHistory() {
+        connect()
+        val c = SelfTestComic(resumeAtChapter = 2).also { comic = it; it.create(); it.makeFirstUnitPartialVolume() }
+        val added = runBlocking { gateway.httpPost(endpoint.port, "/api/manga/favorites",
+            JSONObject().put("source", c.sourceKey).put("comic_id", c.comicIdValue)
+                .put("title", SelfTestComic.TITLE).toString()) }
+        assertTrue(added.ok)
+        val keptSize = c.imageSize(SelfTestComic.CH2_ID, 0)
+        val keptDigest = c.imageDigest(SelfTestComic.CH2_ID, 0)
+        val before = c.mediaDigest()
+        val local = runBlocking { gateway.httpText(endpoint.port, c.detailUrl) }
+        assertTrue(EngineData.mangaDetail(local.body)!!.readingChapters.none { it.id == SelfTestComic.CH1_ID })
+        rule.openCachedShelf()
+        val tag = "manga_cached:${c.sourceKey}:${c.comicIdValue}"
+        rule.waitUntil(60_000) { rule.onAllNodesWithTag(tag).fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithTag(tag).performClick()
+        rule.waitUntil(30_000) { rule.onAllNodesWithTag("manga_detail_more").fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithTag("manga_detail_list").performScrollToNode(hasTestTag("manga_detail_more"))
+        rule.onNodeWithTag("manga_detail_more").performClick()
+        rule.onNodeWithTag("manage_local_media").performClick()
+        rule.waitUntil(30_000) { rule.onAllNodesWithTag("local_media_pick_${SelfTestComic.CH1_ID}").fetchSemanticsNodes().isNotEmpty() }
+        if (InstrumentationRegistry.getArguments().getString("captureLocalMediaUi") == "true") {
+            rule.mainClock.advanceTimeBy(600)
+            rule.waitForIdle()
+            android.os.SystemClock.sleep(250)
+            val output = InstrumentationRegistry.getInstrumentation().uiAutomation
+                .executeShellCommand("screencap -p /sdcard/Download/webnovel-local-media-qa.png")
+            android.os.ParcelFileDescriptor.AutoCloseInputStream(output).use { it.readBytes() }
+        }
+        rule.onNodeWithTag("local_media_select_all").performClick()
+        rule.onNodeWithText("删除选中（2）").assertIsDisplayed()
+        rule.onNodeWithTag("local_media_select_all").performClick()
+        rule.onNodeWithTag("local_media_pick_${SelfTestComic.CH1_ID}").performClick()
+        rule.onNodeWithTag("local_media_delete").performClick()
+        rule.onNodeWithText("删除选中的本地缓存？").assertIsDisplayed()
+        rule.onNodeWithText("取消", substring = false).performClick()
+        assertTrue(before == c.mediaDigest())
+        rule.onNodeWithTag("local_media_delete").performClick()
+        rule.onNodeWithTag("local_media_delete_confirm").performClick()
+        rule.waitUntil(30_000) {
+            rule.onAllNodesWithText("已删除 1 项本地内容").fetchSemanticsNodes().isNotEmpty() &&
+                rule.onAllNodesWithTag("local_media_pick_${SelfTestComic.CH1_ID}").fetchSemanticsNodes().isEmpty()
+        }
+        assertTrue(c.imageSize(SelfTestComic.CH1_ID, 0) == 0L)
+        assertTrue(c.imageSize(SelfTestComic.CH1_ID, 1) == 0L)
+        assertTrue(c.imageSize(SelfTestComic.CH2_ID, 0) == keptSize)
+        assertTrue(c.imageDigest(SelfTestComic.CH2_ID, 0) == keptDigest)
+        val favorites = runBlocking { gateway.httpText(endpoint.port, "/api/manga/favorites") }
+        assertTrue(EngineData.mangaFavorites(favorites.body).any { it.comicId == c.comicIdValue })
+        val history = runBlocking { gateway.httpText(endpoint.port, "/api/manga/history") }
+        assertTrue(EngineData.mangaHistory(history.body).any {
+            it.comicId == c.comicIdValue && SelfTestComic.CH2_ID in it.readChapterIds && it.idx == 1 })
+        rule.onNodeWithTag("local_media_close").performClick()
+    }
+
     @Test fun failedDeleteKeepsSelectionAndAllowsRetry() {
         connect()
         val c = SelfTestComic().also { comic = it; it.create() }

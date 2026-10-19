@@ -1011,6 +1011,29 @@ object EngineData {
         return c.ifBlank { null }
     }
 
+    /** Strict management-only payload: malformed data must not become a delete selection. */
+    fun mangaLocalMedia(body: String): LocalMediaInventory? {
+        val o = runCatching { JSONObject(body) }.getOrNull() ?: return null
+        if (o.opt("ok") != true || o.opt("local_only") != true) return null
+        val source = o.opt("source") as? String ?: return null
+        val comicId = o.opt("comic_id") as? String ?: return null
+        if (source.isBlank() || comicId.isBlank()) return null
+        val arr = o.optJSONArray("media") ?: return null
+        if (o.optInt("count", -1) != arr.length()) return null
+        val ids = mutableSetOf<String>()
+        val rows = mutableListOf<LocalMediaEntry>()
+        for (i in 0 until arr.length()) {
+            val row = arr.optJSONObject(i) ?: return null
+            val id = row.opt("id") as? String ?: return null
+            val name = row.opt("name") as? String ?: return null
+            val complete = row.opt("downloaded") as? Boolean ?: return null
+            val partial = row.opt("partial") as? Boolean ?: return null
+            if (id.isBlank() || !ids.add(id) || complete == partial) return null
+            rows += LocalMediaEntry(id, name.ifBlank { id }, partial)
+        }
+        return LocalMediaInventory(source, comicId, rows)
+    }
+
     /** 漫画详情（/api/manga/<source>/<comic_id>）：chapters + 已下载章节集合 */
     fun mangaDetail(body: String): MangaDetail? {
         val o = runCatching { JSONObject(body) }.getOrNull() ?: return null

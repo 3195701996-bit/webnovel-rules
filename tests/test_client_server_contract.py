@@ -37,6 +37,12 @@ def _req(fn):
     return C, C.parse_requirements(fn)
 
 
+def test_strict_untyped_opt_keys_are_checked_in_local_media_parser():
+    _, result = _req("mangaLocalMedia")
+    assert {"ok", "local_only", "source", "comic_id", "count"} <= set(result["top"])
+    assert {"id", "name", "downloaded", "partial"} <= set(result["array"]["media"])
+
+
 def test_value_arrays_do_not_become_bogus_keys():
     """`arr.optString(it)` 是取**元素的值**，不是读键名。
 

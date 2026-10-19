@@ -41,6 +41,7 @@ ENDPOINTS = {
     "storageUsage":  ("GET", "/api/storage", ""),
     "backupScope":   ("GET", "/api/backup/scope", ""),
     "manga":         ("GET", "/api/manga/library", "comics"),
+    "mangaLocalMedia": ("GET", "/api/manga/mangadex/local-contract/local-media", ""),
     "sources":       ("GET", "/api/manga/sources", "sources"),
     "bookSources":   ("GET", "/api/sources", "sources"),
     "mangaHistory":  ("GET", "/api/manga/history", ""),
@@ -150,8 +151,8 @@ _DEFAULT = r'(?:\s*,\s*[^()]*(?:\([^()]*\)[^()]*)*)?'
 # 一条"链"：base 变量 + 若干段 .optXxx("k") / .optXxx("k", 默认值)
 CHAIN = re.compile(
     r'([A-Za-z_][A-Za-z0-9_]*)\s*\??\.\s*'
-    r'((?:opt(?:' + OPT_TYPES + r')\s*\(\s*' + _ARG + _DEFAULT + r'\s*\)\s*\??\.?\s*)+)')
-SEG = re.compile(r'opt(' + OPT_TYPES + r')\s*\(\s*' + _ARG + _DEFAULT + r'\s*\)')
+    r'((?:opt(?:' + OPT_TYPES + r')?\s*\(\s*' + _ARG + _DEFAULT + r'\s*\)\s*\??\.?\s*)+)')
+SEG = re.compile(r'opt(' + OPT_TYPES + r')?\s*\(\s*' + _ARG + _DEFAULT + r'\s*\)')
 ROOT_VAR = re.compile(r'val\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:runCatching\s*\{[^}]*\})?'
                       r'[^\n]*JSONObject\s*\(\s*body\s*\)')
 

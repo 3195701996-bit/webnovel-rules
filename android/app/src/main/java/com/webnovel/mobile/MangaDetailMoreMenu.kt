@@ -15,7 +15,8 @@ import androidx.compose.ui.platform.testTag
 
 /** Low-frequency utilities stay available without displacing the chapter catalog. */
 @Composable
-internal fun MangaDetailMoreMenu(onRemove: () -> Unit, onCopyCatalog: () -> Unit, enabled: Boolean = true) {
+internal fun MangaDetailMoreMenu(onRemove: () -> Unit, onCopyCatalog: () -> Unit,
+    enabled: Boolean = true, onLocalMedia: (() -> Unit)? = null) {
     var expanded by remember { mutableStateOf(false) }
     Box {
         TextButton(onClick = { expanded = true }, enabled = enabled,
@@ -23,6 +24,8 @@ internal fun MangaDetailMoreMenu(onRemove: () -> Unit, onCopyCatalog: () -> Unit
             Text("更多")
         }
         DropdownMenu(expanded = expanded && enabled, onDismissRequest = { expanded = false }) {
+            if (onLocalMedia != null) DropdownMenuItem(text = { Text("本地缓存管理") }, enabled = enabled,
+                onClick = { expanded = false; onLocalMedia() }, modifier = Modifier.testTag("manage_local_media"))
             DropdownMenuItem(text = { Text("从书库移除") }, enabled = enabled, onClick = {
                 expanded = false
                 onRemove()

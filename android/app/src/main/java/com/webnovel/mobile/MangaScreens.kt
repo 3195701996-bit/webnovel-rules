@@ -96,7 +96,7 @@ import kotlin.math.roundToInt
 import org.json.JSONObject
 
 /** 漫画相关路径：source / comic_id / chapter_id 都可能是非 ASCII，必须转义 */
-private fun mangaPath(source: String, comicId: String, suffix: String = ""): String =
+internal fun mangaPath(source: String, comicId: String, suffix: String = ""): String =
     "/api/manga/${Uri.encode(source)}/${Uri.encode(comicId)}$suffix"
 
 private fun downloadStartMessage(response: HttpText, success: String): String {
@@ -291,6 +291,7 @@ fun MangaDetailScreen(
     var favoriteBusy by remember(source, comicId) { mutableStateOf(false) }
     var exporting by remember { mutableStateOf(false) }
     var confirmRemove by remember { mutableStateOf(false) }
+    var showLocalMedia by remember(source, comicId) { mutableStateOf(false) }
     val ctx = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
 
@@ -725,6 +726,7 @@ fun MangaDetailScreen(
                                 enabled = !exporting && !deleting && d.downloadedCount > 0,
                             ) { Text(if (exporting) "导出中…" else "导出 ZIP") }
                             MangaDetailMoreMenu(enabled = !deleting,
+                                onLocalMedia = { showLocalMedia = true },
                                 onRemove = { confirmRemove = true }, onCopyCatalog = {
                                 runCatching {
                                     val clipboard = ctx.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
@@ -1188,6 +1190,15 @@ fun MangaDetailScreen(
         }
     }
     // 删除选中话/整卷的确认弹窗：写清删什么、不删什么
+    if (showLocalMedia) {
+        val identity = detail
+        LocalMediaManagerDialog(gateway, ep, identity?.source ?: source, identity?.comicId ?: comicId,
+            onDismiss = { showLocalMedia = false }, onChanged = {
+                MangaReadCache.invalidate(source, comicId)
+                OfflineStore.invalidateMangaIndex(OfflineStore.runtimeDir(ctx), source, comicId)
+                reload()
+            })
+    }
     if (confirmDelete) {
         AlertDialog(
             onDismissRequest = { confirmDelete = false },
