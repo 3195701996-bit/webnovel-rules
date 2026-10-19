@@ -78,7 +78,7 @@ class JmImagePipelineTest {
         // 2) 源页面：混淆源必须出现"重建图片缓存"入口
         waitText("书架", timeoutMs = 150_000)
         rule.onAllNodesWithText("浏览")[0].performClick()
-        waitText("漫画（优先）", timeoutMs = 60_000)
+        waitText("发现漫画", timeoutMs = 60_000)
         rule.onAllNodesWithText("内置漫画源", substring = true)[0].performClick()
         rule.waitUntil(120_000) { nodes("manga_source_list") > 0 }
         // 进 jm 源页（卡片文字里带"禁漫"）

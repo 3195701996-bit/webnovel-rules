@@ -20,6 +20,7 @@ class DestStateTest {
                 startLabel = "第1卷", localCatalog = true),
             Dest.Explore,
             Dest.MangaSources,
+            Dest.MangaDiagnostics,
             Dest.MangaSource("source/1", "来源 名称"),
             Dest.ReaderPrefs,
             Dest.History,

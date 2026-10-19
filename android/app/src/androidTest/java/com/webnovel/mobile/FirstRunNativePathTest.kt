@@ -103,7 +103,7 @@ class FirstRunNativePathTest {
             rule.waitForIdle()
         }
         rule.onAllNodesWithText("浏览")[0].performClick()
-        waitText("漫画（优先）", timeoutMs = 60_000)
+        waitText("发现漫画", timeoutMs = 60_000)
         rule.onNodeWithText("内置漫画源", substring = true).assertIsDisplayed()
         assertEquals("浏览页不应再有'网页搜索页'入口", 0, texts("网页搜索页", substring = true))
         assertEquals("浏览页不应显示桌面网页", 0, webMarkerHits())
@@ -111,6 +111,9 @@ class FirstRunNativePathTest {
         ev("浏览页：漫画优先，无网页搜索入口")
 
         // 6) 漫画源卡片必须是**真实入口**（过去是空回调，点了没反应）
+        rule.onAllNodesWithText("设置")[0].performClick()
+        rule.onNodeWithTag("manga_diagnostics_entry").performScrollTo().performClick()
+        waitText("依赖：", timeoutMs = 60_000, substring = true)
         val cards = rule.onAllNodesWithText("依赖：", substring = true).fetchSemanticsNodes().size
         assertTrue("漫画源卡片应在位（实际 $cards）", cards > 0)
         rule.onAllNodesWithText("依赖：", substring = true)[0].performClick()
@@ -122,15 +125,15 @@ class FirstRunNativePathTest {
 
         // 7) 网页只在设置里，且明确标注为诊断页（这一页是唯一允许出现 WebView 的）
         back()
-        waitText("漫画（优先）", timeoutMs = 30_000)
+        rule.onNodeWithTag("manga_diagnostics_back").performClick()
         rule.onAllNodesWithText("设置")[0].performClick()
-        waitText("高级（网页诊断）", timeoutMs = 60_000)
+        waitText("高级与诊断", timeoutMs = 60_000)
         // 设置页是**可滚动**的长页：加了「存储管理」入口后内容变长，底部说明会落到
         // 折叠线下。断言"显示中"之前必须先滚到它（实测踩到：assertIsDisplayed 失败，
         // 而节点其实存在、也不是网页）。
         rule.onNodeWithTag("build_info").performScrollTo().assertIsDisplayed()
         rule.onNodeWithText("不是日常使用界面", substring = true)
             .performScrollTo().assertIsDisplayed()
-        ev("设置：网页入口收进「高级（网页诊断）」，并显示产物基线")
+        ev("设置：网页入口收进「高级与诊断」，并显示产物基线")
     }
 }

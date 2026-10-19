@@ -51,7 +51,7 @@ class MangaSearchStreamUiTest {
     fun mangaSearch_streamsResultsAsSourcesArrive() {
         waitText("书架", timeoutMs = 150_000)
         rule.onAllNodesWithText("浏览")[0].performClick()
-        waitText("漫画（优先）", timeoutMs = 60_000)
+        waitText("发现漫画", timeoutMs = 60_000)
         rule.onAllNodesWithText("搜漫画")[0].performClick()
         waitText("发现漫画", timeoutMs = 30_000)
 
@@ -140,7 +140,7 @@ class MangaSearchStreamUiTest {
     fun mangaSearch_usesWebStylePager() {
         waitText("书架", timeoutMs = 150_000)
         rule.onAllNodesWithText("浏览")[0].performClick()
-        waitText("漫画（优先）", timeoutMs = 60_000)
+        waitText("发现漫画", timeoutMs = 60_000)
         rule.onAllNodesWithText("搜漫画")[0].performClick()
         waitText("发现漫画", timeoutMs = 30_000)
 

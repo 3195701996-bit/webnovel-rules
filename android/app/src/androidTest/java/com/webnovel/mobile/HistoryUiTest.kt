@@ -66,7 +66,7 @@ class HistoryUiTest {
         waitText("书架", timeoutMs = 150_000)
         // 强制离开再回来，触发书架按服务端最新历史重新加载，避免依赖启动时序。
         rule.onAllNodesWithText("浏览")[0].performClick()
-        waitText("漫画（优先）")
+        waitText("发现漫画")
         rule.onAllNodesWithText("书架")[0].performClick()
         waitText("最近阅读")
         rule.waitUntil(30_000) { texts(SelfTestComic.TITLE) > 0 }

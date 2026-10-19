@@ -25,7 +25,7 @@ import org.junit.runner.RunWith
  *   · 底部四个页签：书架 / 浏览 / 下载 / 设置
  *   · 浏览页：搜小说、搜漫画
  *   · 设置页：产物基线（版本+revision）、引擎状态、Python 版本、
- *     存储管理、备份与恢复、书源管理（含「导出」/「导入」）、高级（网页诊断）
+ *     存储管理、备份与恢复、书源管理（含「导出」/「导入」）、高级与诊断
  *   · 书源管理页：src_export_all（导出）
  *   · 备份页：backup_scope_summary（范围数字）、创建备份按钮
  *   · 存储页：storage_total（总占用）、clear_regen（清理入口）
@@ -103,9 +103,9 @@ class AcceptanceEntryPointsTest {
         for (row in listOf("存储管理", "备份与恢复", "书源管理")) {
             assertTrue("设置页必须有「$row」入口（回归包 §3.I/J 按此指路）", texts(row) > 0)
         }
-        assertTrue("设置页必须有「高级（网页诊断）」（文档 §5 导出诊断的指路）",
-            texts("高级（网页诊断）") > 0)
-        ev("设置页：存储管理/备份与恢复/书源管理/高级（网页诊断）都在位")
+        assertTrue("设置页必须有「高级与诊断」（文档 §5 导出诊断的指路）",
+            texts("高级与诊断") > 0)
+        ev("设置页：存储管理/备份与恢复/书源管理/高级与诊断都在位")
 
         // ── 存储页：总占用 + 清理入口 ──
         clickRow("存储管理")

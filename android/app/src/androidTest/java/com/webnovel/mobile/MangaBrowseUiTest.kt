@@ -54,7 +54,7 @@ class MangaBrowseUiTest {
         //    这里跟随的是**界面文案**（测试假设），产品目标未变。
         waitText("书架", timeoutMs = 150_000)
         rule.onAllNodesWithText("浏览")[0].performClick()
-        waitText("漫画（优先）", timeoutMs = 60_000)
+        waitText("发现漫画", timeoutMs = 60_000)
         rule.onAllNodesWithText("探索（", substring = true)[0].performClick()
 
         // 2) 漫画分类区必须在位（源与分类都来自适配器自己声明）

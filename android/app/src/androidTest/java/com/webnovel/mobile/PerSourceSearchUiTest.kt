@@ -59,7 +59,7 @@ class PerSourceSearchUiTest {
     private fun openSearchFromBrowse() {
         waitText("书架", timeoutMs = 150_000)
         rule.onAllNodesWithText("浏览")[0].performClick()
-        waitText("漫画（优先）", timeoutMs = 60_000)
+        waitText("发现漫画", timeoutMs = 60_000)
         rule.onAllNodesWithText("搜漫画")[0].performClick()
         waitText("发现漫画", timeoutMs = 30_000)
         rule.waitUntil(60_000) { nodes("manga_src_all") > 0 }
@@ -137,7 +137,7 @@ class PerSourceSearchUiTest {
         // 从单源页进入搜索：源必须已预选（以前这条入口打开的是"全部源"的通用搜索）
         waitText("书架", timeoutMs = 150_000)
         rule.onAllNodesWithText("浏览")[0].performClick()
-        waitText("漫画（优先）", timeoutMs = 60_000)
+        waitText("发现漫画", timeoutMs = 60_000)
         rule.onAllNodesWithText("内置漫画源", substring = true)[0].performClick()
         rule.waitUntil(120_000) { nodes("manga_source_list") > 0 }
         rule.waitUntil(60_000) { texts("MangaDex", substring = true) > 0 }

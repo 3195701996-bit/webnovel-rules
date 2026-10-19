@@ -288,6 +288,7 @@ internal sealed interface Dest {
                      val sessionId: String = UUID.randomUUID().toString()) : Dest
     data object Explore : Dest
     data object MangaSources : Dest
+    data object MangaDiagnostics : Dest
     data class MangaSource(val key: String, val name: String) : Dest
     data object ReaderPrefs : Dest
     data object History : Dest
@@ -319,6 +320,7 @@ internal fun destKey(d: Dest): String = when (d) {
     is Dest.Manga -> "Manga:${d.source}:${d.comicId}:${d.localCatalog}:${d.startChapterId}:${d.index}:${d.sessionId}"
     Dest.Explore -> "Explore"
     Dest.MangaSources -> "MangaSources"
+    Dest.MangaDiagnostics -> "MangaDiagnostics"
     is Dest.MangaSource -> "MangaSource:${d.key}"
     Dest.ReaderPrefs -> "ReaderPrefs"
     Dest.History -> "History"
@@ -348,6 +350,7 @@ internal fun encodeDest(dest: Dest): String {
             .put("local", dest.localCatalog).put("session_id", dest.sessionId)
         Dest.Explore -> value.put("type", "explore")
         Dest.MangaSources -> value.put("type", "manga_sources")
+        Dest.MangaDiagnostics -> value.put("type", "manga_diagnostics")
         is Dest.MangaSource -> value.put("type", "manga_source").put("key", dest.key)
             .put("name", dest.name)
         Dest.ReaderPrefs -> value.put("type", "reader_prefs")
@@ -381,6 +384,7 @@ internal fun decodeDest(encoded: String): Dest? = runCatching {
             value.optString("session_id").ifBlank { UUID.randomUUID().toString() })
         "explore" -> Dest.Explore
         "manga_sources" -> Dest.MangaSources
+        "manga_diagnostics" -> Dest.MangaDiagnostics
         "manga_source" -> Dest.MangaSource(value.getString("key"), value.getString("name"))
         "reader_prefs" -> Dest.ReaderPrefs
         "history" -> Dest.History
@@ -483,6 +487,7 @@ private fun HomeScaffold(
                         localCatalog = top.localCatalog)
                     is Dest.Explore -> ExploreScreen(gateway, ready, loader, push, onBack = pop)
                     is Dest.MangaSources -> MangaSourceListScreen(gateway, ready, push, onBack = pop)
+                    Dest.MangaDiagnostics -> MangaDiagnosticsScreen(gateway, ready, push, pop)
                     is Dest.MangaSource -> MangaSourceScreen(gateway, ready, loader, top.key,
                         top.name, push, onBack = pop)
                     is Dest.History -> HistoryScreen(gateway, ready, push, onBack = pop)
@@ -1413,8 +1418,8 @@ private fun ListRow(title: String, subtitle: String, modifier: Modifier = Modifi
 // ── 浏览 / 下载 / 设置 ───────────────────────────────────────
 
 @Composable
-private fun BrowseScreen(gateway: EngineGateway, ep: EngineEndpoint,
-                         onOpen: (Dest) -> Unit) {
+internal fun BrowseScreen(gateway: EngineGateway, ep: EngineEndpoint,
+                         onOpen: (Dest) -> Unit, diagnosticsOnly: Boolean = false) {
     var sources by remember { mutableStateOf<List<MangaSource>>(emptyList()) }
     var msg by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
@@ -1424,31 +1429,34 @@ private fun BrowseScreen(gateway: EngineGateway, ep: EngineEndpoint,
         val r = withContext(Dispatchers.IO) { gateway.httpText(ep.port, "/api/manga/sources") }
         sources = EngineData.sources(r.body)
     }
-    LaunchedEffect(ep) { reload() }
+    LaunchedEffect(ep, diagnosticsOnly) { if (diagnosticsOnly) reload() }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(12.dp),
                verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        item { SectionTitle("漫画（优先）") }
+        if (!diagnosticsOnly) {
+        item { SectionTitle("发现漫画") }
         item {
-            ListRow("搜漫画", "跨源搜索 → 点结果进原生详情页与阅读器") {
+            ListRow("搜漫画", "按作品名或作者查找，选择喜欢的来源") {
                 onOpen(Dest.MangaSearch())
             }
         }
         item {
-            ListRow("内置漫画源", "${sources.size} 个源：能力、分类与实测结论逐源可查") {
+            ListRow("内置漫画源", "选择来源，浏览分类与作品") {
                 onOpen(Dest.MangaSources)
             }
         }
         item {
-            ListRow("探索（漫画分类 / 小说榜单）", "只列真有榜单或分类的源；无数据不做假榜单") {
+            ListRow("探索（漫画分类 / 小说榜单）", "按题材、地区与热度发现作品") {
                 onOpen(Dest.Explore)
             }
         }
         item { SectionTitle("小说") }
         item {
-            ListRow("搜小说", "跨源搜索 → 一键加入书架（进度在下载页）") {
+            ListRow("搜小说", "查找作品，加入书架后随时阅读") {
                 onOpen(Dest.NovelSearch)
             }
         }
+        }
+        if (diagnosticsOnly) {
         item {
             SectionTitle("漫画源能力（依赖判定与实测结论分开呈现，不假装全部可用）")
             Row(verticalAlignment = Alignment.CenterVertically,
@@ -1530,6 +1538,19 @@ private fun BrowseScreen(gateway: EngineGateway, ep: EngineEndpoint,
                 color = WnColors.inkDim,
             )
         }
+        }
+    }
+}
+
+@Composable
+internal fun MangaDiagnosticsScreen(gateway: EngineGateway, ep: EngineEndpoint,
+                                    onOpen: (Dest) -> Unit, onBack: () -> Unit) {
+    Scaffold(topBar = {
+        TopAppBar(title = { Text("漫画源诊断") }, navigationIcon = {
+            TextButton(onClick = onBack, modifier = Modifier.testTag("manga_diagnostics_back")) { Text("返回") }
+        })
+    }) { padding ->
+        Box(Modifier.padding(padding)) { BrowseScreen(gateway, ep, onOpen, diagnosticsOnly = true) }
     }
 }
 
@@ -1792,7 +1813,11 @@ private fun SettingsScreen(gateway: EngineGateway, ep: EngineEndpoint,
         }
 
         Spacer(Modifier.height(12.dp))
-        SectionTitle("高级（网页诊断）")
+        SectionTitle("高级与诊断")
+        ListRow("漫画源诊断", "查看依赖、实测结果，手动运行书源检查",
+            modifier = Modifier.testTag("manga_diagnostics_entry")) {
+            onOpen(Dest.MangaDiagnostics)
+        }
         Text("下面这个网页只是诊断与兜底入口（书源规则编辑、任务原始列表），" +
             "不是日常使用界面：搜索、详情、阅读、下载、浏览都走原生页面，不需要网页。",
             style = MaterialTheme.typography.labelSmall, color = WnColors.inkDim)
