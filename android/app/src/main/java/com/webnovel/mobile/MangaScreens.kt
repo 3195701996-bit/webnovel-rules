@@ -861,6 +861,7 @@ fun MangaDetailScreen(
                                         manageMode = !manageMode
                                         if (!manageMode) deleteSel = emptySet()
                                     },
+                                    enabled = !deleting,
                                     modifier = Modifier.weight(1f)
                                         .testTag("manage_downloaded"),
                                 ) {
@@ -1008,15 +1009,16 @@ fun MangaDetailScreen(
                         }
                         itemsIndexed(d.volumes, key = { _, v -> "vol_" + v.id }) { vi, v ->
                             val vDownloaded = d.downloaded.contains(v.id)
+                            val vHasLocal = vDownloaded || d.partialDownloaded.contains(v.id)
                             val vInDl = dl?.chapterIds?.contains(v.id) == true
                             val vActive = dl?.active == true
-                            val vCheckable = if (manageMode) vDownloaded
+                            val vCheckable = if (manageMode) vHasLocal
                                 else !vDownloaded && !(vActive && vInDl)
                             Row(
                                 Modifier.fillMaxWidth()
-                                    .clickable {
+                                    .clickable(enabled = !deleting) {
                                         if (manageMode) {
-                                            if (vDownloaded) deleteSel =
+                                            if (vHasLocal) deleteSel =
                                                 if (deleteSel.contains(v.id))
                                                     deleteSel - v.id else deleteSel + v.id
                                         } else if (vCheckable) {
@@ -1030,6 +1032,7 @@ fun MangaDetailScreen(
                             ) {
                                 if (vCheckable) {
                                     Checkbox(
+                                        enabled = !deleting,
                                         checked = if (manageMode) deleteSel.contains(v.id)
                                                   else selected.contains(v.id),
                                         onCheckedChange = { on ->
@@ -1107,7 +1110,7 @@ fun MangaDetailScreen(
                             else !downloaded && !(dlActive && inDlTask)
                         Row(
                             Modifier.fillMaxWidth()
-                                .clickable {
+                                .clickable(enabled = !deleting) {
                                     if (manageMode) {
                                         // 管理模式：点行=勾选删除（不误进阅读器）
                                         if (downloaded || partialDownloaded) deleteSel =
@@ -1125,6 +1128,7 @@ fun MangaDetailScreen(
                             // 未下载且不在进行中的任务里：可勾选（点方框只切换勾选，不打开阅读）
                             if (rowCheckable) {
                                 Checkbox(
+                                    enabled = !deleting,
                                     checked = if (manageMode) deleteSel.contains(c.id)
                                               else selected.contains(c.id),
                                     onCheckedChange = { on ->
@@ -1189,10 +1193,11 @@ fun MangaDetailScreen(
                     onClick = {
                         confirmDelete = false
                         deleting = true
+                        val requestedChapterIds = deleteSel.toList()
                         scope.launch {
                             val body = org.json.JSONObject()
                                 .put("chapter_ids",
-                                    org.json.JSONArray(deleteSel.toList()))
+                                    org.json.JSONArray(requestedChapterIds))
                                 .toString()
                             val r = gateway.httpPost(ep.port,
                                 mangaPath(source, comicId, "/chapters/delete"), body)
