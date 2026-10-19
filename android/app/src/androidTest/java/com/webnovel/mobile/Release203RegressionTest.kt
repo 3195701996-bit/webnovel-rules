@@ -36,6 +36,7 @@ class Release203RegressionTest {
     private lateinit var endpoint: EngineEndpoint
     private var updateFixtureInstalled = false
     private var deleteFixtureInstalled = false
+    private var localMediaFixtureInstalled = false
     private var updateFixtureNamespace: com.chaquo.python.PyObject? = null
 
     @Before fun requireIsolatedEmulator() {
@@ -58,6 +59,9 @@ class Release203RegressionTest {
     }
 
     @After fun cleanup() {
+        if (localMediaFixtureInstalled) {
+            execUpdateFixture("_qa_flask.view_functions[_qa_media_key] = _qa_media_original")
+        }
         if (deleteFixtureInstalled) {
             execUpdateFixture("_qa_delete_release.set()")
             execUpdateFixture("_qa_flask.view_functions[_qa_delete_key] = _qa_delete_original")
@@ -242,6 +246,76 @@ class Release203RegressionTest {
         val history = runBlocking { gateway.httpText(endpoint.port, "/api/manga/history") }
         assertTrue(EngineData.mangaHistory(history.body).any {
             it.comicId == c.comicIdValue && SelfTestComic.CH2_ID in it.readChapterIds && it.idx == 1 })
+        rule.onNodeWithTag("local_media_close").performClick()
+    }
+
+    @Test fun localMediaReadAndDeleteFailuresRecoverWithoutLosingSelection() {
+        connect()
+        val c = SelfTestComic().also { comic = it; it.create(); it.makeFirstUnitPartialVolume() }
+        val before = c.mediaDigest()
+        execUpdateFixture("""
+            import app as _qa_app_module
+            import threading as _qa_threading
+            from flask import jsonify as _qa_jsonify
+            _qa_flask = _qa_app_module.app
+            _qa_media_key = next(k for k in _qa_flask.view_functions if k.endswith('.api_manga_local_media'))
+            _qa_media_original = _qa_flask.view_functions[_qa_media_key]
+            _qa_delete_key = next(k for k in _qa_flask.view_functions if k.endswith('.api_manga_chapters_delete'))
+            _qa_delete_original = _qa_flask.view_functions[_qa_delete_key]
+            _qa_delete_release = _qa_threading.Event()
+            _qa_media_attempts = 0
+            _qa_delete_attempts = 0
+            def _qa_media_once(source, comic_id):
+                global _qa_media_attempts
+                if comic_id == '${c.comicIdValue}':
+                    _qa_media_attempts += 1
+                    if _qa_media_attempts == 1:
+                        return _qa_jsonify({'error': 'fixture inventory unavailable'}), 503
+                return _qa_media_original(source, comic_id)
+            def _qa_delete_once(source, comic_id):
+                global _qa_delete_attempts
+                if comic_id == '${c.comicIdValue}':
+                    _qa_delete_attempts += 1
+                    if _qa_delete_attempts == 1:
+                        _qa_delete_release.wait(15)
+                        return _qa_jsonify({'ok': False, 'error': 'fixture locked file'}), 500
+                return _qa_delete_original(source, comic_id)
+            _qa_flask.view_functions[_qa_media_key] = _qa_media_once
+            _qa_flask.view_functions[_qa_delete_key] = _qa_delete_once
+        """.trimIndent())
+        localMediaFixtureInstalled = true
+        deleteFixtureInstalled = true
+        rule.openCachedShelf()
+        val tag = "manga_cached:${c.sourceKey}:${c.comicIdValue}"
+        rule.waitUntil(60_000) { rule.onAllNodesWithTag(tag).fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithTag(tag).performClick()
+        rule.waitUntil(30_000) { rule.onAllNodesWithTag("manga_detail_more").fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithTag("manga_detail_list").performScrollToNode(hasTestTag("manga_detail_more"))
+        rule.onNodeWithTag("manga_detail_more").performClick()
+        rule.onNodeWithTag("manage_local_media").performClick()
+        rule.waitUntil(30_000) { rule.onAllNodesWithTag("local_media_retry").fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithTag("local_media_delete").assertIsNotEnabled()
+        assertTrue(rule.onAllNodesWithTag("local_media_pick_${SelfTestComic.CH1_ID}").fetchSemanticsNodes().isEmpty())
+        rule.onNodeWithTag("local_media_retry").performClick()
+        rule.waitUntil(30_000) { rule.onAllNodesWithTag("local_media_pick_${SelfTestComic.CH1_ID}").fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithTag("local_media_pick_${SelfTestComic.CH1_ID}").performClick()
+        rule.onNodeWithTag("local_media_delete").performClick()
+        rule.onNodeWithTag("local_media_delete_confirm").performClick()
+        try {
+            rule.onNodeWithTag("local_media_select_all").assertIsNotEnabled()
+            rule.onNodeWithTag("local_media_close").assertIsNotEnabled()
+            rule.onNodeWithTag("local_media_pick_${SelfTestComic.CH1_ID}").assertIsNotEnabled()
+        } finally {
+            execUpdateFixture("_qa_delete_release.set()")
+        }
+        rule.waitUntil(30_000) { rule.onAllNodesWithText("fixture locked file", substring = true).fetchSemanticsNodes().isNotEmpty() }
+        rule.waitUntil(30_000) { rule.onAllNodesWithTag("local_media_pick_${SelfTestComic.CH1_ID}").fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithTag("local_media_pick_${SelfTestComic.CH1_ID}").assertIsOn()
+        rule.onNodeWithTag("local_media_close").assertIsEnabled()
+        assertTrue(before == c.mediaDigest())
+        rule.onNodeWithTag("local_media_delete").performClick()
+        rule.onNodeWithTag("local_media_delete_confirm").performClick()
+        rule.waitUntil(30_000) { rule.onAllNodesWithText("已删除 1 项本地内容").fetchSemanticsNodes().isNotEmpty() }
         rule.onNodeWithTag("local_media_close").performClick()
     }
 
