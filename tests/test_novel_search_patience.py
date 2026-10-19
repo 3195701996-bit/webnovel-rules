@@ -65,14 +65,19 @@ def _book(name, uid):
 
 
 @pytest.fixture(autouse=True)
-def _clean_cache():
+def _clean_cache(monkeypatch):
+    # 被耐心上限放弃的 worker 可在 fixture 释放门闩后才记入慢源台账。
+    # 清空共享 dict 不能隔离这种迟到写入：下一用例的同名 hang 会被跳过。
+    # 每个用例持有独立 tracker/worker，旧线程只能写它自己的台账。
+    tracker = ss.SlowSourceTracker()
+    monkeypatch.setattr(api, "_slow_tracker", tracker)
+    monkeypatch.setattr(api, "_slow_sources", tracker._slow)
+    monkeypatch.setattr(api, "_search_worker", ss.SearchWorker(tracker))
     with st._toc_lock:
         st._search_cache.clear()
-    st._slow_tracker._slow.clear()
     yield
     with st._toc_lock:
         st._search_cache.clear()
-    st._slow_tracker._slow.clear()
 
 
 @pytest.fixture()
