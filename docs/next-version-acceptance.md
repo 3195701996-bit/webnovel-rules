@@ -317,3 +317,9 @@
 - 继续审查发现Android将cancel归入已结束并标“已取消”，而漫画worker及Web将其定义为请求停止后尚在收尾。若running已为false，旧Android轮询也停止，可能长期停留错误终态。
 - 统一为“停止中”，归入进行中且继续轮询直到worker返回stopped；期间不提供继续按钮。已停止、暂停、失败仍可续传，完成记录仍完整可达。新增cancel→stopped状态迁移与轮询回归，Android Debug全套单元通过。
 - 本次修改在ab792add候选构建之后，不包含在等待安装的rc9-ab792add.apk中，未宣称真机或Release验收通过；手机再次核对仍rc8／167，原安装进程仍等待用户确认。
+
+### 用户确认后的rc9真机升级及完整任务列表
+
+- 用户确认vivo安装后，原adb进程返回Success；设备实际versionName=2.1.0-rc9、code168，首次安装时间仍2026-09-14 19:47:32。启动后原阅读历史可见。安装的是ab792add集成候选，不含其后e5949ed1的停止状态修复。
+- 真实下载页面显示已结束46项，手动USB滚动可到列表末尾的“刷新／选择章节下载”入口，不再截断20项；反向滚动实际找到《社長與酒與星》卡片，显示“已完成1／图片30/30”。这次未新增下载、未触发删除或修改VPN；证明原任务完成记录在升级后仍保留且可访问，不替代逐页阅读解码验收。
+- 主机证据：rc9-first-open.png、rc9-download-top.xml、rc9-download-end.xml、rc9-download-middle2.xml、rc9-task-complete.png，沿用此前真机证据目录；未运行夹具instrumentation至用户手机，未发布稳定版。
