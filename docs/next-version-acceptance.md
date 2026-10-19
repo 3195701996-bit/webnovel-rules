@@ -311,3 +311,9 @@
 - 从clean提交 `ab792addf3adbf41feaa127116313e4a78fd094e` 构建2.1.0-rc9／168集成候选，包含af507dfe下载中心修复与12a54d49同名身份提示；与旧48e759e1的rc9是不同资产，分别保留，不替换其历史证据。新APK SHA256 `0174f3edde9e22c275bf91900d15e9716d9b178ad92d9c7a904556f7a683327f`，主机文件 `rc9-ab792add.apk`，校验正式证书、完整SHA、clean状态和较rc8递增版本码通过。
 - Release全套单元、正式APK及Release instrumentation构建通过；完整Python **1918 passed／2 skipped（141.12秒）**、34个JS回归、两类接口契约0问题、HTTP冒烟20/20通过。未运行instrumentation至用户手机。
 - 按此前保留数据覆盖授权发起adb install -r，vivo停留在外部来源风险确认页，已请用户手动确认。此时安装进程尚未返回成功，手机最后核对仍rc8／167，不能声明新包已装好、界面已实测或最终发布完成；未修改安全设置。
+
+### 下载取消收尾状态一致性
+
+- 继续审查发现Android将cancel归入已结束并标“已取消”，而漫画worker及Web将其定义为请求停止后尚在收尾。若running已为false，旧Android轮询也停止，可能长期停留错误终态。
+- 统一为“停止中”，归入进行中且继续轮询直到worker返回stopped；期间不提供继续按钮。已停止、暂停、失败仍可续传，完成记录仍完整可达。新增cancel→stopped状态迁移与轮询回归，Android Debug全套单元通过。
+- 本次修改在ab792add候选构建之后，不包含在等待安装的rc9-ab792add.apk中，未宣称真机或Release验收通过；手机再次核对仍rc8／167，原安装进程仍等待用户确认。

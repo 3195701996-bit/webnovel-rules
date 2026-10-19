@@ -81,7 +81,7 @@ internal fun DownloadsScreen(
         // 停下来的任务不再轮询，界面显示的是服务端状态
         while (true) {
             delay(1500)
-            if (tasks.any { it.running || it.status == "queued" }) refresh()
+            if (tasks.any { it.needsDownloadRefresh() }) refresh()
         }
     }
 
@@ -375,7 +375,7 @@ private fun TaskCard(
                 color = when {
                     t.status == "error" || t.status == "stopped" -> WnColors.danger
                     t.running -> WnColors.accent
-                    t.status == "paused" -> WnColors.inkDim
+                    t.status == "paused" || t.status == "cancel" -> WnColors.inkDim
                     else -> WnColors.ok
                 },
             )
@@ -432,7 +432,7 @@ private fun TaskCard(
                     if (onPause != null && t.running) {
                         OutlinedButton(onClick = onPause, enabled = !busy) { Text("暂停") }
                     }
-                    if (onResume != null && !t.running && t.resumable) {
+                    if (onResume != null && !t.needsDownloadRefresh() && t.resumable) {
                         OutlinedButton(onClick = onResume, enabled = !busy,
                             modifier = Modifier.testTag("task_resume")) { Text("继续") }
                     }

@@ -6,6 +6,9 @@ internal data class DownloadTaskSections(
     val finished: List<EngineData.TaskItem>,
 )
 
+internal fun EngineData.TaskItem.needsDownloadRefresh(): Boolean =
+    running || status == "queued" || status == "cancel"
+
 /** Preserve every server record and its order, with exactly one actionable section. */
 internal fun downloadTaskSections(tasks: List<EngineData.TaskItem>): DownloadTaskSections {
     val running = mutableListOf<EngineData.TaskItem>()
@@ -13,7 +16,7 @@ internal fun downloadTaskSections(tasks: List<EngineData.TaskItem>): DownloadTas
     val finished = mutableListOf<EngineData.TaskItem>()
     for (task in tasks) {
         when {
-            task.running || task.status == "queued" -> running.add(task)
+            task.needsDownloadRefresh() -> running.add(task)
             task.status == "paused" || task.status == "stopped" || task.status == "error" -> paused.add(task)
             else -> finished.add(task)
         }
