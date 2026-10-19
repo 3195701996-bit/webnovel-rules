@@ -77,7 +77,7 @@ internal fun LocalMediaManagerDialog(gateway: EngineGateway, ep: EngineEndpoint,
                         style = MaterialTheme.typography.bodySmall)
                     if (rows.size > 10 || query.isNotEmpty()) OutlinedTextField(value = query,
                         onValueChange = { query = it }, singleLine = true, enabled = enabled,
-                        label = { Text("筛选标题或 ID") },
+                        label = { Text("筛选标题或 id:编号") },
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                         keyboardActions = KeyboardActions(onDone = { keyboard?.hide() }),
                         modifier = Modifier.fillMaxWidth().testTag("local_media_search"))

@@ -5,6 +5,7 @@
     let ids = [];
     let names = new Map();
     let searchable = new Map();
+    let titles = new Map();
     let visibleIds = [];
     const base = '/api/manga/' + encodeURIComponent(source) + '/' + encodeURIComponent(comicId);
     const selected = new Set();
@@ -26,7 +27,7 @@
     const checks = [];
     const search = document.createElement('input');
     search.type = 'search';
-    search.placeholder = '筛选标题或 ID';
+    search.placeholder = '筛选标题；查 ID 用 id:编号';
     search.setAttribute('aria-label', '筛选本地缓存标题或 ID');
     search.className = 'local-media-search';
     search.value = '';
@@ -54,7 +55,8 @@
               typeof row.partial === 'boolean' && row.downloaded !== row.partial &&
               !seen.has(row.id) && seen.add(row.id))) throw new Error('本地缓存清单格式不正确');
         ids = data.media.map(row => row.id);
-        searchable = new Map(data.media.map(row => [row.id, (row.name + ' ' + row.id).toLowerCase()]));
+        titles = new Map(data.media.map(row => [row.id, row.name.normalize('NFKC').toLowerCase()]));
+        searchable = new Map(data.media.map(row => [row.id, (row.name + ' ' + row.id).normalize('NFKC').toLowerCase()]));
         const counts = new Map();
         data.media.forEach(row => counts.set(row.name, (counts.get(row.name) || 0) + 1));
         names = new Map(data.media.map(row => [row.id, (row.name || row.id) +
@@ -89,8 +91,12 @@
     function buildList() {
       checks.length = 0;
       list.replaceChildren();
-      const terms = search.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
-      visibleIds = ids.filter(id => terms.every(term => searchable.get(id).includes(term)));
+      const terms = search.value.normalize('NFKC').trim().toLowerCase().split(/\s+/).filter(Boolean);
+      visibleIds = ids.filter(id => terms.every(term => {
+        if (term.startsWith('id:')) return term.length > 3 && id.normalize('NFKC').toLowerCase().includes(term.slice(3));
+        if (/^[0-9]+(?:\.[0-9]+)?$/.test(term)) return titles.get(id).includes(term);
+        return searchable.get(id).includes(term);
+      }));
       visibleIds.forEach(rawId => {
       const id = String(rawId);
       const label = document.createElement('label');

@@ -15,6 +15,7 @@ class Node {
   let readFails = true;
   let deleteFails = true, reloads = 0;
   let malformed = false;
+  let numericRows = null;
   let confirmation = '';
   const context = {window: {}, document: {
     createElement: tag => new Node(tag), createTextNode: text => ({text}),
@@ -22,6 +23,8 @@ class Node {
     if (url.endsWith('/local-media')) {
       if (readFails) throw new Error('清单不可用');
       if (malformed) return {ok:true, local_only:false, source:'demo', comic_id:'comic', count:0, media:[]};
+      if (numericRows) return {ok:true, local_only:true, source:'demo', comic_id:'comic',
+        count:numericRows.length, media:numericRows};
       return {ok:true, local_only:true, source:'demo', comic_id:'comic', count:2,
         media:[{id:'one',name:'同名章节',downloaded:true,partial:false},
           {id:'two',name:'同名章节',downloaded:false,partial:true}]};
@@ -92,5 +95,21 @@ class Node {
   all.onclick();
   await remove.onclick();
   assert.equal(requests, 2, '未经校验的清单不能触发删除');
+  malformed = false;
+  numericRows = [
+    {id:'uuid-52-old',name:'第13话',downloaded:true,partial:false},
+    {id:'uuid-new',name:'第52话',downloaded:true,partial:false},
+    {id:'uuid-2.2',name:'第3话',downloaded:true,partial:false},
+    {id:'fractional',name:'第2.2话',downloaded:true,partial:false},
+  ];
+  await retry.onclick();
+  for (const [query,title] of [['52','第52话'],['５２','第52话'],['ID：52','第13话'],['2.2','第2.2话']]) {
+    search.value = query; search.input();
+    assert.equal(list.children.length,1);
+    assert.ok(list.children[0].children[1].text.includes(title),query);
+  }
+  search.value = 'id:'; search.input();
+  assert.equal(all.disabled,true);
+  assert.equal(requests,2);
   console.log('manga_local_manager: dedup/select/cancel/confirmation/error recovery passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

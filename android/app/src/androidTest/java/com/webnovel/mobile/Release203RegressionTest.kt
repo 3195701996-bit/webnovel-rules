@@ -289,7 +289,12 @@ class Release203RegressionTest {
         rule.onNodeWithTag("manga_detail_more").performClick()
         rule.onNodeWithTag("manage_local_media").performClick()
         rule.waitUntil(30_000) { rule.onAllNodesWithTag("local_media_pick_qa-long-0").fetchSemanticsNodes().isNotEmpty() }
-        rule.onNodeWithTag("local_media_search").performTextInput("qa-long-999")
+        rule.onNodeWithTag("local_media_search").performTextInput("999")
+        rule.onNodeWithTag("local_media_search").performImeAction()
+        rule.waitUntil(30_000) { rule.onAllNodesWithTag("local_media_pick_qa-long-998").fetchSemanticsNodes().isNotEmpty() }
+        assertTrue(rule.onAllNodesWithTag("local_media_pick_qa-long-999").fetchSemanticsNodes().isEmpty())
+        rule.onNodeWithTag("local_media_search").performTextClearance()
+        rule.onNodeWithTag("local_media_search").performTextInput("id:999")
         rule.onNodeWithTag("local_media_search").performImeAction()
         rule.waitUntil(30_000) { rule.onAllNodesWithTag("local_media_pick_qa-long-999").fetchSemanticsNodes().isNotEmpty() }
         assertTrue(rule.onAllNodesWithTag("local_media_pick_qa-long-0").fetchSemanticsNodes().isEmpty())
