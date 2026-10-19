@@ -783,6 +783,7 @@ async function loadFavs() {
   } catch(e) { box.innerHTML = `<div role="alert" style="grid-column:1/-1;text-align:center;color:var(--red);">${esc(e.message || '收藏加载失败')}<br><button class="btn" onclick="loadFavs()">重试</button></div>`; }
 }
 async function checkFavoriteUpdates(force = false) {
+  let attemptKey;
   const status = document.getElementById('favorite-check-status');
   const showStatus = (message, kind = 'info') => {
     if (!status) return;
@@ -798,14 +799,20 @@ async function checkFavoriteUpdates(force = false) {
     const runtime = (await health.json()).runtime || {};
     const instanceId = String(runtime.instance_id || '').trim();
     if (!instanceId) { showStatus('无法确认引擎状态，收藏更新检查未启动。', 'error'); return; }
-    const attemptKey = 'manga-favorite-update-check:' + instanceId;
+    attemptKey = 'manga-favorite-update-check:' + instanceId;
     try { if (!force && sessionStorage.getItem(attemptKey)) return; } catch (_) {}
     const start = await fetch('/api/manga/favorites/check-updates', {method:'POST'});
     if (!start.ok) { showStatus('收藏更新检查启动失败，可稍后重试。', 'error'); return; }
     const startData = await start.json().catch(() => ({}));
-    if (startData.already_running) {
+    if (!startData || startData.ok === false ||
+        (startData.already_running !== true &&
+         (!Number.isSafeInteger(startData.started) || startData.started < 0))) {
+      showStatus('收藏更新检查启动响应无效，未确认启动，可重试。', 'error');
+      return;
+    }
+    if (startData.already_running === true) {
       showStatus('收藏更新检查正在后台运行；你可以继续搜索和阅读。');
-    } else if ((startData.started || 0) > 0) {
+    } else if (startData.started > 0) {
       showStatus(`正在检查 ${startData.started} 部收藏的更新；你可以继续搜索和阅读。`);
     } else {
       showStatus('收藏列表暂无可检查的作品。');
@@ -821,9 +828,19 @@ async function checkFavoriteUpdates(force = false) {
       const r = await fetch('/api/manga/favorites/check-updates/status');
       if (!r.ok) { showStatus('更新检查仍在后台运行，暂时无法读取进度。', 'error'); return; }
       const state = await r.json();
+      const countsValid = state && ['total', 'checked', 'succeeded', 'failed']
+        .every(key => Number.isSafeInteger(state[key]) && state[key] >= 0);
+      if (!state || state.ok === false || typeof state.running !== 'boolean' || !countsValid ||
+          state.checked > state.total || state.succeeded + state.failed > state.total ||
+          (!state.running && (state.checked !== state.total ||
+            state.succeeded + state.failed !== state.checked))) {
+        try { sessionStorage.removeItem(attemptKey); } catch (_) {}
+        showStatus('收藏更新检查进度响应无效，未确认完成；可重试查看。', 'error');
+        return;
+      }
       if (!state.running) {
-        const failed = Number(state.failed || 0);
-        const succeeded = Number(state.succeeded || 0);
+        const failed = state.failed;
+        const succeeded = state.succeeded;
         showStatus(failed
           ? `收藏更新检查完成：${succeeded} 部成功，${failed} 部失败；失败作品可稍后重试。`
           : `收藏更新检查完成：已检查 ${succeeded} 部。`, failed ? 'error' : 'success');

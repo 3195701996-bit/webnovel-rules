@@ -511,7 +511,7 @@ async function verifyFavoriteCheckIsOncePerEngineSession() {
         return {ok: true, json: async () => ({started: 2})};
       }
       if (path === '/api/manga/favorites/check-updates/status') {
-        return {ok: true, json: async () => ({running: false, succeeded: 1, failed: 1})};
+        return {ok: true, json: async () => ({running: false, total: 2, checked: 2, succeeded: 1, failed: 1})};
       }
       throw new Error(`unexpected request ${path}`);
     },
@@ -578,10 +578,54 @@ async function verifyEmptyFavoriteCheckIsOncePerEngineSession() {
   assert.equal(starts, 2, 'manual retry must still check favorites added later in the session');
 }
 
+async function verifyInvalidFavoriteResponsesNeverClaimCompletion() {
+  for (const badStart of [{}, {started: '0'}, {started: -1}, {ok: false, started: 0}]) {
+    let polls = 0;
+    const status = {hidden: true, dataset: {}, textContent: ''};
+    const values = new Map();
+    const sandbox = {
+      fetch: async path => path === '/api/health'
+        ? {ok: true, json: async () => ({runtime: {instance_id: 'invalid'}})}
+        : path.endsWith('/status') ? (polls++, {ok: true, json: async () => ({})})
+        : {ok: true, json: async () => badStart},
+      sessionStorage: {getItem: key => values.get(key), setItem: (key, value) => values.set(key, value)},
+      document: {getElementById: id => id === 'favorite-check-status' ? status : {classList: {contains: () => false}}},
+      setTimeout: callback => callback(), Promise, String,
+    };
+    vm.createContext(sandbox);
+    vm.runInContext(favoriteStatusVisibility[0] + '\n' + favoriteUpdateCheck[0] + '\nglobalThis.check = checkFavoriteUpdates;', sandbox);
+    await sandbox.check();
+    assert.match(status.textContent, /启动响应无效/);
+    assert.equal(polls, 0);
+    assert.equal(values.size, 0, 'invalid start must not consume automatic retry');
+  }
+  for (const badState of [{}, {running: false},
+    {running: false, total: 2, checked: 1, succeeded: 1, failed: 0},
+    {running: false, total: 1, checked: 1, succeeded: 0, failed: 0}]) {
+    const status = {hidden: true, dataset: {}, textContent: ''};
+    const values = new Map();
+    const sandbox = {
+      fetch: async path => ({ok: true, json: async () => path === '/api/health'
+        ? {runtime: {instance_id: 'invalid-state'}} : path.endsWith('/status') ? badState : {started: 2}}),
+      sessionStorage: {getItem: key => values.get(key), setItem: (key, value) => values.set(key, value), removeItem: key => values.delete(key)},
+      document: {getElementById: id => id === 'favorite-check-status' ? status : {classList: {contains: () => false}}},
+      setTimeout: callback => callback(), Promise, String,
+    };
+    vm.createContext(sandbox);
+    vm.runInContext(favoriteStatusVisibility[0] + '\n' + favoriteUpdateCheck[0] + '\nglobalThis.check = checkFavoriteUpdates;', sandbox);
+    await sandbox.check();
+    assert.match(status.textContent, /进度响应无效/);
+    assert.doesNotMatch(status.textContent, /检查完成/);
+    assert.equal(values.size, 0);
+  }
+}
+
 verifyScopedDownload().then(() => {
   return verifyFavoriteCheckIsOncePerEngineSession();
 }).then(() => {
   return verifyEmptyFavoriteCheckIsOncePerEngineSession();
+}).then(() => {
+  return verifyInvalidFavoriteResponsesNeverClaimCompletion();
 }).then(() => {
   console.log('manga_catalog.test.js: ALL ASSERTIONS PASSED');
 }).catch(error => {
