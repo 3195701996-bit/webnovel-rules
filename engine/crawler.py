@@ -423,6 +423,19 @@ class SourceCrawler:
                     break
         toc = self.engine.get_string(rbi.get('tocUrl', ''), doc, base_url=self.base)
         b.toc_url = normalize_url(toc, book_url) if toc else book_url
+        # Missing legacy source rules need not turn a named book into a URL.
+        # Read only explicit page metadata, never infer names from story text.
+        if doc is not None and (not b.name or not b.author):
+            metadata = {}
+            for tag in doc.xpath('//meta'):
+                key = (tag.get('property') or tag.get('name') or '').strip().lower()
+                value = re.sub(r'\s+', ' ', tag.get('content') or '').strip()
+                if key and value:
+                    metadata.setdefault(key, value)
+            if not b.name:
+                b.name = metadata.get('og:novel:book_name') or metadata.get('og:title') or ''
+            if not b.author:
+                b.author = metadata.get('og:novel:author') or metadata.get('author') or ''
         if not b.name:
             b.name = book_url
         # 详情页自动提取总章节数（"共X章"等，无需爬目录）
