@@ -2868,8 +2868,18 @@ def api_manga_chapters_delete(source, comic_id):
     source = _safe_seg(source, "漫画源")
     comic_id = _safe_comic_id(source, comic_id)
     body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict):
+        return _err_json("删除参数必须是对象", 400)
+    identity_mode = body.get("identity_mode", "compatible")
+    if identity_mode not in ("compatible", "disk"):
+        return _err_json("未知章节身份模式", 400)
+    exact_disk = identity_mode == "disk"
+    raw_ids = body.get("chapter_ids") or []
+    if not isinstance(raw_ids, list) or (exact_disk and
+            any(not isinstance(value, str) for value in raw_ids)):
+        return _err_json("chapter_ids 必须是章节 ID 列表", 400)
     ids = []
-    for x in (body.get("chapter_ids") or []):
+    for x in raw_ids:
         x = str(x or "").strip()
         if x:
             ids.append(x)
@@ -2904,7 +2914,7 @@ def api_manga_chapters_delete(source, comic_id):
         for row in detail_rows:
             chapter_id = str(row.get("id") or "")
             name = _manga_chapter_name_key(row.get("name"))
-            if chapter_id in requested_names and name in unique_names:
+            if not exact_disk and chapter_id in requested_names and name in unique_names:
                 requested_names[chapter_id].add(name)
                 selected_names.add(name)
     except Exception:
@@ -2927,7 +2937,7 @@ def api_manga_chapters_delete(source, comic_id):
                 for row in rows:
                     row_id = str(row.get("id") or "")
                     name = _manga_chapter_name_key(row.get("name"))
-                    if row_id in ids and len(name_to_ids.get(name, set())) == 1:
+                    if not exact_disk and row_id in ids and len(name_to_ids.get(name, set())) == 1:
                         requested_names[row_id].add(name)
                         selected_names.add(name)
             except Exception:
@@ -2991,7 +3001,7 @@ def api_manga_chapters_delete(source, comic_id):
         # 请求路径不做整书扫描；把所有可能源别名标记为待重扫，防止书架保留旧计数。
         for variant in variants:
             _manga_stats_request(variant, comic_id)
-    return jsonify({"ok": True, "deleted": deleted, "missing": missing,
+    return jsonify({"ok": True, "identity_mode": identity_mode, "deleted": deleted, "missing": missing,
                     "freed_bytes": freed})
 
 

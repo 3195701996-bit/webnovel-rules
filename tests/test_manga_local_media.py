@@ -16,6 +16,7 @@ def media_env(tmp_path, monkeypatch):
     def no_adapter(*args, **kwargs):
         raise AssertionError("local media management must not call adapters")
     monkeypatch.setattr(api, "_manga_adapter", no_adapter)
+    monkeypatch.setattr(api, "_manga_stats_request", lambda *args: None)
     return app.app.test_client(), downloads, cache
 
 
@@ -95,3 +96,63 @@ def test_broken_manifest_does_not_hide_proven_download_files(media_env):
     assert result["media"][0]["name"] == "known-disk-id"
     assert result["media"][0]["downloaded"]
     assert "path" not in result["media"][0]
+
+
+@pytest.mark.parametrize("selected,kept", [("old-id", "new-id"), ("new-id", "old-id")])
+def test_exact_disk_delete_never_expands_by_same_name_across_alias_roots(media_env, selected, kept):
+    client, downloads, _ = media_env
+    paths = {}
+    for source, chapter_id in (("copymanga", "old-id"), ("copymanga_web", "new-id")):
+        base = downloads / source / "twins"
+        paths[chapter_id] = base / chapter_id
+        page(paths[chapter_id])
+        (base / "_info.json").write_text(json.dumps({"chapters": [
+            {"id": chapter_id, "name": "第41話", "local_archive": chapter_id == "old-id"},
+        ]}), encoding="utf-8")
+    kept_page = paths[kept] / "0000.jpg"
+    before = kept_page.read_bytes()
+    response = client.post("/api/manga/copymanga/twins/chapters/delete",
+                           json={"chapter_ids": [selected], "identity_mode": "disk"})
+    assert response.status_code == 200
+    assert response.get_json()["identity_mode"] == "disk"
+    assert response.get_json()["deleted"] == 1
+    assert response.get_json()["missing"] == 0
+    assert not paths[selected].exists()
+    assert kept_page.read_bytes() == before
+
+
+@pytest.mark.parametrize("body", [
+    {"chapter_ids": ["one"], "identity_mode": "typo"},
+    {"chapter_ids": "one", "identity_mode": "disk"},
+    {"chapter_ids": [123], "identity_mode": "disk"},
+    ["one"],
+])
+def test_invalid_exact_delete_parameters_preserve_media(media_env, body):
+    client, downloads, _ = media_env
+    directory = downloads / "mangadex" / "invalid-delete" / "one"
+    page(directory)
+    before = (directory / "0000.jpg").read_bytes()
+    response = client.post("/api/manga/mangadex/invalid-delete/chapters/delete", json=body)
+    assert response.status_code == 400
+    assert (directory / "0000.jpg").read_bytes() == before
+
+
+@pytest.mark.parametrize("mode,deleted", [("disk", 0), ("compatible", 1)])
+def test_missing_disk_id_does_not_fall_back_but_legacy_mode_remains_compatible(media_env, mode, deleted):
+    client, downloads, cache = media_env
+    base = downloads / "copymanga_web" / "renamed-id"
+    page(base / "legacy-id")
+    (base / "_info.json").write_text(json.dumps({"chapters": [
+        {"id": "legacy-id", "name": "第42話"},
+    ]}), encoding="utf-8")
+    current = cache / "copymanga" / "renamed-id"
+    current.mkdir(parents=True)
+    (current / "_info_full.json").write_text(json.dumps({"data": {"chapters": [
+        {"id": "new-id", "name": "第42話"},
+    ]}}), encoding="utf-8")
+    response = client.post("/api/manga/copymanga/renamed-id/chapters/delete",
+                           json={"chapter_ids": ["new-id"], "identity_mode": mode})
+    assert response.status_code == 200
+    assert response.get_json()["deleted"] == deleted
+    assert response.get_json()["missing"] == (1 if mode == "disk" else 0)
+    assert (base / "legacy-id").exists() == (mode == "disk")

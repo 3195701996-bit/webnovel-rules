@@ -38,6 +38,8 @@ SERVER_DIR = os.path.join(ROOT, "server")
 # ── 服务端"读了但客户端按设计不发"的键：每条必须写明**为什么**────────────────
 # 键格式： "<规范化路径> <键>"；"*" 表示该段是变量
 REQUEST_OPTIONAL = {
+    "/api/manga/*/*/chapters/delete identity_mode": "可选删除身份模式：旧目录入口省略以保留名称兼容映射；"
+        "独立磁盘清单管理入口必须显式传disk（客户端接入尚待完成），不应更改旧入口默认值",
     "/api/tasks source": "服务端兼容别名：老网页端发 source，客户端统一发 source_uid（服务端先读 source_uid）",
     "/api/tasks url": "服务端兼容别名：老网页端发 url，客户端发 book_url",
     "/api/sources/bulk-enabled uids": "网页端按 uid 列表批量操作；安卓端只用 enabled+filter（按筛选条件批量）",
