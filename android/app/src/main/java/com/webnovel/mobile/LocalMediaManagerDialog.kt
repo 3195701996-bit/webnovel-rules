@@ -29,6 +29,7 @@ internal fun LocalMediaManagerDialog(gateway: EngineGateway, ep: EngineEndpoint,
     var confirm by remember { mutableStateOf(false) }
     val base = "/api/manga/${Uri.encode(source)}/${Uri.encode(comicId)}"
     suspend fun refresh() {
+        val recoveringFromReadError = loadError
         loading = true
         loadError = false
         try {
@@ -40,6 +41,7 @@ internal fun LocalMediaManagerDialog(gateway: EngineGateway, ep: EngineEndpoint,
             } else {
                 inventory = data
                 selected = selected.intersect(data.media.map { it.id }.toSet())
+                if (recoveringFromReadError) message = ""
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -131,6 +133,7 @@ internal fun LocalMediaManagerDialog(gateway: EngineGateway, ep: EngineEndpoint,
                     } catch (_: Exception) {
                         message = "删除未完成，请刷新本地清单后重试。"
                         onChanged()
+                        refresh()
                     } finally { busy = false }
                 }
             }, modifier = Modifier.testTag("local_media_delete_confirm")) { Text("删除") }

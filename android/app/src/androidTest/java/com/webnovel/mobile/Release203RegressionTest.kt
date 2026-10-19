@@ -10,6 +10,7 @@ import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.assertIsDisplayed
@@ -249,6 +250,52 @@ class Release203RegressionTest {
         rule.onNodeWithTag("local_media_close").performClick()
     }
 
+    @Test fun longLocalMediaInventoryRemainsScrollableAndSelectsExactRows() {
+        if (InstrumentationRegistry.getArguments().getString("localMediaLandscape") == "true") {
+            rule.runOnUiThread {
+                rule.activity.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+            }
+            rule.waitUntil(30_000) {
+                rule.activity.resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+            }
+        }
+        connect()
+        val c = SelfTestComic().also { comic = it; it.create() }
+        val before = c.mediaDigest()
+        execUpdateFixture("""
+            import app as _qa_app_module
+            from flask import jsonify as _qa_jsonify
+            _qa_flask = _qa_app_module.app
+            _qa_media_key = next(k for k in _qa_flask.view_functions if k.endswith('.api_manga_local_media'))
+            _qa_media_original = _qa_flask.view_functions[_qa_media_key]
+            def _qa_long_media(source, comic_id):
+                if comic_id == '${c.comicIdValue}':
+                    return _qa_jsonify({'ok': True, 'local_only': True, 'source': source,
+                        'comic_id': comic_id, 'count': 1000, 'media': [
+                            {'id': 'qa-long-' + str(i), 'name': '第' + str(i + 1) + '话 · 长标题缓存管理滚动验收',
+                             'downloaded': i % 2 == 0, 'partial': i % 2 != 0} for i in range(1000)]})
+                return _qa_media_original(source, comic_id)
+            _qa_flask.view_functions[_qa_media_key] = _qa_long_media
+        """.trimIndent())
+        localMediaFixtureInstalled = true
+        rule.openCachedShelf()
+        val tag = "manga_cached:${c.sourceKey}:${c.comicIdValue}"
+        rule.waitUntil(60_000) { rule.onAllNodesWithTag(tag).fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithTag(tag).performClick()
+        rule.waitUntil(30_000) { rule.onAllNodesWithTag("manga_detail_more").fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithTag("manga_detail_list").performScrollToNode(hasTestTag("manga_detail_more"))
+        rule.onNodeWithTag("manga_detail_more").performClick()
+        rule.onNodeWithTag("manage_local_media").performClick()
+        rule.waitUntil(30_000) { rule.onAllNodesWithTag("local_media_pick_qa-long-0").fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithTag("local_media_select_all").performClick()
+        rule.onNodeWithTag("local_media_delete").assertTextEquals("删除选中（1000）").assertIsDisplayed()
+        rule.onNodeWithTag("local_media_list").performScrollToIndex(999)
+        rule.onNodeWithTag("local_media_pick_qa-long-999").assertIsDisplayed().assertIsOn().performClick()
+        rule.onNodeWithTag("local_media_delete").assertTextEquals("删除选中（999）").assertIsDisplayed()
+        rule.onNodeWithTag("local_media_close").assertIsDisplayed().performClick()
+        assertTrue(before == c.mediaDigest())
+    }
+
     @Test fun localMediaReadAndDeleteFailuresRecoverWithoutLosingSelection() {
         connect()
         val c = SelfTestComic().also { comic = it; it.create(); it.makeFirstUnitPartialVolume() }
@@ -298,6 +345,7 @@ class Release203RegressionTest {
         assertTrue(rule.onAllNodesWithTag("local_media_pick_${SelfTestComic.CH1_ID}").fetchSemanticsNodes().isEmpty())
         rule.onNodeWithTag("local_media_retry").performClick()
         rule.waitUntil(30_000) { rule.onAllNodesWithTag("local_media_pick_${SelfTestComic.CH1_ID}").fetchSemanticsNodes().isNotEmpty() }
+        rule.waitUntil(30_000) { rule.onAllNodesWithTag("local_media_status").fetchSemanticsNodes().isEmpty() }
         rule.onNodeWithTag("local_media_pick_${SelfTestComic.CH1_ID}").performClick()
         rule.onNodeWithTag("local_media_delete").performClick()
         rule.onNodeWithTag("local_media_delete_confirm").performClick()
