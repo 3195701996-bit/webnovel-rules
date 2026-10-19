@@ -504,6 +504,9 @@ private fun HomeScaffold(
         return
     }
 
+    // The root shelf leaves composition while a detail is open, just like other
+    // destinations. Preserve its tab, scroll and filter state on the way back.
+    stateHolder.SaveableStateProvider("home-root") {
     Scaffold(
         topBar = {
             TopAppBar(
@@ -607,6 +610,7 @@ private fun HomeScaffold(
                 }
             }
         }
+    }
     }
 }
 
