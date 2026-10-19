@@ -1853,15 +1853,11 @@ fun MangaReaderScreen(
                             // 只有放大状态才接管手势，否则让 LazyColumn 正常滚动
                             .transformable(state = transformState, enabled = zoom > 1f)
                             .pointerInput(ch.id, paged) {
-                                detectTapGestures(onTap = { offset ->
-                                    // Horizontal pages own single-tap behavior below, avoiding a
-                                    // parent/child double toggle in the deliberately small hit zone.
-                                    if (!paged && isReaderControlHotZone(
-                                            offset.x, offset.y,
-                                            size.width.toFloat(), size.height.toFloat())) {
-                                        controlsVisible = !controlsVisible
-                                    }
-                                }, onDoubleTap = {
+                                // Continuous scrolling owns its tap detector on LazyColumn:
+                                // its scrollable consumes DOWN before this parent can accept it.
+                                if (!paged) return@pointerInput
+                                // Horizontal pages own single taps below.
+                                detectTapGestures(onDoubleTap = {
                                     if (zoom > 1f) { zoom = 1f; panOffset = Offset.Zero } else { zoom = 2f }
                                 })
                             },
@@ -1938,7 +1934,20 @@ SubcomposeAsyncImage(
                     } else {
                     LazyColumn(
                         state = listState,
-                        modifier = Modifier.fillMaxSize().testTag("manga_pages"),
+                        modifier = Modifier.fillMaxSize().testTag("manga_pages")
+                            .pointerInput(ch.id) {
+                                detectContinuousReaderTaps(onTap = { offset ->
+                                    if (isReaderControlHotZone(offset.x, offset.y,
+                                            size.width.toFloat(), size.height.toFloat())) {
+                                        controlsVisible = !controlsVisible
+                                    }
+                                }, onDoubleTap = {
+                                    if (zoom > 1f) {
+                                        zoom = 1f
+                                        panOffset = Offset.Zero
+                                    } else zoom = 2f
+                                })
+                            },
                         contentPadding = PaddingValues(bottom = 12.dp),
                     ) {
                         items(p.count) { i ->

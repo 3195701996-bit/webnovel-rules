@@ -12,6 +12,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.click
+import androidx.compose.ui.test.swipeUp
 import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.input.key.Key
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -65,6 +66,37 @@ class MangaReaderControlsAutoHideTest {
         assertFalse("自检漫画目录未清理干净", comic.exists())
         assertTrue("自检书库条目未清理", comic.libraryEntryCount() == 0)
         assertTrue("自检历史条目未清理", comic.historyEntryCount() == 0)
+    }
+
+    @Test
+    fun continuousReaderCenterTapSurvivesScrollableChild() {
+        ReaderPrefs.save(rule.activity, ReaderPrefs.load(rule.activity).copy(horizontalPaging = false))
+        rule.openCachedShelf()
+        val shelfTag = "manga_cached:${comic.sourceKey}:${comic.comicIdValue}"
+        waitFor { nodes(shelfTag) > 0 }
+        rule.onNodeWithTag(shelfTag).performClick()
+        waitFor { rule.onAllNodesWithText("开始阅读").fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithText("开始阅读").performClick()
+        waitFor { nodes("manga_pages") > 0 }
+        assertEquals(0, nodes("reader_progress_label"))
+        rule.onNodeWithTag("manga_pages").performTouchInput {
+            click(androidx.compose.ui.geometry.Offset(width * 0.25f, height * 0.5f))
+        }
+        assertEquals(0, nodes("reader_progress_label"))
+        rule.onNodeWithTag("manga_pages").performTouchInput { click() }
+        waitFor(timeoutMs = 10_000) { nodes("reader_progress_label") > 0 }
+        assertTrue(nodes("reader_progress_slider") > 0)
+        waitFor(timeoutMs = 10_000) { nodes("reader_progress_label") == 0 }
+        rule.onNodeWithTag("manga_pages").performTouchInput { swipeUp() }
+        assertEquals("滚动不能唤出阅读栏", 0, nodes("reader_progress_label"))
+        rule.onNodeWithTag("manga_pages").performTouchInput { click() }
+        waitFor(timeoutMs = 10_000) { nodes("reader_progress_label") > 0 }
+        rule.onNodeWithTag("reader_progress_slider").performTouchInput {
+            click(androidx.compose.ui.geometry.Offset(width * 0.96f, height / 2f))
+        }
+        waitFor(timeoutMs = 10_000) {
+            rule.onAllNodesWithText("2/2页", substring = true).fetchSemanticsNodes().isNotEmpty()
+        }
     }
 
     @Test
