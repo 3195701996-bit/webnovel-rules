@@ -137,6 +137,7 @@ class BackupScopeUiTest {
         assertTrue("必须明确'不含正文'：$excText", excText.contains("正文"))
         assertTrue("必须明确'不含漫画图片'：$excText", excText.contains("漫画"))
         assertTrue("清洗原文存档明确不在配置备份内", excText.contains("清洗前原文存档"))
+        assertTrue("元数据修复记录明确不在配置备份内", excText.contains("书名作者修复记录"))
         assertTrue("scope 必须带说明（不是离线全文副本）",
             scope.optString("note").contains("不是") || scope.optString("note").isNotBlank())
         ev("清单范围：包含 ${inc.length()} 项 / 明确不含 ${exc.length()} 项")

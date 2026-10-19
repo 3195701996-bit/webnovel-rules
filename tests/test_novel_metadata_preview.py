@@ -124,3 +124,24 @@ def test_confirmation_refuses_changed_catalog_and_corrupt_metadata_record(metada
     response = client.post('/api/books/book-one/metadata', json={'state_revision': revision, 'metadata': {'name': '书名'}})
     assert response.status_code == 400
     assert (folder / '_metadata.json').read_bytes() == original
+
+
+@pytest.mark.parametrize('original', [b'', b' ', b'null', b'[]',
+    b'{"version":true,"book_url":"https://metadata.invalid/1","metadata":{"name":"bad"}}',
+    b'{"version":1,"book_url":"https://metadata.invalid/1","metadata":{}}',
+    b'{"version":1,"book_url":"https://metadata.invalid/1","metadata":{"name":"bad","chapters":[]}}',
+    b'{"version":1,"book_url":"https://metadata.invalid/1","metadata":{"name":7}}'])
+def test_existing_invalid_metadata_is_never_overwritten(metadata_env, original):
+    client, api, folder = metadata_env
+    from engine.novel_metadata import metadata_snapshot, overlay_metadata
+    path = folder / '_state.json'
+    revision = metadata_snapshot(str(path))[1]
+    (folder / '_metadata.json').write_bytes(original)
+    before = {p.name: p.read_bytes() for p in folder.iterdir()}
+    raw = json.loads(path.read_text())
+    assert overlay_metadata(str(path), raw) == raw
+    assert client.get('/api/books/book-one/metadata/preview').status_code == 503
+    response = client.post('/api/books/book-one/metadata', json={
+        'state_revision': revision, 'metadata': {'name': '不能覆盖异常记录'}})
+    assert response.status_code == 400
+    assert before == {p.name: p.read_bytes() for p in folder.iterdir()}
