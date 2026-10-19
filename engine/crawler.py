@@ -35,7 +35,7 @@ def now_iso():
 # 直接反映"当前磁盘上可导出的内容"，跨进程/重启有效，无需在各写点埋钩子。
 EXPORT_META_NAME = "_export.json"
 # 合并算法变化必须使旧全文失效，即使章节缓存的mtime/size未变化。
-EXPORT_FORMAT_VERSION = 2
+EXPORT_FORMAT_VERSION = 3
 
 
 def content_revision(book_dir, chapters):
@@ -208,14 +208,17 @@ def merge_book_txt(book_dir, chapters, force=False):
             if not t.strip():
                 return None        # 非空文件却无有效正文 → 未完整读取
             # 章节名标题（无名称时用"第N章"兜底）
-            name = (c.get('name') or '').strip() or f"第{idx}章"
+            # 标题必须独占一行；只规范导出副本，不改变权威目录。
+            name = re.sub(r'\s+', ' ', (c.get('name') or '').strip()) or f"第{idx}章"
             body = t.strip()
             # 正文开头与章节名重复（源站正文首段=章节名，部分源缓存为
             # "标题\n\n标题\n\n正文" 双标题模式）→ 全部去掉，
             # 避免导出 txt 出现"标题+正文首行同章节名"的视觉重复
             _lines = body.split("\n")
             if _lines and name:
-                _norm = lambda s: re.sub(r"[\s\W]", "", s)[:15]
+                # 只允许完整标题相等。前15字相同不是重复标题的证据，
+                # 否则剧情首句引用长标题时会把整段正文一起吞掉。
+                _norm = lambda s: re.sub(r"\s+", "", s)
                 # 跳过前导空行后检查首行
                 _k = 0
                 while _k < len(_lines) and not _lines[_k].strip():

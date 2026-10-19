@@ -232,6 +232,34 @@ def test_export_algorithm_change_invalidates_unchanged_cache(tmp_path, monkeypat
     assert CR.export_is_fresh(d, _named(CHS), out)
 
 
+def test_export_title_prefix_cannot_consume_story_line(tmp_path):
+    d = str(tmp_path / "book")
+    name = "第1章 这是一个超过十五个字符的长标题"
+    url = "https://x.test/long-title"
+    story = name + "，他在笔记上写下这句话，然后转身离开。"
+    _mk_book(d, [(name, url)], {url: story + "\n真正的第二段。"})
+    out = _merge(d, [(name, url)])
+    with open(out, encoding="utf-8") as f:
+        text = f.read()
+    assert story in text and "真正的第二段。" in text
+
+
+def test_export_heading_occupies_one_line_without_changing_catalog(tmp_path):
+    d = str(tmp_path / "book")
+    name = "第1章\n\n标题\t续名\u2028末尾"
+    url = "https://x.test/wrapped-title"
+    state = _mk_book(d, [(name, url)], {url: "正文应该完整保留。"})
+    # 使用纯正文缓存，模拟常规下载而非带标题的重爬缓存。
+    with open(os.path.join(d, CR._cache_key_of(url) + ".cache"), "w", encoding="utf-8") as f:
+        f.write("正文应该完整保留。")
+    out = _merge(d, [(name, url)])
+    with open(out, encoding="utf-8") as f:
+        text = f.read()
+    assert text.splitlines() == ["第1章 标题 续名 末尾", "正文应该完整保留。"]
+    with open(os.path.join(d, "_state.json"), encoding="utf-8") as f:
+        assert json.load(f) == state
+
+
 def test_export_fresh_detects_txt_tampering(tmp_path):
     d = str(tmp_path / "book")
     _mk_book(d, CHS, TXT)
