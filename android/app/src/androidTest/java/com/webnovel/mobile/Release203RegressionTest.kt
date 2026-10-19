@@ -18,6 +18,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
 import org.junit.After
+import org.junit.Before
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -30,6 +31,14 @@ class Release203RegressionTest {
     private lateinit var endpoint: EngineEndpoint
     private var updateFixtureInstalled = false
     private var updateFixtureNamespace: com.chaquo.python.PyObject? = null
+
+    @Before fun requireIsolatedEmulator() {
+        val device = InstrumentationRegistry.getInstrumentation().uiAutomation
+        val descriptor = device.executeShellCommand("getprop ro.kernel.qemu")
+        val qemu = android.os.ParcelFileDescriptor.AutoCloseInputStream(descriptor)
+            .bufferedReader().use { it.readText().trim() }
+        assertTrue("合成数据回归只能运行于专用模拟器，不得运行于用户真机", qemu == "1")
+    }
 
     private fun execUpdateFixture(code: String) {
         val builtins = com.chaquo.python.Python.getInstance().getModule("builtins")
@@ -99,7 +108,8 @@ class Release203RegressionTest {
         rule.onNodeWithText("全选本地内容").assertIsDisplayed()
         rule.onNodeWithText("删除选中（0）").assertIsDisplayed()
         assertTrue("选择与取消选择不能删除本地文件", c.exists())
-        rule.onNodeWithTag("manga_detail_list").performScrollToNode(hasTestTag("copy_catalog_report"))
+        rule.onNodeWithTag("manga_detail_list").performScrollToNode(hasTestTag("manga_detail_more"))
+        rule.onNodeWithTag("manga_detail_more").performClick()
         rule.onNodeWithTag("copy_catalog_report").performClick()
         rule.waitUntil(10_000) {
             rule.onAllNodesWithText("章节核对信息已复制", substring = true).fetchSemanticsNodes().isNotEmpty()
