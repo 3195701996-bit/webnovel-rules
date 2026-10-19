@@ -115,8 +115,8 @@ fun BookDetailScreen(
     var cleaning by remember { mutableStateOf(false) }
     var cleanPreview by remember { mutableStateOf<org.json.JSONObject?>(null) }
     var showOriginalRecovery by rememberSaveable(bookKey) { mutableStateOf(false) }
-    var showReaderEdition by remember { mutableStateOf(false) }
-    var showMetadata by remember { mutableStateOf(false) }
+    var showReaderEdition by rememberSaveable(bookKey) { mutableStateOf(false) }
+    var showMetadata by rememberSaveable(bookKey) { mutableStateOf(false) }
     var toolsExpanded by rememberSaveable(bookKey) { mutableStateOf(false) }
     var exportPath by rememberSaveable(bookKey) { mutableStateOf(bookPath(bookKey, "/txt")) }
     var missingCount by remember { mutableIntStateOf(0) }

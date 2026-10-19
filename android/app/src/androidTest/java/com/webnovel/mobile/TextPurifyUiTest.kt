@@ -6,6 +6,8 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsOn
+import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.performScrollToIndex
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.LargeTest
@@ -80,6 +82,19 @@ class TextPurifyUiTest {
         rule.waitUntil(15_000) {
             rule.activity.resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
         }
+    }
+
+    private fun rotateOpenDialog() {
+        val landscape = rule.activity.resources.configuration.orientation ==
+            android.content.res.Configuration.ORIENTATION_LANDSCAPE
+        val expected = if (landscape) android.content.res.Configuration.ORIENTATION_PORTRAIT
+            else android.content.res.Configuration.ORIENTATION_LANDSCAPE
+        rule.activityRule.scenario.onActivity {
+            it.requestedOrientation = if (landscape)
+                android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            else android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+        }
+        rule.waitUntil(15_000) { rule.activity.resources.configuration.orientation == expected }
     }
 
     private val adLine = "【新章节更新迟缓的问题，在能换源的app上终于有了解决之道，" +
@@ -225,6 +240,17 @@ class TextPurifyUiTest {
         assertEquals(0, texts("保存阅读版"))
         rule.onAllNodesWithTag("reader_edition_confirm")[0].performClick()
         rule.waitUntil(20_000) { texts("将导出 1 章 · 排除 1 项", substring = true) > 0 }
+        rule.onAllNodesWithTag("reader_edition_clean")[0].performScrollTo().performClick()
+        rule.waitUntil(5_000) { texts("选项已变更", substring = true) > 0 }
+        rule.onAllNodesWithTag("reader_edition_confirm")[0].performClick()
+        rule.waitUntil(20_000) { texts("将导出 1 章 · 排除 1 项", substring = true) > 0 }
+        rotateOpenDialog()
+        rule.waitUntil(20_000) { nodes("reader_edition_confirm") > 0 }
+        rule.onAllNodesWithTag("reader_edition_omit")[0].performScrollTo().assertIsOn()
+        rule.onAllNodesWithTag("reader_edition_clean")[0].performScrollTo().assertIsOff()
+        assertEquals("旋转后必须重新校验导出预览", 0, texts("保存阅读版"))
+        rule.onAllNodesWithTag("reader_edition_confirm")[0].performClick()
+        rule.waitUntil(20_000) { texts("将导出 1 章 · 排除 1 项", substring = true) > 0 }
         assertTrue(before.contentEquals(cache.readBytes()))
         val ep = gateway.currentEndpoint()!!
         val preview = runBlocking { gateway.httpText(ep.port, "/api/books/$key/txt/preview?clean=1&omit_promotions=1") }
@@ -273,6 +299,12 @@ api.SourceCrawler = fixture_crawler
             rule.waitUntil(20_000) { texts("确认修改") > 0 }
         }
         openAndPreview()
+        rotateOpenDialog()
+        rule.waitUntil(20_000) { nodes("novel_metadata_confirm") > 0 }
+        assertEquals("旋转不能保留旧书名修改授权", 0, texts("确认修改"))
+        assertFalse("旋转不得自动提交元数据", File(bookDir, "_metadata.json").exists())
+        rule.onAllNodesWithTag("novel_metadata_confirm")[0].performClick()
+        rule.waitUntil(20_000) { texts("确认修改") > 0 }
         rule.onAllNodesWithTag("novel_metadata_cancel")[0].performClick()
         assertEquals(original, bookDir.listFiles()!!.filter { it.isFile }.associate { it.name to it.readBytes().toList() })
         openAndPreview()

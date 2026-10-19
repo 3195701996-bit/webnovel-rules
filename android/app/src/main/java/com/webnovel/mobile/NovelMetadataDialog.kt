@@ -11,6 +11,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
 import org.json.JSONObject
 
 @Composable
@@ -61,6 +62,8 @@ fun NovelMetadataDialog(bookKey: String, port: Int, gateway: EngineGateway, onCl
                             require(response.ok && JSONObject(response.body).opt("ok") == true) { "HTTP ${response.code} ${response.body.take(180)}" }
                             preview = null; onChanged(); onClose()
                         }
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
                     } catch (error: Exception) {
                         preview = null; changes = emptyList()
                         status = "操作未确认，请重新预览：${error.message}"

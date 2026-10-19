@@ -4,6 +4,14 @@
 
 ## 2026-10-20 元数据修复跨端验收与全量回归
 
+### 小说工具生命周期一致性：阅读版导出与书名修复
+
+- 调查测量异常时通过Gradle dependencyInsight确认Release运行时实际Compose UI **1.7.5**、Material3 **1.3.1**，不是只看BOM名称推测。核对[Google同名异常记录](https://issuetracker.google.com/issues/359623674)及[Mozilla间歇测试记录](https://bugzilla.mozilla.org/show_bug.cgi?id=2005699)，均不能直接证明本项目根因或确定升级哪一版本能修复，因此未改依赖、未关闭测量异常发布阻断。
+- 相邻代码审查发现阅读版导出和书名修复弹窗同样只remember可见性。先强化既有两项仪器测试，再在冻结rc18业务包上验收，**2项均旋转后等弹窗20s超时，合计45.92s**；日志 `/private/tmp/webnovel-tools-rotation-before.log`。未删原有选项预览失效、流式导出、目标文件409不截断、元数据取消/版本冲突/确认及目录保护断言。
+- 两个弹窗可见性现按bookKey记忆；导出的clean/omit两个用户选择用rememberSaveable保留，但report/revision、元数据preview/确认授权均不保存，旋转重建后需要重新预览。取消协程继续向上传递，不显示成预览或提交错误，也不自动导出/修改书名。未改API、持久化格式或Web逻辑。
+- 专用ReaderAudit_API36 Release主包/JVM/仪器构建18s、JVM **141/141、零失败/错误/跳过**；TextPurify全部8项与Release203全部14项合跑 **22/22（51.194s）**。随后进一步把导出去广告选项实际改为false、排除推广项改为true，旋转后分别assertIsOff/assertIsOn、旧保存入口消失、重新预览仍只导出1章排除1项；新增仪器构建10s，该导出及元数据两项 **2/2（5.041s）**。请求/响应契约、APK Web资源逐项一致及diff通过，当前模拟器crash缓冲为空。原偶发崩溃仍不能据此认定已解决。
+- 此轮仅Android变更，未重复完整Python/JS或全57项；没有覆盖手机，手机仍原始rc18、不含后续三种工具旋转修复；未发布3.0.0或部署用户Web，专用模拟器关闭。后续需继续原测量异常定位及新候选整合验收。
+
 ### 原文恢复弹窗旋转状态修复（与偶发测量异常分别跟踪）
 
 - rc18原包按原失败前置顺序重跑27项通过（65.673s），完整日志 `/private/tmp/webnovel-rc18-repro-{instrumentation,logcat}.log`，未再次复现测量异常；这不是其已修复的证据。准确rc18 SHA的CI39338432833、39338426888现均确认success。

@@ -6,17 +6,21 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
 import org.json.JSONObject
 
 @Composable
 fun ReaderEditionDialog(bookKey: String, port: Int, gateway: EngineGateway, onClose: () -> Unit, onExport: (String) -> Unit) {
     val scope = rememberCoroutineScope()
-    var clean by remember { mutableStateOf(true) }
-    var omit by remember { mutableStateOf(false) }
+    // Preserve user options, but never persist a preview revision: recreating
+    // the dialog must require a fresh read-only check before opening SAF.
+    var clean by rememberSaveable(bookKey) { mutableStateOf(true) }
+    var omit by rememberSaveable(bookKey) { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     var report by remember { mutableStateOf<JSONObject?>(null) }
     var status by remember { mutableStateOf("先预览，再保存；不会修改原文缓存或原始TXT。") }
@@ -84,6 +88,8 @@ fun ReaderEditionDialog(bookKey: String, port: Int, gateway: EngineGateway, onCl
                         }
                         require(data.getInt("exported_count") > 0) { "没有本地正文章节" }
                         report = data; status = "预览已就绪，请核对后保存。正文若再变化，导出会拒绝并要求重新预览。"
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
                     } catch (error: Exception) {
                         report = null; status = "预览失败：${error.message}"
                     } finally { busy = false }
