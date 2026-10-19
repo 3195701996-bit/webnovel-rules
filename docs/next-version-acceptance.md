@@ -4,6 +4,13 @@
 
 ## 2026-10-20 元数据修复跨端验收与全量回归
 
+### 用户指定《X光室的奇迹》真实首卷227页移动运行时验收
+
+- 发布核对发现已有纯测试分别证明卷排序/显式选卷保留，但旧MangaLiveDownloadProbeTest固定社長一话及30页，不能当作用户指定整卷阅读/下载的直接证据。本轮只扩展验收探针，不改业务代码：自定义comicId/chapterId/expectedPages必须一起提供、页数1–2000、身份单路径段，仍要求allowExternal显式启用及qemu身份，禁止物理手机；默认30页原探针保持兼容。
+- 主机独立WR_DATA_DIR和单进程代理只读搜索“X光室”得到真实ID **xguangshideqiji**；真实详情60单元，其中6卷/54单话，第一卷 **37f1b2be-cfd2-11e9-84f8-00163e0ca5bd**，首个单话第51话，第一卷图片列表227张。生产_sort_split_chapters完成分组，卷优先规则另有shared chapter-order/identity回归；未用猜测的作品/章节ID。
+- 专用ReaderAudit_API36/emulator-5570运行Release测试，opt-in参数为上述真实ID、expectedPages227、requireVolume=true、recoverTask=true。先实际确认该UUID属于卷，使用生产_manga_read_images+ImageDownloader获取首图并Pillow.verify；再从隔离错误快照通过真实DownloadManager.resume_result/worker完成整卷，**OK(1 test)，73.634s**。实际摘要status=done/done1/total1/images_done227/volumes6/episodes54/online_first_page_verified=true/error空/events空；磁盘227张逐一Pillow.verify通过，成功后隔离目录deleteRecursively明确成功。verify是文件校验，并非逐页人工阅读/全部像素解码或真机UI验收。
+- 首轮探针在适配器注册前提前查get_adapter，None导致取目录前失败；补上与生产worker相同的_ensure_adapters并明确断言适配器存在后复跑通过，没有改下载器以迁就测试，也未将失败/跳过视为成功。初次Release主包/仪器构建17s，追加仪器包8s，APK Web资源一致、diff通过；本轮无Python业务/测试修改，未重复全后端/全UI/JS，手机仍rc17。代理仅在测试模拟器运行时临时设置且finally恢复，不改手机VPN；专用模拟器关闭。
+
 ### 下载运行中断网后的暂停检查与只补缺页恢复
 
 - 源码审查发现ImageDownloader.get已有队列/源预算暂停检查，但没有把cancel_check传入实际单图HTTP重试：用户在断网后暂停，仍会把当前图片剩余尝试及1.5/3s退避跑完。现贯穿到尝试前、响应返回后和写图前；退避有回调时以最多0.1s片段检查，没有回调仍维持原sleep策略。独立ImageRequestCancelled不作为源站坏图/存储错误，不继续重试、不写新图片、不把主动取消计入源失败采样。已进入阻塞HTTP的单次请求仍受原超时约束，不承诺瞬间中断Socket。

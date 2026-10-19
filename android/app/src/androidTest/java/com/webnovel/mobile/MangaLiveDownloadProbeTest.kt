@@ -26,6 +26,23 @@ class MangaLiveDownloadProbeTest {
         val source = InstrumentationRegistry.getArguments().getString("source") ?: "copymanga"
         assertTrue("Unsupported live probe source", source in setOf("copymanga", "copymanga_web"))
         ns.callAttr("__setitem__", "probe_source", source)
+        val args = InstrumentationRegistry.getArguments()
+        val customComic = args.getString("comicId")
+        val customChapter = args.getString("chapterId")
+        val customPages = args.getString("expectedPages")
+        val custom = customComic != null || customChapter != null || customPages != null
+        assertTrue("Custom probes require comicId, chapterId and expectedPages together",
+            !custom || (!customComic.isNullOrBlank() && !customChapter.isNullOrBlank() &&
+                customPages?.toIntOrNull() in 1..2000))
+        val comic = customComic ?: "shezhangyujiuyuxing"
+        val chapter = customChapter ?: "be6236cb-c985-11f1-80bc-fa163e02432f"
+        assertTrue("Probe identity must be one path segment", listOf(comic, chapter).all {
+            it.isNotBlank() && it != "." && it != ".." && '/' !in it && '\\' !in it
+        })
+        ns.callAttr("__setitem__", "probe_comic", comic)
+        ns.callAttr("__setitem__", "probe_chapter", chapter)
+        ns.callAttr("__setitem__", "expected_pages", customPages?.toInt() ?: 30)
+        ns.callAttr("__setitem__", "require_volume", args.getString("requireVolume") == "true")
         ns.callAttr("__setitem__", "recover_task",
             InstrumentationRegistry.getArguments().getString("recoverTask") == "true")
         // The fixture owns every durable file. Only production source/image/
@@ -48,9 +65,27 @@ class MangaLiveDownloadProbeTest {
                 manager.configure(downloads_root=os.path.join(probe_root, 'downloads'),
                                   state_dir=os.path.join(probe_root, 'state'),
                                   library_file=os.path.join(probe_root, 'library.json'))
-                key = probe_source + ':shezhangyujiuyuxing'
-                chapter = 'be6236cb-c985-11f1-80bc-fa163e02432f'
-                task = dict(source=probe_source, comic_id='shezhangyujiuyuxing',
+                key = probe_source + ':' + probe_comic
+                chapter = probe_chapter
+                volume_count = episode_count = 0
+                if require_volume:
+                    from engine.manga.manager import get_adapter
+                    from engine.manga.downloader import ImageDownloader
+                    from PIL import Image
+                    dm._ensure_adapters()
+                    adapter = get_adapter(probe_source, state_dir=os.path.join(probe_root, 'state'))
+                    assert adapter is not None, 'Requested adapter was not registered'
+                    detail = adapter.comic_info(probe_comic)
+                    episodes, volumes = state._sort_split_chapters(detail.chapters)
+                    volume_count, episode_count = len(volumes), len(episodes)
+                    assert any(c['id'] == chapter for c in volumes), 'Selected identity is not a real volume'
+                    read_adapter, read_images = state._manga_read_images(adapter, probe_source, probe_comic, chapter)
+                    assert len(read_images) == expected_pages, (len(read_images), expected_pages)
+                    reader = ImageDownloader(read_adapter, os.path.join(probe_root, 'reader'), min_interval=0)
+                    _, first_path = reader.get(read_images[0], probe_comic, chapter, 0)
+                    with Image.open(first_path) as first_image:
+                        first_image.verify()
+                task = dict(source=probe_source, comic_id=probe_comic,
                     title='live probe', status='running', chapters=[chapter], paused=False,
                     cover='https://probe.invalid/cover.jpg')
                 if recover_task:
@@ -78,13 +113,15 @@ class MangaLiveDownloadProbeTest {
                 result = manager.status(key)
                 summary = json.dumps(dict(status=result.get('status'), done=result.get('done'),
                     total=result.get('total'), images_done=result.get('images_done'),
+                    comic=probe_comic, chapter=chapter, volumes=volume_count, episodes=episode_count,
+                    online_first_page_verified=require_volume,
                     error=result.get('error'), events=diag.events()['errors']), ensure_ascii=False)
                 if result.get('status') == 'done':
                     from PIL import Image
-                    page_dir = os.path.join(probe_root, 'downloads', probe_source, 'shezhangyujiuyuxing', chapter)
+                    page_dir = os.path.join(probe_root, 'downloads', probe_source, probe_comic, chapter)
                     pages = [os.path.join(page_dir, name) for name in os.listdir(page_dir)
                              if name.lower().endswith(('.jpg', '.jpeg', '.png', '.webp', '.avif'))]
-                    assert len(pages) == 30, len(pages)
+                    assert len(pages) == expected_pages, (len(pages), expected_pages)
                     for page in pages:
                         with Image.open(page) as image:
                             image.verify()
@@ -111,7 +148,7 @@ class MangaLiveDownloadProbeTest {
         val result = org.json.JSONObject(summary)
         assertEquals(summary, "done", result.getString("status"))
         assertEquals(summary, 1, result.getInt("done"))
-        assertEquals(summary, 30, result.getInt("images_done"))
+        assertEquals(summary, customPages?.toInt() ?: 30, result.getInt("images_done"))
         // Preserve failed evidence. Only a fully successful isolated fixture is removed.
         assertTrue("Probe fixture cleanup failed", root.deleteRecursively())
     }
