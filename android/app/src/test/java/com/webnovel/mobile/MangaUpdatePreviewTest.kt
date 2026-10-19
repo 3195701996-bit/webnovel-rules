@@ -7,6 +7,19 @@ import org.junit.Test
 
 class MangaUpdatePreviewTest {
     @Test
+    fun librarySummaryDoesNotCallOldMissingChaptersNewOrFailuresCurrent() {
+        val missing = EngineData.mangaUpdateCheck("""{"ok":true,"has_update":false,"missing_count":1,"missing":["old"]}""")
+        val failed = EngineData.mangaUpdateCheck("""{"ok":false,"error":"离线"}""")
+        val summary = MangaLibraryUpdate(false, 2, 2, listOf("旧缺章" to missing, "失败" to failed))
+        assertEquals(1, summary.withUpdate.size)
+        assertTrue(summary.label.contains("1 部有待下载内容"))
+        assertTrue(summary.label.contains("1 部检查失败"))
+        assertFalse(summary.label.contains("有新话"))
+        assertFalse(summary.label.contains("全部已是最新"))
+        assertTrue(MangaLibraryUpdate(false, 1, 1, listOf("失败" to failed)).label.contains("检查失败"))
+    }
+
+    @Test
     fun previewPreservesChapterIdentityAndNameSeparately() {
         val result = EngineData.mangaUpdateCheck("""{
             "ok":true,"has_update":true,"missing_count":2,"latest":"第42话",

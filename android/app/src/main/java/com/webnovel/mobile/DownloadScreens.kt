@@ -153,30 +153,36 @@ internal fun DownloadsScreen(
                 OutlinedButton(
                     onClick = {
                         scope.launch {
-                            checking = true; actionMsg = "正在检查书库更新…"
+                            checking = true; libUpdate = null; actionMsg = "正在检查书库更新…"
+                            try {
                             val start = gateway.httpPost(ep.port,
                                 "/api/manga/library/check-updates")
                             if (start.code == 409) {
                                 actionMsg = "已有一轮检查在进行中，跟随它的进度"
                             } else if (!start.ok) {
                                 actionMsg = "启动检查失败：HTTP ${start.code}"
-                                checking = false
+                                return@launch
                             }
                             var u = MangaLibraryUpdate(false, 0, 0, emptyList())
                             for (i in 0 until 90) {
                                 kotlinx.coroutines.delay(2000)
                                 val st = gateway.httpText(ep.port,
                                     "/api/manga/library/check-updates/status")
-                                val o = runCatching {
-                                    org.json.JSONObject(st.body)
-                                }.getOrNull() ?: continue
+                                require(st.ok) { "读取检查进度失败：HTTP ${st.code}" }
+                                val o = org.json.JSONObject(st.body)
+                                require(o.opt("running") is Boolean && o.opt("done") is Number &&
+                                    o.opt("total") is Number && o.optJSONArray("results") != null) {
+                                    "检查进度响应无效"
+                                }
                                 u = EngineData.mangaLibraryUpdate(st.body)
                                 if (!u.running) break
                                 actionMsg = "检查书库更新：${u.label}"
                             }
                             libUpdate = u
-                            actionMsg = u.label
-                            checking = false
+                            actionMsg = if (u.running) "检查尚未结束，请稍后重新检查；不会自动下载。" else null
+                            } catch (error: Exception) {
+                                actionMsg = "检查未完成，请重试：${error.message}"
+                            } finally { checking = false }
                         }
                     },
                     enabled = !checking,
@@ -205,7 +211,7 @@ internal fun DownloadsScreen(
                             refresh()
                         }
                     },
-                    enabled = !checking && (libUpdate?.withUpdate?.isNotEmpty() == true),
+                    enabled = !checking && libUpdate?.running == false && (libUpdate?.withUpdate?.isNotEmpty() == true),
                     modifier = Modifier.weight(1f),
                 ) { Text("下载更新（${libUpdate?.withUpdate?.size ?: 0} 部）") }
             }

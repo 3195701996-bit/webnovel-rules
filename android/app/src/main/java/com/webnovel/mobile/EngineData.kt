@@ -280,8 +280,9 @@ data class MangaLibraryUpdate(
         get() = if (running) "检查中 $done/$total"
                else when {
                    items.isEmpty() -> "尚未检查"
+                   items.any { !it.second.ok } -> "${withUpdate.size} 部有待下载内容，${items.count { !it.second.ok }} 部检查失败（检查 ${items.size} 部）"
                    withUpdate.isEmpty() -> "全部已是最新（检查 ${items.size} 部）"
-                   else -> "${withUpdate.size} 部有新话（检查 ${items.size} 部）"
+                   else -> "${withUpdate.size} 部有待下载内容（检查 ${items.size} 部）"
                }
 }
 
