@@ -507,6 +507,9 @@
 
 ### Web 阅读版 TXT 导出验收（未发布）
 
+- 内部rc13/code172从干净提交d1aefed726ac0d8fd6ec5395d45c29c74a82b925构建，Release JVM与APK23秒成功；只读发布校验器通过同包名、递增版本码、clean精确SHA及与rc12同签名。冻结主机文件/private/tmp/webnovel-iqoo-inspect-gs7YcH/rc13-d1aefed7.apk，SHA256 b38ae6bf9e075eca1f6eebe6e165dc28b2c6c432ed15939924c18ecebed9a74e；证书141ec0bef7e49d1b9b31aae3af65da2be2d124eb98641d096d53ecc86a4a93b4。APK内全部Web资源与源码一致。
+- d1aefed7已推送开发分支，不是公开Release。安装前只读检查发现iQOO设备10AD7B1GP8001BR已从USB消失，因此未安装候选，也未作数据保留/真机链路完成结论；已非阻塞请求重连，继续其他工作，不改VPN、不绕过锁屏。3.0正式发布和远端CI通过门仍开放。
+
 - 精确实现47782bf136dad432956beaf9e091bf70f145b501冻结回归：1994 passed、2 skipped（152.68秒），40组JS通过，读接口27/写接口18与48调用点均0问题（读契约保留工具披露的空态覆盖限制），真实隔离HTTP冒烟20/20、错误级Ruff/diff通过。Android Release JVM/主APK构建20秒、包内Web资源一致。测试未污染工作树，没有操作手机用户数据。
 - 准备内部保留数据升级候选rc13/code172，集中纳入近期清洗/恢复/阅读版TXT与短屏布局、本地空目录修复；不是正式3.0.0或公开发布。版本变更后仍须clean SHA构建、同签名/递增码/资源校验及真机验证，不能借用本段本地结果宣称该流程完成。远端e692a8b9两条CI 39280915904/39280908756仍queued，已核对三个job均无step执行，无失败日志可修；不绕过远端发布门。
 
