@@ -117,6 +117,7 @@ fun BookDetailScreen(
     var showOriginalRecovery by remember { mutableStateOf(false) }
     var showReaderEdition by remember { mutableStateOf(false) }
     var showMetadata by remember { mutableStateOf(false) }
+    var toolsExpanded by rememberSaveable(bookKey) { mutableStateOf(false) }
     var exportPath by rememberSaveable(bookKey) { mutableStateOf(bookPath(bookKey, "/txt")) }
     var missingCount by remember { mutableIntStateOf(0) }
     var confirmDelete by remember { mutableStateOf(false) }
@@ -287,12 +288,18 @@ fun BookDetailScreen(
                                             .testTag("reclean_button"),
                                     ) { Text(if (cleaning) "统计中…" else "净化正文") }
                                 }
-                                TextButton(onClick = { showOriginalRecovery = true }, enabled = !cleaning && !checking,
-                                    modifier = Modifier.testTag("novel_recovery_button")) { Text("恢复清洗前原文") }
-                                TextButton(onClick = { showReaderEdition = true }, enabled = !exporting && !cleaning,
-                                    modifier = Modifier.testTag("reader_edition_button")) { Text("导出阅读版 TXT") }
-                                TextButton(onClick = { showMetadata = true }, enabled = !checking && !cleaning,
-                                    modifier = Modifier.testTag("novel_metadata_button")) { Text("刷新书名与作者") }
+                                TextButton(onClick = { toolsExpanded = !toolsExpanded },
+                                    modifier = Modifier.testTag("novel_tools_toggle")) {
+                                    Text(if (toolsExpanded) "收起更多工具" else "更多工具")
+                                }
+                                if (toolsExpanded) {
+                                    TextButton(onClick = { showOriginalRecovery = true }, enabled = !cleaning && !checking,
+                                        modifier = Modifier.testTag("novel_recovery_button")) { Text("恢复清洗前原文") }
+                                    TextButton(onClick = { showReaderEdition = true }, enabled = !exporting && !cleaning,
+                                        modifier = Modifier.testTag("reader_edition_button")) { Text("导出阅读版 TXT") }
+                                    TextButton(onClick = { showMetadata = true }, enabled = !checking && !cleaning,
+                                        modifier = Modifier.testTag("novel_metadata_button")) { Text("刷新书名与作者") }
+                                }
                                 if (missingCount > 0) {
                                     Spacer(Modifier.height(WnSpace.sm))
                                     OutlinedButton(

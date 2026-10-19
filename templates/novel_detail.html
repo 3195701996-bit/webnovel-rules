@@ -40,6 +40,12 @@
   cursor:pointer; font-size:.82rem; transition:.15s; }
 .op-btn:hover { color:var(--text); border-color:var(--accent-2); }
 .op-btn.danger:hover { color:var(--red); border-color:var(--red); }
+.novel-tools { width:100%; }
+.novel-tools > summary { width:fit-content; min-height:44px; list-style:none; }
+.novel-tools > summary::-webkit-details-marker { display:none; }
+.novel-tools > summary::after { content:'＋'; margin-left:6px; }
+.novel-tools[open] > summary::after { content:'－'; }
+.novel-tools-actions { display:flex; flex-wrap:wrap; gap:8px; padding-top:8px; }
 /* 进度提示 */
 .history-tip {
   display:flex; align-items:center; gap:8px; padding:10px 14px; margin-bottom:14px;
@@ -107,11 +113,16 @@
     <button class="op-btn" id="check-btn">↻ 检查更新</button>
     <button class="op-btn" id="missing-btn">⤓ 补下缺失</button>
     <button class="op-btn" id="clean-btn" type="button">清洗预览</button>
-    <button class="op-btn" id="recovery-btn" type="button">恢复清洗前原文</button>
-    <button class="op-btn" id="reader-export-btn" type="button">导出阅读版 TXT</button>
-    <button class="op-btn" id="metadata-btn" type="button">刷新书名与作者</button>
     <button class="op-btn danger" id="del-btn">🗑 删除</button>
     <select class="op-btn" id="src-select" style="display:none;" title="切换书源"></select>
+    <details class="novel-tools" id="novel-tools">
+      <summary class="op-btn">更多工具</summary>
+      <div class="novel-tools-actions">
+        <button class="op-btn" id="recovery-btn" type="button">恢复清洗前原文</button>
+        <button class="op-btn" id="reader-export-btn" type="button">导出阅读版 TXT</button>
+        <button class="op-btn" id="metadata-btn" type="button">刷新书名与作者</button>
+      </div>
+    </details>
   </div>
 
   <div class="history-tip" id="history-tip" style="display:none;">🕐 <span id="history-pos"></span></div>

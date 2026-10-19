@@ -66,6 +66,13 @@ class TextPurifyUiTest {
     private fun texts(t: String, substring: Boolean = false) =
         rule.onAllNodesWithText(t, substring = substring).fetchSemanticsNodes().size
 
+    private fun expandNovelTools() {
+        rule.waitUntil(60_000) { nodes("novel_tools_toggle") > 0 }
+        if (texts("更多工具") > 0) {
+            rule.onAllNodesWithTag("novel_tools_toggle")[0].performScrollTo().performClick()
+        }
+    }
+
     private fun landscape() {
         rule.activityRule.scenario.onActivity {
             it.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
@@ -203,6 +210,7 @@ class TextPurifyUiTest {
         rule.openCachedShelf()
         rule.waitUntil(60_000) { texts(BOOK_NAME) > 0 }
         rule.onAllNodesWithText(BOOK_NAME)[0].performScrollTo().performClick()
+        expandNovelTools()
         rule.waitUntil(60_000) { nodes("reader_edition_button") > 0 }
         landscape()
         rule.waitUntil(60_000) { nodes("reader_edition_button") > 0 }
@@ -256,6 +264,7 @@ api.SourceCrawler = fixture_crawler
         rule.openCachedShelf()
         rule.waitUntil(60_000) { texts(BOOK_NAME) > 0 }
         rule.onAllNodesWithText(BOOK_NAME)[0].performScrollTo().performClick()
+        expandNovelTools()
         rule.waitUntil(60_000) { nodes("novel_metadata_button") > 0 }
         fun openAndPreview() {
             rule.onAllNodesWithTag("novel_metadata_button")[0].performScrollTo().performClick()
@@ -292,6 +301,7 @@ api.SourceCrawler = fixture_crawler
         rule.openCachedShelf()
         rule.waitUntil(60_000) { texts(BOOK_NAME) > 0 }
         rule.onAllNodesWithText(BOOK_NAME)[0].performScrollTo().performClick()
+        expandNovelTools()
         rule.waitUntil(60_000) { nodes("novel_recovery_button") > 0 }
         landscape()
         rule.waitUntil(60_000) { nodes("novel_recovery_button") > 0 }
@@ -326,6 +336,7 @@ api.SourceCrawler = fixture_crawler
         rule.openCachedShelf()
         rule.waitUntil(60_000) { texts(BOOK_NAME) > 0 }
         rule.onAllNodesWithText(BOOK_NAME)[0].performScrollTo().performClick()
+        expandNovelTools()
         rule.waitUntil(60_000) { nodes("novel_recovery_button") > 0 }
         landscape()
         rule.waitUntil(60_000) { nodes("novel_recovery_button") > 0 }

@@ -13,6 +13,7 @@ import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performScrollToIndex
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.assertIsDisplayed
@@ -546,6 +547,22 @@ class Release203RegressionTest {
             assertTrue("$label 被挤成竖排：$bounds",
                 (bounds.right - bounds.left).value > 120 && (bounds.bottom - bounds.top).value < 80)
         }
+        val advanced = listOf("novel_recovery_button", "reader_edition_button", "novel_metadata_button")
+        for (tag in advanced) {
+            assertTrue("低频工具默认收起", rule.onAllNodesWithTag(tag).fetchSemanticsNodes().isEmpty())
+        }
+        val fixtureRoot = java.io.File(OfflineStore.runtimeDir(
+            InstrumentationRegistry.getInstrumentation().targetContext), "books/${book!!.bookKey}")
+        fun snapshot() = fixtureRoot.walkTopDown().filter { it.isFile }
+            .associate { it.relativeTo(fixtureRoot).path to it.readBytes().toList() }
+        val beforeTools = snapshot()
+        rule.onNodeWithTag("novel_tools_toggle").performScrollTo().performClick()
+        for (tag in advanced) rule.onNodeWithTag(tag).performScrollTo().assertIsDisplayed()
+        rule.onNodeWithTag("novel_tools_toggle").performScrollTo().performClick()
+        for (tag in advanced) {
+            assertTrue("工具可再次收起", rule.onAllNodesWithTag(tag).fetchSemanticsNodes().isEmpty())
+        }
+        assertTrue("展开/收起工具不得修改小说", beforeTools == snapshot())
         println("RELEASE203 novel_detail_actions_two_column_readable")
     }
 

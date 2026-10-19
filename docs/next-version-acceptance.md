@@ -4,6 +4,13 @@
 
 ## 2026-10-20 元数据修复跨端验收与全量回归
 
+### 小说详情低频工具收纳（App/Web同步，尚未进入手机rc17）
+
+- 基于rc17真实截图的操作区高度，保留继续阅读、普通导出/删除、检查更新及净化快捷入口；将原文恢复、阅读版导出、书名作者修复默认收进“更多工具”，可展开/再次收起。Android展开状态按bookKey记忆并跨旋转保留；Web使用原生details/summary，键盘可操作，无新增持久化/API。所有原按钮身份和预览/确认/取消处理器不变。
+- Android Release JVM/主包/仪器构建19s通过；专用ReaderAudit_API36上Release203全14项与TextPurify全7项合跑 **21/21（37.428s）**。新增断言默认三入口不存在、展开全部可达、再次收起、切换前后合成小说全文件字节一致；恢复/阅读版测试从新真实入口展开后继续原有横屏预览、取消、确认、版本冲突和无误写断言。合成测试不运行于用户手机，结束后模拟器关闭。
+- 按frontend-testing-debugging技能完成实际渲染QA；Browser插件/技能未提供（Browser plugin not available），使用现有Python Playwright+系统Chrome、隔离LocalServer及固定API夹具。`/private/tmp/webnovel-novel-tools-qa.py`在1280×900和390×844验证页面身份、非空、截图无错误覆盖层、页面/console无错误、无水平溢出；默认三入口隐藏→展开全部可见→元数据弹窗取消→零写请求→键盘Enter收起，目录数量不变。另保留长目录前置锚点差-0.41/+0.06px、精确序号/下载态筛选/空结果/重置、原目录418阅读落点及在线目录/失败目录原断言。
+- 截图 `/private/tmp/webnovel-novel-tools-{1280,390}.png`已实际查看：手机首屏可见章节查找与目录，不再常驻三项低频工具。新增渲染页面结构契约与探索页测试2项通过，45组JS、HTTP smoke21/21、Ruff错误门、diff通过；最终Web资源整合Release18s、APK资源逐项一致。没有Python业务修改，未重跑全后端；未部署用户Web或覆盖手机rc17，不作为新发布交付。浏览器及隔离服务随上下文关闭。
+
 ### rc17冻结、准确CI与iQOO保留数据升级
 
 - 候选源码 **13436ccee6184f1dc48091b5132336a3b8b8e102**，工作区clean时构建Release18s；版本 **2.1.0-rc17/code176**，不是正式3.0.0。冻结APK `/private/tmp/webnovel-iqoo-inspect-gs7YcH/rc17-13436cce.apk`，SHA256 **81d3fdc508d1444f5b9a79685d0183d4ec762ab779ae087d56257aed92f57592**；与手机rc16冻结APK比较通过同应用ID、递增code、有效v2/v3同签名、准确源码/clean及资源逐项一致校验，证书仍141ec0be…93b4。准确SHA云端CI **39330477833 / 39330468822 success**。
