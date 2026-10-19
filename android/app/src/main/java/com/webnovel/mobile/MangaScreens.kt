@@ -724,7 +724,8 @@ fun MangaDetailScreen(
                                 },
                                 enabled = !exporting && !deleting && d.downloadedCount > 0,
                             ) { Text(if (exporting) "导出中…" else "导出 ZIP") }
-                            MangaDetailMoreMenu(onRemove = { confirmRemove = true }, onCopyCatalog = {
+                            MangaDetailMoreMenu(enabled = !deleting,
+                                onRemove = { confirmRemove = true }, onCopyCatalog = {
                                 runCatching {
                                     val clipboard = ctx.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
                                         as android.content.ClipboardManager
@@ -1244,7 +1245,7 @@ fun MangaDetailScreen(
             text = {
                 Text(
                     "从书架移除只影响书架显示；已下载图片、阅读历史和收藏都会保留。\n" +
-                        "删除下载图片请在「管理已下载」中单独选择章节删除，不会清除阅读历史或收藏。"
+                        "删除下载图片请在「下载管理」中单独选择章节删除，不会清除阅读历史或收藏。"
                 )
             },
             confirmButton = {

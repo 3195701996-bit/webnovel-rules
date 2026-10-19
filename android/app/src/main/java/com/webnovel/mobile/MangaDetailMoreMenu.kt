@@ -15,18 +15,19 @@ import androidx.compose.ui.platform.testTag
 
 /** Low-frequency utilities stay available without displacing the chapter catalog. */
 @Composable
-internal fun MangaDetailMoreMenu(onRemove: () -> Unit, onCopyCatalog: () -> Unit) {
+internal fun MangaDetailMoreMenu(onRemove: () -> Unit, onCopyCatalog: () -> Unit, enabled: Boolean = true) {
     var expanded by remember { mutableStateOf(false) }
     Box {
-        TextButton(onClick = { expanded = true }, modifier = Modifier.testTag("manga_detail_more")) {
+        TextButton(onClick = { expanded = true }, enabled = enabled,
+            modifier = Modifier.testTag("manga_detail_more")) {
             Text("更多")
         }
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            DropdownMenuItem(text = { Text("从书库移除") }, onClick = {
+        DropdownMenu(expanded = expanded && enabled, onDismissRequest = { expanded = false }) {
+            DropdownMenuItem(text = { Text("从书库移除") }, enabled = enabled, onClick = {
                 expanded = false
                 onRemove()
             })
-            DropdownMenuItem(text = { Text("复制章节核对信息") }, onClick = {
+            DropdownMenuItem(text = { Text("复制章节核对信息") }, enabled = enabled, onClick = {
                 expanded = false
                 onCopyCatalog()
             }, modifier = Modifier.testTag("copy_catalog_report"))

@@ -186,6 +186,9 @@ class Release203RegressionTest {
             rule.onNodeWithTag("manage_downloaded").assertIsNotEnabled()
             rule.onNodeWithTag("select_all_downloaded").assertIsNotEnabled()
             rule.onNodeWithTag("delete_selected").assertIsNotEnabled()
+            rule.onNodeWithTag("manga_read_primary").assertIsNotEnabled()
+            rule.onNodeWithTag("check_update").assertIsNotEnabled()
+            rule.onNodeWithTag("manga_detail_more").assertIsNotEnabled()
         } finally {
             execUpdateFixture("_qa_delete_release.set()")
         }
@@ -196,6 +199,7 @@ class Release203RegressionTest {
         rule.onNodeWithText("删除选中（2）").assertIsDisplayed()
         rule.onNodeWithTag("manage_downloaded").assertIsEnabled()
         rule.onNodeWithTag("delete_selected").assertIsEnabled()
+        rule.onNodeWithTag("manga_detail_more").assertIsEnabled()
         assertTrue("失败不能删除夹具文件", c.exists())
         rule.onNodeWithTag("delete_selected").performClick()
         rule.onNodeWithTag("delete_confirm").assertIsDisplayed()
