@@ -11,6 +11,9 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeRight
+import androidx.compose.ui.test.swipeLeft
 import com.chaquo.python.Python
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -68,10 +71,21 @@ class FavoriteFiltersUiTest {
     @Test fun unreadSearchEmptyClearAndReturnKeepStableSelection() {
         rule.openCachedShelf()
         rule.onNodeWithText("收藏").performClick()
+        rule.onNodeWithTag("shelf_tab_2").assertIsSelected()
         rule.waitUntil(30_000) {
             rule.onAllNodesWithTag("favorite_filter_query").fetchSemanticsNodes().isNotEmpty()
         }
         rule.onNodeWithText("全部 3").assertExists()
+        if (androidx.test.platform.app.InstrumentationRegistry.getArguments()
+                .getString("captureUi") == "true") {
+            rule.mainClock.advanceTimeBy(600)
+            rule.waitForIdle()
+            val automation = androidx.test.platform.app.InstrumentationRegistry
+                .getInstrumentation().uiAutomation
+            android.os.ParcelFileDescriptor.AutoCloseInputStream(automation.executeShellCommand(
+                "screencap -p /sdcard/Download/webnovel-shelf-tabs-qa.png"
+            )).use { it.readBytes() }
+        }
         rule.onNodeWithTag("favorite_filter_unread").performClick()
         rule.onNodeWithTag("favorite_filter_unread").assertIsSelected()
         assertTrue(nodes("已读作品") == 0)
@@ -95,6 +109,7 @@ class FavoriteFiltersUiTest {
             rule.onAllNodesWithTag("favorite_filter_query").fetchSemanticsNodes().isNotEmpty()
         }
         rule.onNodeWithTag("favorite_filter_query").assertTextContains("自检 MangaDex")
+        rule.onNodeWithTag("shelf_tab_2").assertIsSelected()
         rule.onNodeWithTag("favorite_filter_unread").assertIsSelected()
         rule.onNodeWithTag("favorite_filter_query").performTextReplacement("不存在")
         rule.onNodeWithText("没有符合当前筛选的收藏").assertExists()
@@ -102,5 +117,13 @@ class FavoriteFiltersUiTest {
         rule.onNodeWithText("自检漫画 未读").assertExists()
         rule.onNodeWithText("已读作品").assertExists()
         rule.onNodeWithText("其他作品").assertExists()
+        rule.onNodeWithTag("shelf_pager").performTouchInput { swipeRight() }
+        rule.waitUntil(10_000) {
+            runCatching { rule.onNodeWithTag("shelf_tab_1").assertIsSelected(); true }.getOrDefault(false)
+        }
+        rule.onNodeWithTag("shelf_pager").performTouchInput { swipeLeft() }
+        rule.waitUntil(10_000) {
+            runCatching { rule.onNodeWithTag("shelf_tab_2").assertIsSelected(); true }.getOrDefault(false)
+        }
     }
 }

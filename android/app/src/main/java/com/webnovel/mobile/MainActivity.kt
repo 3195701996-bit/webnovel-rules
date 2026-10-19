@@ -57,6 +57,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import coil.ImageLoader
 import coil.compose.AsyncImage
+import coil.compose.SubcomposeAsyncImage
 import coil.request.ImageRequest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -989,7 +990,7 @@ private fun ShelfScreen(gateway: EngineGateway, ep: EngineEndpoint, loader: Imag
                 val pagerState = rememberPagerState(initialPage = page, pageCount = { 3 })
                 LaunchedEffect(pagerState.currentPage) { page = pagerState.currentPage }
                 Column(Modifier.fillMaxSize()) {
-                                WnSegmentedTabs(
+                    ShelfTabStrip(
                         options = listOf("最近阅读", "已缓存", "收藏"),
                         selected = pagerState.currentPage,
                         onSelect = { scope.launch { pagerState.animateScrollToPage(it) } },
@@ -997,7 +998,7 @@ private fun ShelfScreen(gateway: EngineGateway, ep: EngineEndpoint, loader: Imag
                             vertical = WnSpace.sm),
                     )
                     HorizontalPager(state = pagerState,
-                                    modifier = Modifier.fillMaxSize()) { p ->
+                                    modifier = Modifier.fillMaxSize().testTag("shelf_pager")) { p ->
                         if (p == 0) {
                             // ── 页一：最近阅读 ──
                             // 所有读过的小说+漫画（不限条数），lastReadTs 降序；
@@ -1371,21 +1372,25 @@ internal fun mangaFavoriteUnreadBadgeLabel(unreadCount: Int): String? =
 @Composable
 private fun FavoriteCard(f: MangaFavorite, ep: EngineEndpoint,
                          loader: ImageLoader, onClick: () -> Unit) {
-    Column(Modifier.clip(RoundedCornerShape(10.dp)).border(1.dp, WnColors.line)
-        .clickable { onClick() }) {
-        Box {
-            AsyncImage(model = f.cover, contentDescription = f.title,
-                imageLoader = loader, modifier = Modifier.fillMaxWidth().height(120.dp),
-                contentScale = androidx.compose.ui.layout.ContentScale.Crop)
+    Column(Modifier.clickable { onClick() }) {
+        Box(Modifier.clip(RoundedCornerShape(6.dp))) {
+            if (f.cover.isBlank()) {
+                WnNoCover(Modifier.fillMaxWidth().aspectRatio(0.75f))
+            } else {
+                SubcomposeAsyncImage(model = f.cover, contentDescription = f.title,
+                    imageLoader = loader, modifier = Modifier.fillMaxWidth().aspectRatio(0.75f),
+                    contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                    error = { WnNoCover(Modifier.fillMaxSize()) })
+            }
             mangaFavoriteUnreadBadgeLabel(f.unreadCount)?.let { unreadLabel ->
-                Text(unreadLabel, color = Color.White,
+                Text(unreadLabel, color = WnColors.onAccent,
                     style = MaterialTheme.typography.labelSmall,
                     modifier = Modifier.align(Alignment.TopStart)
-                        .background(Color(0xCCB3261E)).padding(3.dp, 1.dp))
+                        .background(WnColors.accent).padding(3.dp, 1.dp))
             }
         }
         Text(f.title, style = MaterialTheme.typography.bodySmall, maxLines = 2,
-            overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(WnSpace.sm))
+            overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(vertical = WnSpace.sm))
     }
 }
 
