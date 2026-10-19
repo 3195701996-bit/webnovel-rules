@@ -53,6 +53,10 @@
 .chap-sec { background:var(--bg-elevated); border:1px solid var(--border); border-radius:12px; padding:14px; margin-bottom:16px; }
 .chap-head { display:flex; align-items:center; justify-content:space-between; padding-bottom:10px; font-size:.95rem; font-weight:700; background:var(--bg); }
 .chap-list { display:grid; grid-template-columns:repeat(auto-fill,minmax(160px,1fr)); gap:8px; }
+.chap-filter-row { display:flex; flex-wrap:wrap; gap:8px; margin:10px 0; }
+.chap-filter-row .btn { min-height:44px; }
+.chap-filter-row[hidden], #chap-filter-reset[hidden] { display:none; }
+.chap-filter-summary { color:var(--text-dim); font-size:.78rem; margin:10px 0; }
 .chap-item { padding:9px 12px; border-radius:8px; background:var(--bg); font-size:.85rem;
   color:var(--text-dim); cursor:pointer; display:flex; align-items:center; gap:6px;
   white-space:nowrap; overflow:hidden; text-overflow:ellipsis; transition:.12s; }
@@ -116,7 +120,14 @@
   <div class="chap-sec" id="chap-sec" style="display:none;">
     <div class="chap-head"><span>章节列表</span><span id="chap-count"></span></div>
     <div style="padding:0 0 10px;">
-      <input id="chap-search" placeholder="🔍 搜索章节…" style="width:100%;box-sizing:border-box;padding:8px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:.82rem;">
+      <input id="chap-search" aria-label="查找章节（章名或目录序号）" placeholder="查找章节（章名或目录序号）" style="width:100%;box-sizing:border-box;padding:8px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:.82rem;">
+      <div id="chap-state-filters" class="chap-filter-row" hidden>
+        <button class="btn primary" id="chap-filter-all" aria-pressed="true">全部</button>
+        <button class="btn" id="chap-filter-downloaded" aria-pressed="false">已下载</button>
+        <button class="btn" id="chap-filter-missing" aria-pressed="false">待下载</button>
+      </div>
+      <p id="chap-filter-summary" class="chap-filter-summary" role="status" aria-live="polite"></p>
+      <button class="btn" id="chap-filter-reset" hidden>清除章节筛选</button>
     </div>
     <div class="chap-list" id="chap-list"><div class="loading" style="padding:20px;color:var(--text-dim);">加载章节…</div></div>
   </div>
@@ -124,6 +135,7 @@
 
 <script src="/static/js/common.js"></script>
 <script src="/static/js/toc_render.js"></script>
+<script src="/static/js/novel_chapter_filters.js"></script>
 <script src="/static/js/novel_cleaning.js"></script>
 <script src="/static/js/novel_recovery.js"></script>
 <script src="/static/js/reader_export.js"></script>
@@ -136,11 +148,14 @@ const BOOK_URL = params.get('book_url') || '';
 // URLSearchParams.get() 已解码一次；二次解码会破坏书名中的字面百分号和编码文本。
 const NAME = params.get('name') || '';
 function fmtWords(w) { if (!w) return ''; const n = parseInt(w); if (!n) return w; return n >= 10000 ? Math.round(n/10000) + '万字' : n + '字'; }
+$('#chap-state-filters').hidden = !KEY;
 
 // C04: 目录分段渲染视图（书库/搜索两种模式共用 static/js/toc_render.js）。
 // 长目录首屏只挂载当前章附近分段（200 章/段），上下「展开」按钮按需扩段；
 // 目录内搜索作用于全量章节数组，未挂载章节同样可被找到。
 let detailToc = null;
+let detailChapters = [];
+let chapterFilterMode = 'all';
 function captureDetailTocScroll() {
   const list = $('#chap-list');
   const beforeHeight = list.getBoundingClientRect().height;
@@ -158,15 +173,43 @@ if (detailTocContainer) {
 ['wheel', 'touchmove'].forEach(type =>
   window.addEventListener(type, markDetailTocInteraction, {passive: true}));
 const chapSearch = $('#chap-search');
+function applyDetailChapterFilters() {
+  if (!detailToc) return;
+  const query = chapSearch ? chapSearch.value : '';
+  const mode = KEY ? chapterFilterMode : 'all';
+  const rows = filterNovelChapters(detailChapters, query, mode);
+  const active = query.trim() !== '' || mode !== 'all';
+  detailToc.setFilter('', active ? () => rows : null);
+  detailToc.render();
+  $('#chap-filter-summary').textContent = '显示 ' + rows.length + ' / ' + detailChapters.length + ' 章 · 纯数字按目录序号定位';
+  $('#chap-filter-reset').hidden = !active;
+  ['all', 'downloaded', 'missing'].forEach(value => {
+    const button = $('#chap-filter-' + value);
+    button.setAttribute('aria-pressed', String(mode === value));
+    button.classList.toggle('primary', mode === value);
+  });
+}
 if (chapSearch) chapSearch.oninput = () => {
   markDetailTocInteraction();
-  if (!detailToc) return;
-  detailToc.setFilter(chapSearch.value);
-  detailToc.render();
+  applyDetailChapterFilters();
 };
+['all', 'downloaded', 'missing'].forEach(mode => {
+  $('#chap-filter-' + mode).addEventListener('click', () => {
+    if (!KEY) return;
+    markDetailTocInteraction(); chapterFilterMode = mode; applyDetailChapterFilters();
+  });
+});
+$('#chap-filter-reset').addEventListener('click', () => {
+  markDetailTocInteraction(); chapterFilterMode = 'all';
+  if (chapSearch) chapSearch.value = '';
+  applyDetailChapterFilters();
+});
 
 // ═══════ 书库模式（已下载小说：章节+阅读）═══════
 async function loadLibraryMode() {
+  detailToc = null; detailChapters = [];
+  $('#chap-filter-summary').textContent = '正在读取目录…';
+  $('#chap-filter-reset').hidden = true;
   document.title = NAME || '小说详情';
   $('#title').textContent = NAME || '加载中…';
   try {
@@ -211,8 +254,12 @@ async function loadLibraryMode() {
     const list = $('#chap-list');
     list.innerHTML = '';
     const chs = d.chapters || [];
+    detailChapters = chs; detailToc = null;
     $('#chap-count').textContent = chs.length + ' 章';
-    if (!chs.length) { list.innerHTML = '<div style="color:var(--text-dim);">暂无章节（可点检查更新）</div>'; }
+    if (!chs.length) {
+      $('#chap-filter-summary').textContent = '显示 0 / 0 章';
+      list.innerHTML = '<div style="color:var(--text-dim);">暂无章节（可点检查更新）</div>';
+    }
     else {
       detailToc = TocRender.makeTocView({
         container: list,
@@ -228,8 +275,7 @@ async function loadLibraryMode() {
         },
       });
       detailToc.setData(chs);
-      detailToc.setFilter(chapSearch ? chapSearch.value : '');
-      detailToc.render();
+      applyDetailChapterFilters();
       // 定位当前阅读章：异步取服务器进度（不阻塞首屏核心信息），到达后切到该章所在段
       fetch('/api/books/' + encodeURIComponent(KEY) + '/progress')
         .then(r => r.json()).then(pd => {
@@ -244,6 +290,7 @@ async function loadLibraryMode() {
     }
   } catch (e) {
     $('#title').textContent = '加载失败';
+    $('#chap-filter-summary').textContent = '目录读取失败，筛选暂不可用';
     toast('详情加载失败: ' + e, 'error');
   }
 }
@@ -351,6 +398,9 @@ function selectSource(src) {
 // 加载该源目录
 async function loadSearchToc(src, gen, signal) {
   const list = $('#chap-list');
+  detailToc = null; detailChapters = [];
+  $('#chap-filter-summary').textContent = '正在读取目录…';
+  $('#chap-filter-reset').hidden = true;
   list.innerHTML = '<div style="padding:16px;color:var(--text-dim);">⏳ 加载目录…</div>';
   try {
     const r = await fetch('/api/search-toc', {method:'POST', headers:{'Content-Type':'application/json'}, signal,
@@ -359,9 +409,13 @@ async function loadSearchToc(src, gen, signal) {
     if (gen !== _srcGen) return;   // A04: 已换源，过期目录响应直接丢弃
     if (!d.ok) throw new Error(d.error || '目录获取失败');
     const chs = d.chapters || [];
+    detailChapters = chs;
     $('#chap-count').textContent = chs.length ? chs.length + ' 章' : '';
     list.innerHTML = '';
-    if (!chs.length) { list.innerHTML = '<div style="color:var(--text-dim);">该源未返回章节目录</div>'; return; }
+    if (!chs.length) {
+      $('#chap-filter-summary').textContent = '显示 0 / 0 章';
+      list.innerHTML = '<div style="color:var(--text-dim);">该源未返回章节目录</div>'; return;
+    }
     // C04: 搜索模式目录同样分段渲染（长目录不一次性全量挂载）
     detailToc = TocRender.makeTocView({
       container: list,
@@ -379,10 +433,10 @@ async function loadSearchToc(src, gen, signal) {
       },
     });
     detailToc.setData(chs);
-    detailToc.setFilter(chapSearch ? chapSearch.value : '');
-    detailToc.render();
+    applyDetailChapterFilters();
   } catch (e) {
     if (e.name === 'AbortError' || gen !== _srcGen) return;  // A04: 已换源，旧源错误提示不落地
+    $('#chap-filter-summary').textContent = '目录读取失败，筛选暂不可用';
     list.innerHTML = '<div style="color:var(--text-dim);">目录加载失败: ' + esc(e) + '</div>';
   }
 }

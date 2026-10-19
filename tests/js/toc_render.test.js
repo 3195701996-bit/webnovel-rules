@@ -191,4 +191,18 @@ sidebarView.render();
 expandBtns(sidebar)[0].click();
 assert.equal(sidebar.scrollTop, 2070, 'reader sidebar keeps default internal scroll compensation');
 
+const customContainer = makeEl('div');
+const customView = TocRender.makeTocView({container: customContainer, doc: fakeDoc,
+  makeItem: c => Object.assign(makeEl('div'), {textContent: c.index + '. ' + c.name})});
+customView.setData(chapters);
+customView.setFilter('', rows => rows.filter(c => c.index === 1212));
+customView.render();
+assert.equal(itemCount(customContainer), 1);
+assert(allText(customContainer).some(t => t.startsWith('1212. ')));
+assert.equal(customView.mountedCount(), 1);
+assert.equal(customView.locate(1), false, 'automatic progress must not escape a custom filter');
+customView.setFilter('');
+customView.render();
+assert.equal(itemCount(customContainer), TocRender.TOC_CHUNK);
+
 console.log('toc_render.test.js: 全部断言通过');
