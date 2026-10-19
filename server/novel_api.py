@@ -1939,18 +1939,11 @@ def api_book_reclean(book_key):
 
     rebuilt = False
     if not dry and changed:
-        # 全文导出跟着更新（导出读的是缓存，缓存变了 txt 就是旧的）
-        try:
-            src = get_by_uid(state.get("book", {}).get("source_uid")
-                            or book_key.rsplit("_", 1)[0])
-            if src:
-                from engine.crawler import CrawlTask
-                t = CrawlTask(src, state.get("book", {}).get("book_url", ""), d, resume=True)
-                if t._load_state():
-                    t.merge_txt()
-                    rebuilt = True
-        except Exception as e:          # noqa: BLE001
-            failed.append({"index": 0, "reason": f"重建全文失败：{type(e).__name__}: {e}"})
+        # 重新净化的是本地缓存；重建不得依赖仍然存在的书源或网络。
+        # 复用有锁、原子写和显式失败返回的本地合并入口。
+        rebuilt, rebuild_error = _rebuild_book_txt_local(book_key, d, chapters)
+        if not rebuilt:
+            failed.append({"index": 0, "reason": f"重建全文失败：{rebuild_error}"})
 
     return jsonify({
         "ok": True, "dry_run": dry, "chapters": len(chapters),

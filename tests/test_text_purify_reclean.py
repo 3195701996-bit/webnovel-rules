@@ -188,6 +188,28 @@ def test_reclean_is_idempotent(client, book):
     assert r2["removed_lines"] == 0 and r2["removed_chars"] == 0
 
 
+def test_reclean_rebuilds_export_without_source_or_network(client, book, monkeypatch):
+    key, d, _, _ = book
+    def forbidden(*args, **kwargs):
+        raise AssertionError("本地重新净化不应依赖书源")
+    monkeypatch.setattr("server.novel_api.get_by_uid", forbidden)
+    (d / "book.txt").write_text("过期全文", encoding="utf-8")
+    result = client.post(f"/api/books/{key}/reclean", json={"dry_run": False}).get_json()
+    assert result["txt_rebuilt"] and not result["failed"]
+    text = (d / "book.txt").read_text(encoding="utf-8")
+    assert "正文第一段" in text and "过期全文" not in text and "huanyuanap" not in text
+
+
+def test_reclean_reports_export_failure_and_keeps_old_export(client, book, monkeypatch):
+    key, d, _, _ = book
+    monkeypatch.setattr("server.novel_api._merge_book_txt", lambda *args: None)
+    (d / "book.txt").write_text("原有全文", encoding="utf-8")
+    result = client.post(f"/api/books/{key}/reclean", json={"dry_run": False}).get_json()
+    assert not result["txt_rebuilt"]
+    assert any(item["index"] == 0 and "全文" in item["reason"] for item in result["failed"])
+    assert (d / "book.txt").read_text(encoding="utf-8") == "原有全文"
+
+
 def test_reclean_missing_book_is_404(client, book):
     r = client.post("/api/books/no_such_book_zzz/reclean")
     assert r.status_code == 404
