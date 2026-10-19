@@ -1,11 +1,11 @@
 package com.webnovel.mobile
 
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
-import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.LargeTest
 import androidx.test.platform.app.InstrumentationRegistry
@@ -57,6 +57,15 @@ class TextPurifyUiTest {
     private fun nodes(tag: String) = rule.onAllNodesWithTag(tag).fetchSemanticsNodes().size
     private fun texts(t: String, substring: Boolean = false) =
         rule.onAllNodesWithText(t, substring = substring).fetchSemanticsNodes().size
+
+    private fun landscape() {
+        rule.activityRule.scenario.onActivity {
+            it.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+        }
+        rule.waitUntil(15_000) {
+            rule.activity.resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+        }
+    }
 
     private val adLine = "【新章节更新迟缓的问题，在能换源的app上终于有了解决之道，" +
         "这里下载huanyuanap】"
@@ -170,10 +179,14 @@ class TextPurifyUiTest {
         rule.waitUntil(60_000) { texts(BOOK_NAME) > 0 }
         rule.onAllNodesWithText(BOOK_NAME)[0].performScrollTo().performClick()
         rule.waitUntil(60_000) { nodes("reader_edition_button") > 0 }
+        landscape()
+        rule.waitUntil(60_000) { nodes("reader_edition_button") > 0 }
         rule.onAllNodesWithTag("reader_edition_button")[0].performScrollTo().performClick()
+        rule.onAllNodesWithTag("reader_edition_confirm")[0].assertIsDisplayed()
+        rule.onAllNodesWithTag("reader_edition_cancel")[0].assertIsDisplayed()
         rule.onAllNodesWithTag("reader_edition_confirm")[0].performClick()
         rule.waitUntil(20_000) { texts("将导出 2 章", substring = true) > 0 }
-        rule.onAllNodesWithTag("reader_edition_omit")[0].performClick()
+        rule.onAllNodesWithTag("reader_edition_omit")[0].performScrollTo().performClick()
         rule.waitUntil(5_000) { texts("选项已变更", substring = true) > 0 }
         assertEquals(0, texts("保存阅读版"))
         rule.onAllNodesWithTag("reader_edition_confirm")[0].performClick()
@@ -212,9 +225,13 @@ class TextPurifyUiTest {
         rule.waitUntil(60_000) { texts(BOOK_NAME) > 0 }
         rule.onAllNodesWithText(BOOK_NAME)[0].performScrollTo().performClick()
         rule.waitUntil(60_000) { nodes("novel_recovery_button") > 0 }
+        landscape()
+        rule.waitUntil(60_000) { nodes("novel_recovery_button") > 0 }
         rule.onAllNodesWithTag("novel_recovery_button")[0].performScrollTo().performClick()
         rule.waitUntil(20_000) { nodes("novel_recovery_pick_$identity") > 0 }
-        rule.onAllNodesWithTag("novel_recovery_pick_$identity")[0].performClick()
+        rule.onAllNodesWithTag("novel_recovery_confirm")[0].assertIsDisplayed()
+        rule.onAllNodesWithTag("novel_recovery_close")[0].assertIsDisplayed()
+        rule.onAllNodesWithTag("novel_recovery_pick_$identity")[0].performScrollTo().performClick()
         rule.onAllNodesWithTag("novel_recovery_confirm")[0].performClick()
         rule.waitUntil(20_000) { texts("预览通过", substring = true) > 0 }
         assertTrue("恢复预览不应改文件", cleaned.contentEquals(cache.readBytes()))

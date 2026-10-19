@@ -41,7 +41,8 @@ fun ReaderEditionDialog(bookKey: String, port: Int, gateway: EngineGateway, onCl
         onDismissRequest = { if (!busy) onClose() },
         title = { Text("导出阅读版 TXT") },
         text = {
-            Column {
+            LazyColumn(Modifier.heightIn(max = 360.dp).testTag("reader_edition_preview_list")) {
+                item {
                 Text("使用连续章节编号及标准标题，原始目录和阅读记录不变。", style = MaterialTheme.typography.bodySmall)
                 Row {
                     Checkbox(clean, onCheckedChange = { clean = it; report = null; status = "选项已变更，请重新预览。" },
@@ -59,10 +60,9 @@ fun ReaderEditionDialog(bookKey: String, port: Int, gateway: EngineGateway, onCl
                         style = MaterialTheme.typography.bodySmall)
                     if (preview.optInt("missing_count") > 0) Text("这是部分导出，缺失章节不会补下载。", style = MaterialTheme.typography.labelSmall)
                     Text("下方展示前100个排除项及前20个章节标题。", style = MaterialTheme.typography.labelSmall)
-                    LazyColumn(Modifier.heightIn(max = 200.dp).testTag("reader_edition_preview_list")) {
-                        items(rows) { Text(it, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(vertical = 4.dp)) }
-                    }
                 }
+                }
+                items(rows) { Text(it, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(vertical = 4.dp)) }
             }
         },
         confirmButton = {
@@ -90,6 +90,6 @@ fun ReaderEditionDialog(bookKey: String, port: Int, gateway: EngineGateway, onCl
                 }
             }, modifier = Modifier.testTag("reader_edition_confirm")) { Text(if (busy) "预览中…" else if (preview == null) "生成预览" else "保存阅读版") }
         },
-        dismissButton = { TextButton(onClick = onClose, enabled = !busy) { Text("取消") } },
+        dismissButton = { TextButton(onClick = onClose, enabled = !busy, modifier = Modifier.testTag("reader_edition_cancel")) { Text("取消") } },
     )
 }

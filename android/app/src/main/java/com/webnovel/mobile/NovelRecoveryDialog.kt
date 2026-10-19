@@ -58,7 +58,8 @@ fun NovelRecoveryDialog(bookKey: String, port: Int, gateway: EngineGateway, onCl
         onDismissRequest = { if (!busy) onClose() },
         title = { Text("恢复清洗前原文") },
         text = {
-            Column {
+            LazyColumn(Modifier.heightIn(max = 360.dp).testTag("novel_recovery_list")) {
+                item {
                 Text("恢复会带回该存档中的广告；仅替换仍等于清洗结果的章节，不覆盖后续下载或修改。", style = MaterialTheme.typography.bodySmall)
                 Text(status, Modifier.testTag("novel_recovery_status"), style = MaterialTheme.typography.bodySmall)
                 TextButton(onClick = { refresh() }, enabled = !busy) { Text("刷新存档") }
@@ -67,7 +68,7 @@ fun NovelRecoveryDialog(bookKey: String, port: Int, gateway: EngineGateway, onCl
                     selected = if (selected.containsAll(eligible)) emptySet() else eligible
                     previewReady = false
                 }, enabled = !busy && rows.any { it.restorable }) { Text("全选 / 取消全选（最多500项）") }
-                LazyColumn(Modifier.heightIn(max = 260.dp).testTag("novel_recovery_list")) {
+                }
                     items(rows, key = { it.id }) { row ->
                         Row(Modifier.fillMaxWidth().testTag("novel_recovery_pick_${row.id}").clickable(enabled = !busy && row.restorable) {
                             if (row.id in selected) selected = selected - row.id
@@ -81,7 +82,6 @@ fun NovelRecoveryDialog(bookKey: String, port: Int, gateway: EngineGateway, onCl
                             }
                         }
                     }
-                }
             }
         },
         confirmButton = {
@@ -117,6 +117,6 @@ fun NovelRecoveryDialog(bookKey: String, port: Int, gateway: EngineGateway, onCl
                 Text(if (busy) "处理中…" else if (previewReady) "确认恢复" else "预览恢复（${selected.size}）")
             }
         },
-        dismissButton = { TextButton(onClick = onClose, enabled = !busy) { Text("关闭") } },
+        dismissButton = { TextButton(onClick = onClose, enabled = !busy, modifier = Modifier.testTag("novel_recovery_close")) { Text("关闭") } },
     )
 }
