@@ -206,6 +206,7 @@
       <div id="title" class="title"></div>
       <div id="subtitle" class="sub"></div>
       <div id="desc" style="font-size:.8rem;color:var(--text-dim);display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden;"></div>
+      <button id="desc-toggle" type="button" aria-controls="desc" aria-expanded="false" hidden>展开简介</button>
       <div id="few-chapters-warning" style="display:none;margin-top:8px;font-size:.78rem;color:#ff9d5c;background:rgba(255,157,92,.1);border:1px solid rgba(255,157,92,.3);border-radius:8px;padding:8px 10px;line-height:1.5;"></div>
     </div>
   </div>
@@ -276,11 +277,13 @@
 </dialog>
 
 <script src="/static/js/common.js"></script>
+<script src="/static/js/manga_description.js"></script>
 <script src="/static/js/manga_local_manager.js"></script>
 <script src="/static/js/manga_update_preview.js"></script>
 <script src="/static/js/manga_chapter_tools.js"></script>
 <script>
 const params = new URLSearchParams(location.search);
+let descriptionCleanup = null;
 const SOURCE = params.get('source');
 const IDENTITY_SOURCE = s => ['copymanga', 'copymanga_web'].includes(String(s || ''))
   ? 'copymanga' : String(s || '');
@@ -492,7 +495,8 @@ async function load() {
         warnEl.style.display = 'none';
       }
     }
-    $('#desc').textContent = detail.description || '';
+    if (descriptionCleanup) descriptionCleanup();
+    descriptionCleanup = mountMangaDescription($('#desc'), $('#desc-toggle'), detail.description);
     const cover = $('#cover');
     const coverUrl = detailCoverUrl();
     cover.hidden = !coverUrl;

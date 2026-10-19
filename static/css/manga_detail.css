@@ -8,6 +8,11 @@
 .manga-head .title { font-size:28px; line-height:1.35; letter-spacing:-.02em; }
 .manga-head .sub { font-size:16px; line-height:1.6; }
 #desc { font-size:16px !important; line-height:1.7; margin:8px 0; }
+#desc[hidden], #desc-toggle[hidden] { display:none !important; }
+#desc.expanded { display:block !important; -webkit-line-clamp:unset !important; overflow:visible !important; }
+#desc-toggle { align-self:flex-start; min-height:44px; padding:8px 0; border:0;
+  background:transparent; color:var(--accent); font:inherit; font-size:14px; cursor:pointer; }
+#desc-toggle:focus-visible { outline:2px solid var(--accent); outline-offset:3px; border-radius:4px; }
 .detail-wrap > .ops-row { grid-column:2; grid-row:3; padding:8px 0; }
 .detail-wrap > .fn-row { grid-column:2; grid-row:2; align-self:center; grid-template-columns:1.35fr 1fr; max-width:600px; margin:16px 0 0; padding:0; }
 .detail-wrap:has(#cover[hidden]) .hi { grid-column:1/-1; }
