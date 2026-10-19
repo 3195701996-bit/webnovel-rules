@@ -2,6 +2,8 @@
 
 package com.webnovel.mobile
 
+import androidx.activity.compose.BackHandler
+
 import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -173,6 +175,21 @@ internal fun ExploreScreen(
         }
     }
 
+    fun navigateBack() {
+        bookRequestGeneration.incrementAndGet()
+        loadingBooks = false
+        error = ""; msg = ""
+        when {
+            mangaSelSrc.isNotBlank() -> { mangaSelSrc = ""; mangaSelCat = "" }
+            categoryUrl.isNotBlank() -> { categoryUrl = ""; bookPages = arrayListOf() }
+            currentUid.isNotBlank() -> currentUid = ""
+            else -> onBack()
+        }
+    }
+    BackHandler(enabled = mangaSelSrc.isNotBlank() || categoryUrl.isNotBlank() || currentUid.isNotBlank()) {
+        navigateBack()
+    }
+
     Scaffold(topBar = {
         TopAppBar(
             title = {
@@ -188,17 +205,7 @@ internal fun ExploreScreen(
                 )
             },
             navigationIcon = {
-                IconButton(onClick = {
-                    bookRequestGeneration.incrementAndGet()
-                    loadingBooks = false
-                    error = ""; msg = ""
-                    when {
-                        mangaSel != null -> { mangaSelSrc = ""; mangaSelCat = "" }
-                        categoryUrl.isNotBlank() -> { categoryUrl = ""; bookPages = arrayListOf() }
-                        current != null -> currentUid = ""
-                        else -> onBack()
-                    }
-                }) {
+                IconButton(onClick = { navigateBack() }) {
                     Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                 }
             },
