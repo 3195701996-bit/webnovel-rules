@@ -10,6 +10,9 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
+internal fun isReaderTapDuration(pressedAt: Long, releasedAt: Long, longPressTimeout: Long): Boolean =
+    longPressTimeout > 0 && releasedAt >= pressedAt && releasedAt - pressedAt < longPressTimeout
+
 /** Observe taps without stealing the scrollable child's DOWN or consuming its drags. */
 internal suspend fun PointerInputScope.detectContinuousReaderTaps(
     onTap: (Offset) -> Unit,
@@ -38,7 +41,8 @@ internal suspend fun PointerInputScope.detectContinuousReaderTaps(
             // A child button owns its release; do not also toggle the reader bars.
             if (released && change.isConsumed) dragged = true
         } while (!released)
-        if (!released || dragged) {
+        if (!released || dragged || !isReaderTapDuration(
+                down.uptimeMillis, upTime, viewConfiguration.longPressTimeoutMillis)) {
             pendingTap?.cancel()
             previousUpTime = Long.MIN_VALUE
             return@awaitEachGesture

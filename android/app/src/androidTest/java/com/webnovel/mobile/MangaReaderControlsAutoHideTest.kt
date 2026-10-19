@@ -13,6 +13,7 @@ import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.swipeUp
+import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.input.key.Key
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -83,6 +84,11 @@ class MangaReaderControlsAutoHideTest {
             click(androidx.compose.ui.geometry.Offset(width * 0.25f, height * 0.5f))
         }
         assertEquals(0, nodes("reader_progress_label"))
+        rule.onNodeWithTag("manga_pages").performTouchInput { longClick(durationMillis = 800) }
+        // Observe beyond the single-tap delay; an immediate assertion would miss
+        // the erroneous deferred callback after releasing a long press.
+        android.os.SystemClock.sleep(600)
+        assertEquals("长按松手不能被识别为中央单击", 0, nodes("reader_progress_label"))
         rule.onNodeWithTag("manga_pages").performTouchInput { click() }
         waitFor(timeoutMs = 10_000) { nodes("reader_progress_label") > 0 }
         assertTrue(nodes("reader_progress_slider") > 0)
