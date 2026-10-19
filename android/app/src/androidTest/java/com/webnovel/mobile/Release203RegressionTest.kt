@@ -13,6 +13,8 @@ import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.test.platform.app.InstrumentationRegistry
 import kotlinx.coroutines.runBlocking
@@ -54,6 +56,7 @@ class Release203RegressionTest {
 
     @After fun cleanup() {
         if (deleteFixtureInstalled) {
+            execUpdateFixture("_qa_delete_release.set()")
             execUpdateFixture("_qa_flask.view_functions[_qa_delete_key] = _qa_delete_original")
         }
         if (updateFixtureInstalled) {
@@ -140,12 +143,15 @@ class Release203RegressionTest {
         val c = SelfTestComic().also { comic = it; it.create() }
         execUpdateFixture("""
             import app as _qa_app_module
+            import threading as _qa_threading
             from flask import jsonify as _qa_jsonify
+            _qa_delete_release = _qa_threading.Event()
             _qa_flask = _qa_app_module.app
             _qa_delete_key = next(k for k in _qa_flask.view_functions if k.endswith('.api_manga_chapters_delete'))
             _qa_delete_original = _qa_flask.view_functions[_qa_delete_key]
             def _qa_failed_delete(source, comic_id):
                 if comic_id == '${c.comicIdValue}':
+                    _qa_delete_release.wait(15)
                     return _qa_jsonify({'ok': False, 'error': 'fixture locked file'}), 500
                 return _qa_delete_original(source, comic_id)
             _qa_flask.view_functions[_qa_delete_key] = _qa_failed_delete
@@ -162,11 +168,20 @@ class Release203RegressionTest {
         rule.onNodeWithTag("select_all_downloaded").performClick()
         rule.onNodeWithTag("delete_selected").performClick()
         rule.onNodeWithTag("delete_confirm").performClick()
+        try {
+            rule.onNodeWithTag("manage_downloaded").assertIsNotEnabled()
+            rule.onNodeWithTag("select_all_downloaded").assertIsNotEnabled()
+            rule.onNodeWithTag("delete_selected").assertIsNotEnabled()
+        } finally {
+            execUpdateFixture("_qa_delete_release.set()")
+        }
         rule.waitUntil(30_000) {
             rule.onAllNodesWithText("删除未完成", substring = true).fetchSemanticsNodes().isNotEmpty()
         }
         rule.onNodeWithTag("manga_detail_list").performScrollToNode(hasTestTag("delete_selected"))
         rule.onNodeWithText("删除选中（2）").assertIsDisplayed()
+        rule.onNodeWithTag("manage_downloaded").assertIsEnabled()
+        rule.onNodeWithTag("delete_selected").assertIsEnabled()
         assertTrue("失败不能删除夹具文件", c.exists())
         rule.onNodeWithTag("delete_selected").performClick()
         rule.onNodeWithTag("delete_confirm").assertIsDisplayed()
