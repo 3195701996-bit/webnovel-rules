@@ -56,6 +56,9 @@ class MangaReaderControlsAutoHideTest {
 
     @Before
     fun setUp() {
+        val qemu = ProcessBuilder("getprop", "ro.kernel.qemu").start()
+            .inputStream.bufferedReader().use { it.readText().trim() }
+        assertTrue("合成阅读测试只能运行于专用模拟器", qemu == "1")
         comic = SelfTestComic()
         comic.create()
         rule.activityRule.scenario.recreate()
@@ -63,6 +66,7 @@ class MangaReaderControlsAutoHideTest {
 
     @After
     fun tearDown() {
+        if (!::comic.isInitialized) return
         comic.cleanup()
         assertFalse("自检漫画目录未清理干净", comic.exists())
         assertTrue("自检书库条目未清理", comic.libraryEntryCount() == 0)

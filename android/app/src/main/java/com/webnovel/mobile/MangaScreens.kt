@@ -1293,7 +1293,9 @@ private const val READER_CONTROLS_IDLE_HIDE_MS = 4000L
 
 /** Small reader-only hot zone: a deliberate center tap reveals controls without stealing page taps. */
 internal fun isReaderControlHotZone(x: Float, y: Float, width: Float, height: Float): Boolean =
-    x in (width * 0.39f)..(width * 0.61f) &&
+    width.isFinite() && height.isFinite() && x.isFinite() && y.isFinite() &&
+        width > 0f && height > 0f &&
+        x in (width * 0.39f)..(width * 0.61f) &&
         y in (height * 0.43f)..(height * 0.57f)
 
 internal enum class MangaReaderKeyAction { PREVIOUS_PAGE, NEXT_PAGE, PREVIOUS_CHAPTER, NEXT_CHAPTER }
