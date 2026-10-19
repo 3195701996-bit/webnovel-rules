@@ -20,6 +20,36 @@
     "prohibited": ["beige reinterpretation", "orange accent", "decorative gradients", "nested card stacks", "fake metrics"]
   },
   "concepts": {
+    "desktop_detail": {
+      "file": "concepts/v3-desktop-detail.png",
+      "status": "generated_reference_inspected_not_implemented_or_user_approved",
+      "native_size_px": [1536, 1024],
+      "background": "#FFFFFF",
+      "layout": "Quiet full-width topbar; centered open content; cover left and metadata/actions right; full-width catalog below divider",
+      "families": ["outline icon action", "filled reading button", "outline download-management button", "plain utility action", "group band", "divider-separated chapter row"],
+      "typography_logical_px": {"title": 28, "section_heading": 24, "body": 16, "control": 16, "caption": 14},
+      "responsive": "Below 768px use the mobile-detail composition; preserve whole-page scrolling and no inner catalog scroll trap",
+      "copy_lock": ["漫画详情", "继续阅读", "下载管理", "检查更新", "导出 ZIP", "更多", "展开", "章节目录", "查找章节", "正序", "整卷", "单话"],
+      "data_exceptions": "Title, author, description, source, counts, resume and chapter labels/status must come from real data; pictured cover and counts are fictional samples, never seeded product data",
+      "implementation_inventory": {
+        "continue_reading": "Reuse continueRead and explicit identity routing; do not override chapter selection with history",
+        "start_reading": "Retain startRead as a secondary accessible option, not a second competing filled CTA",
+        "download_management": "Reveal existing local manager when local content exists; retain online exact-ID download selection and update preview; never turn a local entry into silent online reading",
+        "check_updates": "Reuse mountMangaUpdatePreview; keep ID warnings and confirmed missing-list submission",
+        "export_zip": "Wire existing /api/manga/<source>/<comic_id>/zip only when downloaded content exists; show actionable failures, do not silently navigate on error",
+        "overflow": "Replace numeric prompt with accessible named actions; preserve copy title, copy link and metadata-only chapter report; destructive actions retain confirmations",
+        "favorites": "Existing toggleFav/loadFavState with pending/error/disabled states; bookmark selected state must reflect server result",
+        "metadata": "Unbox author/tags/date; preserve optional fields and local cover privacy; description expand is a native disclosure",
+        "catalog": "Preserve existing volume-first identity/index mapping, bounded rendering and chapter finder; visual row style must not change original route indices"
+      },
+      "known_reference_adjustments_before_code": [
+        "Generated image shows both topbar overflow and inline More; consolidate to one semantic action menu in implementation to avoid duplicate controls",
+        "Generated chapter-row icons are redundant with group headings; use existing consistent outline family and omit decorative duplicates if needed for mobile density",
+        "Concept combines illustrative 60-unit total with shortened visible groups; actual counts must be computed from actual catalog and never copied from image"
+      ],
+      "fidelity_review_points": ["white/slate palette", "open layout without nested cards", "single reading CTA hierarchy", "cover aspect and no tint", "explicit control typography", "volume-before-chapter list and quiet dividers", "scrolling and responsive continuation"],
+      "remaining": "No rendered implementation yet; browser interaction, responsive screenshot comparison and real-device parity are required before claiming redesign completion"
+    },
     "mobile_detail": {
       "file": "concepts/v3-mobile-detail.png",
       "primary_action": "继续阅读",
