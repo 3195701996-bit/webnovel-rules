@@ -56,6 +56,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -109,6 +110,8 @@ fun BookDetailScreen(
     var cleaning by remember { mutableStateOf(false) }
     var cleanPreview by remember { mutableStateOf<org.json.JSONObject?>(null) }
     var showOriginalRecovery by remember { mutableStateOf(false) }
+    var showReaderEdition by remember { mutableStateOf(false) }
+    var exportPath by rememberSaveable(bookKey) { mutableStateOf(bookPath(bookKey, "/txt")) }
     var missingCount by remember { mutableIntStateOf(0) }
     var confirmDelete by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
@@ -121,10 +124,11 @@ fun BookDetailScreen(
             exportMsg = "已取消导出"
             return@rememberLauncherForActivityResult
         }
+        val selectedExportPath = exportPath
         scope.launch {
             exporting = true; exportMsg = "正在导出…"
             exportMsg = try {
-                val r = Export.streamToUri(ctx, ep.port, ep.token, bookPath(bookKey, "/txt"), uri)
+                val r = Export.streamToUri(ctx, ep.port, ep.token, selectedExportPath, uri)
                 "已导出 ${Export.human(r.bytes)}" + (r.warning?.let { "（$it）" } ?: "")
             } catch (t: kotlinx.coroutines.CancellationException) {
                 throw t
@@ -184,7 +188,10 @@ fun BookDetailScreen(
                                 Row(Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.spacedBy(WnSpace.sm)) {
                                     OutlinedButton(
-                                        onClick = { exportLauncher.launch(Export.safeFileName(d.name, "book") + ".txt") },
+                                        onClick = {
+                                            exportPath = bookPath(bookKey, "/txt")
+                                            exportLauncher.launch(Export.safeFileName(d.name, "book") + ".txt")
+                                        },
                                         enabled = !exporting,
                                         modifier = Modifier.weight(1f),
                                     ) { Text(if (exporting) "导出中…" else "导出 TXT") }
@@ -271,6 +278,8 @@ fun BookDetailScreen(
                                 }
                                 TextButton(onClick = { showOriginalRecovery = true }, enabled = !cleaning && !checking,
                                     modifier = Modifier.testTag("novel_recovery_button")) { Text("恢复清洗前原文") }
+                                TextButton(onClick = { showReaderEdition = true }, enabled = !exporting && !cleaning,
+                                    modifier = Modifier.testTag("reader_edition_button")) { Text("导出阅读版 TXT") }
                                 if (missingCount > 0) {
                                     Spacer(Modifier.height(WnSpace.sm))
                                     OutlinedButton(
@@ -327,6 +336,13 @@ fun BookDetailScreen(
                 }
             }
         }
+    }
+    if (showReaderEdition) {
+        ReaderEditionDialog(bookKey, ep.port, gateway, onClose = { showReaderEdition = false }, onExport = { path ->
+            exportPath = path
+            showReaderEdition = false
+            exportLauncher.launch(Export.safeFileName(detail?.name ?: "book", "book") + "-阅读版.txt")
+        })
     }
     if (showOriginalRecovery) {
         NovelRecoveryDialog(bookKey, ep.port, gateway, onClose = { showOriginalRecovery = false },

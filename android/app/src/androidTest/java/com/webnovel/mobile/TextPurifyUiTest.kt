@@ -72,7 +72,8 @@ class TextPurifyUiTest {
         bookDir = File(booksDir, key)
         bookDir.deleteRecursively()
         require(bookDir.mkdirs()) { "无法创建合成书目录：$bookDir" }
-        val promotionFixture = testName.methodName == "ui_promotionReviewCanBeCancelledWithoutWriting"
+        val promotionFixture = testName.methodName in setOf("ui_promotionReviewCanBeCancelledWithoutWriting",
+            "ui_readerEditionPreviewInvalidatesOptionsAndStreamsWithoutCacheWrites")
         File(bookDir, "_state.json").writeText(
             JSONObject().apply {
                 put("book", JSONObject().apply {
@@ -159,6 +160,42 @@ class TextPurifyUiTest {
         assertEquals(0, again.optInt("removed_lines"))
         ev("幂等：第二遍 changed=0")
         Unit
+    }
+
+    @Test
+    fun ui_readerEditionPreviewInvalidatesOptionsAndStreamsWithoutCacheWrites() {
+        val cache = File(bookDir, cacheKeyOf(URL2) + ".cache")
+        val before = cache.readBytes()
+        rule.openCachedShelf()
+        rule.waitUntil(60_000) { texts(BOOK_NAME) > 0 }
+        rule.onAllNodesWithText(BOOK_NAME)[0].performScrollTo().performClick()
+        rule.waitUntil(60_000) { nodes("reader_edition_button") > 0 }
+        rule.onAllNodesWithTag("reader_edition_button")[0].performScrollTo().performClick()
+        rule.onAllNodesWithTag("reader_edition_confirm")[0].performClick()
+        rule.waitUntil(20_000) { texts("将导出 2 章", substring = true) > 0 }
+        rule.onAllNodesWithTag("reader_edition_omit")[0].performClick()
+        rule.waitUntil(5_000) { texts("选项已变更", substring = true) > 0 }
+        assertEquals(0, texts("保存阅读版"))
+        rule.onAllNodesWithTag("reader_edition_confirm")[0].performClick()
+        rule.waitUntil(20_000) { texts("将导出 1 章 · 排除 1 项", substring = true) > 0 }
+        assertTrue(before.contentEquals(cache.readBytes()))
+        val ep = gateway.currentEndpoint()!!
+        val preview = runBlocking { gateway.httpText(ep.port, "/api/books/$key/txt/preview?clean=1&omit_promotions=1") }
+        val revision = JSONObject(preview.body).getString("revision")
+        val path = "/api/books/$key/txt?layout=reader&clean=1&omit_promotions=1&revision=$revision"
+        val output = File(ctx.cacheDir, "reader_edition_selftest.txt")
+        try {
+            val uri = android.net.Uri.fromFile(output)
+            runBlocking { Export.streamToUri(ctx, ep.port, ep.token, path, uri) }
+            val exported = output.readBytes()
+            assertTrue(output.readText().startsWith("第1章 干净"))
+            assertFalse(output.readText().contains("推书"))
+            assertTrue(before.contentEquals(cache.readBytes()))
+            cache.appendText("\n后续修改。")
+            val stale = runCatching { runBlocking { Export.streamToUri(ctx, ep.port, ep.token, path, uri) } }
+            assertTrue("旧预览必须拒绝", stale.isFailure)
+            assertTrue("HTTP409不能截断目标文件", exported.contentEquals(output.readBytes()))
+        } finally { output.delete() }
     }
 
     @Test
