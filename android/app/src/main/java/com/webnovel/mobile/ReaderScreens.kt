@@ -15,6 +15,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -37,6 +39,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
@@ -87,6 +91,7 @@ private fun bookPath(key: String, suffix: String = ""): String =
 
 // ── 详情页（原生，替代 WebView 过渡）────────────────────────
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun BookDetailScreen(
     gateway: EngineGateway,
@@ -115,6 +120,11 @@ fun BookDetailScreen(
     var exportPath by rememberSaveable(bookKey) { mutableStateOf(bookPath(bookKey, "/txt")) }
     var missingCount by remember { mutableIntStateOf(0) }
     var confirmDelete by remember { mutableStateOf(false) }
+    var chapterQuery by rememberSaveable(bookKey) { mutableStateOf("") }
+    var chapterMode by rememberSaveable(bookKey) { mutableStateOf("all") }
+    val visibleChapters = remember(detail, chapterQuery, chapterMode) {
+        filterNovelChapters(detail?.chapters.orEmpty(), chapterQuery, chapterMode)
+    }
     val scope = rememberCoroutineScope()
 
     // 通过系统文件选择器（SAF）导出全文：内容由本机引擎提供，流式写入选定位置
@@ -172,7 +182,7 @@ fun BookDetailScreen(
                     Spacer(Modifier.height(WnSpace.md))
                     Button(onClick = { reload() }) { Text("重试") }
                 }
-                else -> LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = WnSpace.xl)) {
+                else -> LazyColumn(Modifier.fillMaxSize().testTag("book_detail_list"), contentPadding = PaddingValues(bottom = WnSpace.xl)) {
                     item { DetailHeader(d, progress, introExpanded) { introExpanded = !introExpanded } }
                     item {
                         val resume = d.resumeIndex(progress)
@@ -331,7 +341,30 @@ fun BookDetailScreen(
                         }
                         Spacer(Modifier.height(WnSpace.md))
                     }
-                    items(d.chapters, key = { it.index }) { c ->
+                    item(key = "chapter_filters") {
+                        Column(Modifier.fillMaxWidth().padding(horizontal = WnSpace.lg)) {
+                            OutlinedTextField(value = chapterQuery, onValueChange = { chapterQuery = it },
+                                label = { Text("查找章节（章名或目录序号）") }, singleLine = true,
+                                modifier = Modifier.fillMaxWidth().testTag("novel_chapter_query"))
+                            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                for ((mode, label) in listOf("all" to "全部", "downloaded" to "已下载", "missing" to "待下载")) {
+                                    FilterChip(selected = chapterMode == mode, onClick = { chapterMode = mode },
+                                        label = { Text(label) }, modifier = Modifier.testTag("novel_chapter_filter_$mode"))
+                                }
+                            }
+                            Text("显示 ${visibleChapters.size} / ${d.chapters.size} 章 · 纯数字按目录序号定位",
+                                style = MaterialTheme.typography.labelSmall, color = WnColors.inkDim,
+                                modifier = Modifier.testTag("novel_chapter_filter_summary"))
+                            if (chapterQuery.isNotEmpty() || chapterMode != "all") {
+                                TextButton(onClick = { chapterQuery = ""; chapterMode = "all" },
+                                    modifier = Modifier.testTag("novel_chapter_filter_reset")) { Text("清除章节筛选") }
+                            }
+                            if (visibleChapters.isEmpty()) Text("没有匹配的章节，可更换关键词或筛选条件。",
+                                style = MaterialTheme.typography.bodyMedium,
+                                modifier = Modifier.padding(vertical = WnSpace.md))
+                        }
+                    }
+                    items(visibleChapters, key = { it.index }) { c ->
                         val readIdx = progress?.idx ?: 0
                         ChapterRow(c, isCurrent = c.index == readIdx,
                             isRead = readIdx >= 1 && c.index < readIdx) { onRead(c.index) }
