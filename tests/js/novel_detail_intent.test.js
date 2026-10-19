@@ -4,6 +4,11 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const source = fs.readFileSync(path.join(__dirname, '../../templates/novel_detail.html'), 'utf8');
+const detailCss = source.match(/<style>([\s\S]*?)<\/style>/)[1];
+for (const rule of detailCss.matchAll(/\.chap-list\s*\{([^}]*)\}/g)) {
+  assert.doesNotMatch(rule[1], /max-height|overflow-y/, 'detail TOC must scroll with the document, not inside a short viewport');
+}
+assert.doesNotMatch(detailCss.match(/\.chap-head\s*\{([^}]*)\}/)[1], /position:\s*(?:sticky|fixed)/);
 const start = source.indexOf('let detailToc = null;');
 const end = source.indexOf('// ═══════ 书库模式', start);
 assert(start >= 0 && end > start);

@@ -51,8 +51,8 @@
 .novel-intro { color:var(--text-dim); font-size:.88rem; line-height:1.7; margin-bottom:16px; white-space:pre-wrap; }
 /* 章节列表 */
 .chap-sec { background:var(--bg-elevated); border:1px solid var(--border); border-radius:12px; padding:14px; margin-bottom:16px; }
-.chap-head { display:flex; align-items:center; justify-content:space-between; padding-bottom:10px; font-size:.95rem; font-weight:700; position:sticky; top:0; background:var(--bg); z-index:5; }
-.chap-list { display:grid; grid-template-columns:repeat(auto-fill,minmax(160px,1fr)); gap:8px; max-height:55vh; overflow-y:auto; }
+.chap-head { display:flex; align-items:center; justify-content:space-between; padding-bottom:10px; font-size:.95rem; font-weight:700; background:var(--bg); }
+.chap-list { display:grid; grid-template-columns:repeat(auto-fill,minmax(160px,1fr)); gap:8px; }
 .chap-item { padding:9px 12px; border-radius:8px; background:var(--bg); font-size:.85rem;
   color:var(--text-dim); cursor:pointer; display:flex; align-items:center; gap:6px;
   white-space:nowrap; overflow:hidden; text-overflow:ellipsis; transition:.12s; }
@@ -72,7 +72,7 @@
   .manga-head .cover { width:100px; height:140px; }
   .fn-row { gap:8px; }
   .op-btn { min-height:44px; padding:8px 10px; font-size:.78rem; }
-  .chap-list { grid-template-columns:repeat(auto-fill,minmax(140px,1fr)); max-height:60vh; }
+  .chap-list { grid-template-columns:repeat(auto-fill,minmax(140px,1fr)); }
 }
 </style>
 <link rel="stylesheet" href="/static/css/novel_cleaning.css">
@@ -141,6 +141,13 @@ function fmtWords(w) { if (!w) return ''; const n = parseInt(w); if (!n) return 
 // 长目录首屏只挂载当前章附近分段（200 章/段），上下「展开」按钮按需扩段；
 // 目录内搜索作用于全量章节数组，未挂载章节同样可被找到。
 let detailToc = null;
+function captureDetailTocScroll() {
+  const list = $('#chap-list');
+  const beforeHeight = list.getBoundingClientRect().height;
+  const beforeY = window.scrollY;
+  return () => window.scrollTo({left: window.scrollX,
+    top: beforeY + list.getBoundingClientRect().height - beforeHeight, behavior: 'instant'});
+}
 let detailTocInteracted = false;
 const markDetailTocInteraction = () => { detailTocInteracted = true; };
 const detailTocContainer = $('#chap-list');
@@ -209,6 +216,7 @@ async function loadLibraryMode() {
     else {
       detailToc = TocRender.makeTocView({
         container: list,
+        captureScroll: captureDetailTocScroll,
         makeItem: (c) => {
           const it = document.createElement('div');
           it.dataset.chIdx = c.index;
@@ -357,6 +365,7 @@ async function loadSearchToc(src, gen, signal) {
     // C04: 搜索模式目录同样分段渲染（长目录不一次性全量挂载）
     detailToc = TocRender.makeTocView({
       container: list,
+      captureScroll: captureDetailTocScroll,
       makeItem: (c) => {
         const it = document.createElement('div');
         it.className = 'chap-item';

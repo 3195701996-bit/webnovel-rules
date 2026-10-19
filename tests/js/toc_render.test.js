@@ -160,4 +160,35 @@ view.setFilter('不存在的章节名');
 view.render();
 assert.ok(container.innerHTML.indexOf('无匹配章节') !== -1, '搜索无命中占位');
 
+// Full-page detail supplies its own viewport preservation; reader sidebars keep
+// the default internal-scroll compensation when no callback is supplied.
+const documentContainer = makeEl('div');
+let captures = 0, restores = 0;
+const documentView = TocRender.makeTocView({
+  container: documentContainer, doc: fakeDoc,
+  makeItem: c => Object.assign(makeEl('div'), {textContent: c.index + '. ' + c.name}),
+  captureScroll: () => {
+    captures++;
+    const before = itemCount(documentContainer);
+    return () => { restores++; assert(itemCount(documentContainer) > before); };
+  },
+});
+documentView.setData(chapters);
+documentView.locate(1000);
+documentView.render();
+expandBtns(documentContainer)[0].click();
+assert.equal(captures, 1);
+assert.equal(restores, 1);
+
+const sidebar = makeEl('div');
+sidebar.scrollTop = 70;
+Object.defineProperty(sidebar, 'scrollHeight', {get: () => itemCount(sidebar) * 10});
+const sidebarView = TocRender.makeTocView({container: sidebar, doc: fakeDoc,
+  makeItem: c => Object.assign(makeEl('div'), {textContent: c.index + '. ' + c.name})});
+sidebarView.setData(chapters);
+sidebarView.locate(1000);
+sidebarView.render();
+expandBtns(sidebar)[0].click();
+assert.equal(sidebar.scrollTop, 2070, 'reader sidebar keeps default internal scroll compensation');
+
 console.log('toc_render.test.js: 全部断言通过');
