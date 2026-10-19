@@ -186,7 +186,21 @@ def load_json(path, default=None):
         return default
 
 
+_text_write_locks = tuple(threading.RLock() for _ in range(64))
+
+
+def text_write_lock(path):
+    """固定条带可重入锁；章节下载/重爬/清洗/恢复使用同一写入边界。"""
+    key = os.path.normcase(os.path.realpath(os.path.abspath(path)))
+    return _text_write_locks[int(hashlib.sha256(key.encode()).hexdigest(), 16) % len(_text_write_locks)]
+
+
 def atomic_write_text(path, text):
+    with text_write_lock(path):
+        _atomic_write_text_unlocked(path, text)
+
+
+def _atomic_write_text_unlocked(path, text):
     """tmp + os.replace 原子写文本（章节缓存/txt 导出共用，语义同 atomic_write）"""
     d = os.path.dirname(path) or "."
     os.makedirs(d, exist_ok=True)

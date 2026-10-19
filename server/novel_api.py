@@ -1882,7 +1882,8 @@ def api_book_reclean(book_key):
 
     from engine.cleaner import clean_text
     from engine.novel_review import review_chapter
-    from engine.app_utils import cache_key_of, atomic_write_text
+    from engine.app_utils import cache_key_of
+    from engine.text_recovery import save_cleaned_cache
 
     chapters = state.get("chapters", []) or []
     _title_re = re.compile(r'^(第[一二三四五六七八九十百千万零两\d]+[章卷篇节]|序章|楔子|番外|尾声|终章|后记|外传)')
@@ -1896,7 +1897,7 @@ def api_book_reclean(book_key):
         if not os.path.isfile(cp):
             continue
         try:
-            with open(cp, encoding="utf-8") as f:
+            with open(cp, encoding="utf-8", newline="") as f:
                 raw = f.read()
         except (OSError, UnicodeDecodeError) as e:
             failed.append({"index": idx + 1, "reason": f"{type(e).__name__}: {e}"})
@@ -1932,7 +1933,7 @@ def api_book_reclean(book_key):
         changed += 1
         if not dry:
             try:
-                atomic_write_text(cp, head + cleaned)
+                save_cleaned_cache(d, os.path.basename(cp), raw, head + cleaned)
             except Exception as e:      # noqa: BLE001
                 failed.append({"index": idx + 1, "reason": f"{type(e).__name__}: {e}"})
                 changed -= 1
@@ -1953,6 +1954,70 @@ def api_book_reclean(book_key):
         "scanned": scanned, "review_count": review_count,
         "review_items": review_items, "review_truncated": review_count > len(review_items),
     })
+
+
+@bp.route("/api/books/<book_key>/reclean/recovery")
+def api_book_reclean_recovery(book_key):
+    """只返回原文存档身份/可恢复状态，不返回原文正文。"""
+    from engine.text_recovery import restore_cleaned_cache
+    book_key = _safe_seg(book_key, "书籍")
+    d = os.path.join(BOOKS_DIR, book_key)
+    if not load_book_state(os.path.join(d, "_state.json")):
+        abort(404, "书籍不存在")
+    archive_dir = os.path.join(d, ".reclean-originals")
+    if os.path.islink(archive_dir):
+        return _err_json("原文存档目录异常", 409)
+    try:
+        names = sorted(os.listdir(archive_dir))
+    except FileNotFoundError:
+        names = []
+    items = []
+    for name in names:
+        if not re.fullmatch(r'[0-9a-f]{64}\.json', name):
+            continue
+        identity = name[:-5]
+        try:
+            preview = restore_cleaned_cache(d, identity)
+            items.append({"id": identity, "restorable": not preview["already_original"],
+                          "already_original": preview["already_original"]})
+        except (ValueError, OSError, TypeError):
+            items.append({"id": identity, "restorable": False, "conflict": True})
+    return jsonify({"ok": True, "items": items, "count": len(items)})
+
+
+@bp.route("/api/books/<book_key>/reclean/restore", methods=["POST"])
+def api_book_reclean_restore(book_key):
+    """显式存档身份恢复；默认仅预览，后续修改时拒绝覆盖。"""
+    from engine.text_recovery import restore_cleaned_cache
+    book_key = _safe_seg(book_key, "书籍")
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return _err_json("恢复参数必须是对象", 400)
+    identities = data.get("ids")
+    if (not isinstance(identities, list) or not 1 <= len(identities) <= 500
+            or any(not isinstance(i, str) or not re.fullmatch(r'[0-9a-f]{64}', i) for i in identities)
+            or ("dry_run" in data and not isinstance(data["dry_run"], bool))):
+        return _err_json("请选择1至500个有效原文存档，dry_run必须为布尔值", 400)
+    dry = data.get("dry_run", True)
+    d = os.path.join(BOOKS_DIR, book_key)
+    state = load_book_state(os.path.join(d, "_state.json"))
+    if not state:
+        abort(404, "书籍不存在")
+    items, restored = [], 0
+    for identity in dict.fromkeys(identities):
+        try:
+            result = restore_cleaned_cache(d, identity, dry_run=dry)
+            restored += int(result["restored"])
+            items.append({"id": identity, "ok": True, **result})
+        except ValueError as error:
+            items.append({"id": identity, "ok": False, "error": str(error)})
+        except (OSError, TypeError):
+            items.append({"id": identity, "ok": False, "error": "原文存档或章节无法读取"})
+    rebuilt, rebuild_error = False, ""
+    if restored:
+        rebuilt, rebuild_error = _rebuild_book_txt_local(book_key, d, state.get("chapters") or [])
+    return jsonify({"ok": True, "dry_run": dry, "items": items, "restored": restored,
+                    "txt_rebuilt": rebuilt, "export_error": rebuild_error})
 
 
 @bp.route("/api/books/<book_key>/check-update", methods=["POST"])

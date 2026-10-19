@@ -215,6 +215,40 @@ def test_reclean_missing_book_is_404(client, book):
     assert r.status_code == 404
 
 
+def test_reclean_original_recovery_preview_and_explicit_restore(client, book):
+    from engine.app_utils import cache_key_of
+    key, d, chapters, bodies = book
+    path = d / (cache_key_of(chapters[1]["url"]) + ".cache")
+    client.post(f"/api/books/{key}/reclean", json={"dry_run": False})
+    cleaned = path.read_bytes()
+    listing = client.get(f"/api/books/{key}/reclean/recovery").get_json()
+    assert listing["count"] == 1 and listing["items"][0]["restorable"]
+    assert all("original" not in item for item in listing["items"])
+    identity = listing["items"][0]["id"]
+    preview = client.post(f"/api/books/{key}/reclean/restore", json={"ids": [identity]}).get_json()
+    assert preview["dry_run"] and preview["restored"] == 0 and path.read_bytes() == cleaned
+    result = client.post(f"/api/books/{key}/reclean/restore",
+                         json={"ids": [identity], "dry_run": False}).get_json()
+    assert result["restored"] == 1 and result["txt_rebuilt"] and not result["export_error"]
+    assert path.read_text(encoding="utf-8") == bodies[2]
+    assert client.get(f"/api/books/{key}/reclean/recovery").get_json()["items"][0]["already_original"]
+
+
+def test_reclean_recovery_refuses_new_content_and_invalid_boolean(client, book):
+    from engine.app_utils import cache_key_of
+    key, d, chapters, _ = book
+    client.post(f"/api/books/{key}/reclean", json={"dry_run": False})
+    identity = client.get(f"/api/books/{key}/reclean/recovery").get_json()["items"][0]["id"]
+    path = d / (cache_key_of(chapters[1]["url"]) + ".cache")
+    path.write_text("用户后续下载的新内容", encoding="utf-8")
+    result = client.post(f"/api/books/{key}/reclean/restore",
+                         json={"ids": [identity], "dry_run": False}).get_json()
+    assert not result["items"][0]["ok"] and result["restored"] == 0
+    assert path.read_text() == "用户后续下载的新内容"
+    assert client.post(f"/api/books/{key}/reclean/restore",
+                       json={"ids": [identity], "dry_run": "false"}).status_code == 400
+
+
 def test_reclean_preview_reports_promotions_after_400_changes_without_writes(client, book):
     """预览必须扫完整本，不能把前400章的抽样冒充全书结论。"""
     from engine.app_utils import cache_key_of
