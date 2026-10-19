@@ -8,6 +8,10 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.assertIsOff
+import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.isDialog
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.performScrollToIndex
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.LargeTest
@@ -95,6 +99,23 @@ class TextPurifyUiTest {
             else android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
         }
         rule.waitUntil(15_000) { rule.activity.resources.configuration.orientation == expected }
+    }
+
+    private fun recoveryScreenshot(name: String) {
+        rule.waitForIdle()
+        // Compose semantics can settle before the system's rotation animation.
+        // Require a quiet accessibility window before capturing rendered pixels.
+        InstrumentationRegistry.getInstrumentation().uiAutomation.waitForIdle(1_000, 5_000)
+        rule.waitForIdle()
+        val screenshot = InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()
+            ?: error("无法获取恢复页截图")
+        try {
+            val file = File(requireNotNull(ctx.externalCacheDir), "selftest-recovery-$name.png")
+            file.outputStream().use { output ->
+                assertTrue(screenshot.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, output))
+            }
+            ev("recovery screenshot=${file.absolutePath}")
+        } finally { screenshot.recycle() }
     }
 
     private val adLine = "【新章节更新迟缓的问题，在能换源的app上终于有了解决之道，" +
@@ -344,7 +365,9 @@ api.SourceCrawler = fixture_crawler
         rule.waitUntil(20_000) { nodes("novel_recovery_button") > 0 }
         repeat(6) { cycle ->
             ev("recovery rotation cycle=$cycle opening")
-            rule.onAllNodesWithTag("novel_recovery_button")[0].performScrollTo().performClick()
+            val opener = rule.onAllNodesWithTag("novel_recovery_button")[0].performScrollTo().assertIsDisplayed()
+            val openerTop = opener.getUnclippedBoundsInRoot().top.value
+            opener.performClick()
             // Rotate immediately after opening, not only after the async listing is idle.
             rule.activityRule.scenario.onActivity {
                 it.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
@@ -353,10 +376,14 @@ api.SourceCrawler = fixture_crawler
                 rule.activity.resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
             }
             rule.waitUntil(20_000) { texts("请选择需要恢复的存档。") > 0 }
+            rule.onNodeWithTag("novel_recovery_screen").assertIsDisplayed()
+            rule.onAllNodes(isDialog()).assertCountEquals(0)
+            rule.onAllNodesWithTag("book_detail_list").assertCountEquals(0)
             rule.onAllNodesWithTag("novel_recovery_select_all")[0].performScrollTo().performClick()
             rule.waitUntil(5_000) { texts("预览恢复（100）") > 0 }
             rule.onAllNodesWithTag("novel_recovery_confirm")[0].assertIsDisplayed().performClick()
             rule.waitUntil(20_000) { texts("确认恢复") > 0 }
+            if (cycle == 0) recoveryScreenshot("landscape")
             // Selection survives a second recreation, but a write must still need
             // a fresh dry-run. This test never confirms restoration of any archive.
             rule.activityRule.scenario.onActivity {
@@ -368,10 +395,17 @@ api.SourceCrawler = fixture_crawler
             rule.waitUntil(20_000) { texts("请选择需要恢复的存档。") > 0 }
             rule.waitUntil(5_000) { texts("预览恢复（100）") > 0 }
             assertEquals("旋转不能恢复旧预览的写入授权", 0, texts("确认恢复"))
+            if (cycle == 0) recoveryScreenshot("portrait")
             rule.onAllNodesWithTag("novel_recovery_list")[0].performScrollToIndex(100)
             rule.onAllNodesWithTag("novel_recovery_confirm")[0].assertIsDisplayed()
-            rule.onAllNodesWithTag("novel_recovery_close")[0].assertIsDisplayed().performClick()
+            if (cycle == 5) {
+                rule.activityRule.scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
+            } else rule.onAllNodesWithTag("novel_recovery_close")[0].assertIsDisplayed().performClick()
             rule.waitUntil(5_000) { nodes("novel_recovery_close") == 0 }
+            rule.onNodeWithTag("book_detail_list").assertIsDisplayed()
+            val returnedOpener = rule.onAllNodesWithTag("novel_recovery_button")[0].assertIsDisplayed()
+            assertTrue("关闭管理页应保留详情滚动位置", kotlin.math.abs(
+                returnedOpener.getUnclippedBoundsInRoot().top.value - openerTop) < 2f)
             ev("recovery rotation cycle=$cycle closed")
         }
         val after = bookDir.walkTopDown().filter { it.isFile }

@@ -123,6 +123,7 @@ fun BookDetailScreen(
     var confirmDelete by remember { mutableStateOf(false) }
     var chapterQuery by rememberSaveable(bookKey) { mutableStateOf("") }
     var chapterMode by rememberSaveable(bookKey) { mutableStateOf("all") }
+    val detailListState = rememberLazyListState()
     val visibleChapters = remember(detail, chapterQuery, chapterMode) {
         filterNovelChapters(detail?.chapters.orEmpty(), chapterQuery, chapterMode)
     }
@@ -168,6 +169,12 @@ fun BookDetailScreen(
     }
     LaunchedEffect(bookKey) { reload() }
 
+    if (showOriginalRecovery) {
+        NovelRecoveryScreen(bookKey, ep.port, gateway, onClose = { showOriginalRecovery = false },
+            onChanged = { reload() })
+        return
+    }
+
     Scaffold(topBar = {
         TopAppBar(
             title = { Text(detail?.name ?: "书籍详情", maxLines = 1, overflow = TextOverflow.Ellipsis) },
@@ -183,7 +190,8 @@ fun BookDetailScreen(
                     Spacer(Modifier.height(WnSpace.md))
                     Button(onClick = { reload() }) { Text("重试") }
                 }
-                else -> LazyColumn(Modifier.fillMaxSize().testTag("book_detail_list"), contentPadding = PaddingValues(bottom = WnSpace.xl)) {
+                else -> LazyColumn(Modifier.fillMaxSize().testTag("book_detail_list"), state = detailListState,
+                    contentPadding = PaddingValues(bottom = WnSpace.xl)) {
                     item { DetailHeader(d, progress, introExpanded) { introExpanded = !introExpanded } }
                     item {
                         val resume = d.resumeIndex(progress)
@@ -389,10 +397,6 @@ fun BookDetailScreen(
             showReaderEdition = false
             exportLauncher.launch(Export.safeFileName(detail?.name ?: "book", "book") + "-阅读版.txt")
         })
-    }
-    if (showOriginalRecovery) {
-        NovelRecoveryDialog(bookKey, ep.port, gateway, onClose = { showOriginalRecovery = false },
-            onChanged = { scope.launch { reload() } })
     }
     cleanPreview?.let { o ->
         AlertDialog(
