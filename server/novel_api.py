@@ -1881,6 +1881,7 @@ def api_book_reclean(book_key):
         abort(404, "书籍不存在")
 
     from engine.cleaner import clean_text
+    from engine.novel_review import review_chapter
     from engine.app_utils import cache_key_of, atomic_write_text
 
     chapters = state.get("chapters", []) or []
@@ -1888,10 +1889,9 @@ def api_book_reclean(book_key):
     changed, skipped, failed = 0, 0, []
     removed_chars, removed_lines = 0, 0
     samples = []
+    review_items, review_count, scanned = [], 0, 0
 
     for idx, c in enumerate(chapters):
-        if dry and len(samples) >= 3 and changed >= 400:
-            break          # 干跑不必扫全库：够给用户看规模即可
         cp = os.path.join(d, cache_key_of(c.get("url", "")) + ".cache")
         if not os.path.isfile(cp):
             continue
@@ -1901,6 +1901,12 @@ def api_book_reclean(book_key):
         except (OSError, UnicodeDecodeError) as e:
             failed.append({"index": idx + 1, "reason": f"{type(e).__name__}: {e}"})
             continue
+        scanned += 1
+        review = review_chapter(c.get("name"), raw)
+        if review:
+            review_count += 1
+            if len(review_items) < 100:
+                review_items.append({"index": idx + 1, "name": c.get("name") or "", **review})
         # 缓存首行可能是章节名（重爬单章写入的格式）——**标题不参与净化**，
         # 否则 L3 的"正文内标题残留"规则会把标题本身删掉
         head, body = "", raw
@@ -1951,6 +1957,8 @@ def api_book_reclean(book_key):
         "changed": changed, "already_clean": skipped,
         "removed_lines": removed_lines, "removed_chars": removed_chars,
         "samples": samples, "failed": failed, "txt_rebuilt": rebuilt,
+        "scanned": scanned, "review_count": review_count,
+        "review_items": review_items, "review_truncated": review_count > len(review_items),
     })
 
 

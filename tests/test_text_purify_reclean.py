@@ -193,6 +193,43 @@ def test_reclean_missing_book_is_404(client, book):
     assert r.status_code == 404
 
 
+def test_reclean_preview_reports_promotions_after_400_changes_without_writes(client, book):
+    """预览必须扫完整本，不能把前400章的抽样冒充全书结论。"""
+    from engine.app_utils import cache_key_of
+    import server.state as st
+
+    key, d, _, _ = book
+    state_path = d / "_state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    chapters = []
+    before = {}
+    for i in range(502):
+        promo = i >= 401
+        name = "推书《测试作品》" if promo else f"第{i + 1}章 测试"
+        url = f"https://t.example.com/audit/{i}"
+        chapters.append({"name": name, "url": url})
+        body = ("《测试作品》\n求帮忙追读！" if promo else "正常剧情。")
+        raw = name + "\n\n" + body + "\n小书亭app"
+        path = d / (cache_key_of(url) + ".cache")
+        path.write_text(raw, encoding="utf-8")
+        before[path] = path.read_bytes()
+    state["chapters"] = chapters
+    state_path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+    before[state_path] = state_path.read_bytes()
+    st.invalidate_book_state(str(state_path))
+
+    response = client.post(f"/api/books/{key}/reclean?dry_run=1")
+    assert response.status_code == 200
+    result = response.get_json()
+    assert result["scanned"] == 502 and result["changed"] == 502
+    assert result["review_count"] == 101
+    assert len(result["review_items"]) == 100 and result["review_truncated"]
+    assert result["review_items"][0]["index"] == 402
+    assert all(item["review_only"] for item in result["review_items"])
+    assert not result["txt_rebuilt"]
+    assert all(path.read_bytes() == raw for path, raw in before.items())
+
+
 def test_reclean_reports_truthful_totals(client, book):
     """释放量与实际差异必须对得上（不夸大也不藏）"""
     key, d, chs, bodies = book
