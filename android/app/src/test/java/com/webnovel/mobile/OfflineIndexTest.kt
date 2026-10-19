@@ -19,6 +19,33 @@ import java.nio.file.Files
  * 这是"离线也能读已下载内容"这条承诺的核心体验，因此用用例钉住两个键都读。
  */
 class OfflineIndexTest {
+    @Test fun confirmedMetadataWorksWithoutEngineAndDoesNotWriteFiles() {
+        val root = tmpRoot()
+        try {
+            makeBook(root, "metadata", 3, 2)
+            val dir = File(root, "books/metadata")
+            val stateFile = File(dir, "_state.json")
+            val state = JSONObject(stateFile.readText())
+            state.getJSONObject("book").put("book_url", "https://metadata.invalid/one")
+            stateFile.writeText(state.toString())
+            writeProgress(root, "metadata", JSONObject().put("idx", 2))
+            val record = File(dir, "_metadata.json")
+            record.writeText("""{"version":1,"book_url":"https://metadata.invalid/one","metadata":{"name":"确认书名","author":"确认作者","chapters":[]}}""")
+            val before = root.walkTopDown().filter { it.isFile }.associate { it.relativeTo(root).path to it.readBytes().toList() }
+            val novel = OfflineStore.novelsFrom(root).single()
+            assertEquals("确认书名", novel.name)
+            assertEquals("确认作者", novel.author)
+            assertEquals(3, novel.chapterCount)
+            assertEquals(2, novel.downloadedCount)
+            assertEquals(2, novel.startIndex)
+            assertEquals(before, root.walkTopDown().filter { it.isFile }.associate { it.relativeTo(root).path to it.readBytes().toList() })
+            record.writeText(record.readText().replace("metadata.invalid/one", "metadata.invalid/another"))
+            assertEquals("metadata", OfflineStore.novelsFrom(root).single().name)
+            record.writeText("{broken")
+            assertEquals("metadata", OfflineStore.novelsFrom(root).single().name)
+            assertEquals("{broken", record.readText())
+        } finally { root.deleteRecursively() }
+    }
 
     private fun ev(line: String) = println("OFFLINE_INDEX_EVIDENCE $line")
 

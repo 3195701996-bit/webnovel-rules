@@ -1576,12 +1576,12 @@ def api_book_metadata_preview(book_key):
 def api_book_metadata_apply(book_key):
     book_key = _safe_seg(book_key, "书籍")
     body = request.get_json(silent=True)
-    if not isinstance(body, dict) or not isinstance(body.get('state_revision'), str):
+    if not isinstance(body, dict) or not isinstance(body.get("state_revision"), str):
         return _err_json("缺少元数据预览版本", 400)
     from engine.novel_metadata import save_metadata
     try:
         saved = save_metadata(os.path.join(BOOKS_DIR, book_key, '_state.json'),
-                              body['state_revision'], body.get('metadata'))
+                              body["state_revision"], body.get("metadata"))
         return jsonify({"ok": True, "metadata": saved, "catalog_preserved": True})
     except FileNotFoundError:
         return _err_json("书籍不存在", 404)

@@ -179,6 +179,18 @@ object OfflineStore {
             if (!dir.isDirectory) continue
             val state = readJson(File(dir, "_state.json")) ?: continue
             val info = state.optJSONObject("book") ?: JSONObject()
+            // Independent confirmed display fields; never mutate the crawler's
+            // files and never apply a record belonging to another book URL.
+            val metadata = readJson(File(dir, "_metadata.json"))
+            val bookUrl = info.optString("book_url")
+            if (bookUrl.isNotBlank() && metadata?.opt("version") == 1 &&
+                metadata.optString("book_url") == bookUrl) {
+                val fields = metadata.optJSONObject("metadata")
+                for (field in listOf("name", "author")) {
+                    val value = fields?.opt(field)
+                    if (value is String && value.isNotBlank()) info.put(field, value)
+                }
+            }
             val chapters = state.optJSONArray("chapters") ?: JSONArray()
             val urls = (0 until chapters.length()).mapNotNull {
                 chapters.optJSONObject(it)?.optString("url")?.takeIf { u -> u.isNotBlank() }
