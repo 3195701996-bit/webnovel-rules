@@ -29,6 +29,7 @@ import org.junit.runner.RunWith
 import java.io.File
 import java.io.FileOutputStream
 import java.util.UUID
+import java.security.MessageDigest
 
 /**
  * P1-C 下载韧性验收（真机、真实源站）：方向基线 §7.2 要求
@@ -131,6 +132,13 @@ class DownloadResilienceTest {
     private fun chapterDir() = File(OfflineStore.runtimeDir(ctx),
         "manga/downloads/$source/$comicId/$chapterId")
 
+    private fun assertStorageStressEmulator() {
+        assertTrue("存储/断网故障只允许专用 API35 模拟器",
+            Shell.run("getprop ro.kernel.qemu").trim() == "1" &&
+                Shell.run("getprop ro.build.version.sdk").trim() == "35" &&
+                Shell.run("getprop ro.boot.qemu.avd_name").trim() == "StorageStress_API35")
+    }
+
     private fun images(): List<File> =
         chapterDir().listFiles().orEmpty().filter { isImage(it) }
 
@@ -195,6 +203,7 @@ class DownloadResilienceTest {
     fun fullStorageFailurePersistsForColdRestart() = runBlocking {
         assumeTrue("真实填满存储只允许由 android_enospc_cold_start.sh 在专用 AVD 编排",
             InstrumentationRegistry.getArguments().getString("enospcHarness") == "1")
+        assertStorageStressEmulator()
         val ep = gateway.currentEndpoint()!!
         prepareTask(ep, startImmediately = false)
 
@@ -266,6 +275,7 @@ class DownloadResilienceTest {
     fun persistedFullStorageFailureResumesAfterColdAppStart() = runBlocking {
         assumeTrue("跨进程恢复阶段只允许由 android_enospc_cold_start.sh 编排",
             InstrumentationRegistry.getArguments().getString("enospcHarness") == "1")
+        assertStorageStressEmulator()
         val taskFile = File(OfflineStore.runtimeDir(ctx), "manga/_tasks.json")
         assertTrue("冷启动后任务快照仍存在", taskFile.isFile)
         val tasks = JSONObject(taskFile.readText(Charsets.UTF_8))
@@ -316,6 +326,53 @@ class DownloadResilienceTest {
         val before = images().size
         val resumeButton = hasTestTag("task_resume") and
             hasAnyAncestor(hasTestTag("task_card_$key"))
+        if (InstrumentationRegistry.getArguments().getString("enospcOfflineRecovery") == "1") {
+            // Defence in depth: never toggle networking on a physical/user device,
+            // even if somebody invokes this instrumentation outside the host harness.
+            assertStorageStressEmulator()
+            assertTrue("测试前网络必须已开启", !Airplane.isOn() && Airplane.outboundOk())
+            val originalPages = images().associate { file -> file.name to
+                (MessageDigest.getInstance("SHA-256").digest(file.readBytes()).toList() to
+                    file.lastModified()) }
+            assertTrue("组合验收需要故障前已有真实图片", originalPages.isNotEmpty())
+            try {
+                assertTrue("必须实际断网，不只修改系统标志", Airplane.set(true))
+                rule.onAllNodes(resumeButton)[0].performScrollTo().assertIsDisplayed()
+                    .assertIsEnabled().performClick()
+                var offline = JSONObject()
+                for (attempt in 0 until 240) {
+                    rule.mainClock.advanceTimeByFrame()
+                    rule.waitForIdle()
+                    offline = taskStatus(ep.port)
+                    assertTrue("断网不可误报完成", offline.optString("status") != "done")
+                    if (offline.optString("status") == "error" &&
+                        offline.optString("error") != recovered.optString("error")) break
+                    delay(1000)
+                }
+                assertTrue("断网重试必须有新的失败终态，而非停留旧存储错误",
+                    offline.optString("status") == "error" &&
+                        offline.optString("error").isNotBlank() &&
+                        offline.optString("error") != recovered.optString("error"))
+                val offlineSaved = JSONObject(taskFile.readText(Charsets.UTF_8)).getJSONObject(key)
+                assertTrue("断网失败必须落盘", offlineSaved.optString("status") == "error")
+                assertTrue("断网不得新增假图片", images().map { it.name }.toSet() == originalPages.keys)
+                for (file in images()) {
+                    val original = originalPages.getValue(file.name)
+                    assertTrue("断网不得改写已下载页 ${file.name}",
+                        MessageDigest.getInstance("SHA-256").digest(file.readBytes()).toList() == original.first &&
+                            file.lastModified() == original.second)
+                }
+                reportEvidence("enospcOffline", "PASS ${originalPages.size} 张原图哈希及时间保持，失败已落盘：" +
+                    offline.optString("error").take(160))
+            } finally {
+                assertTrue("专用模拟器网络必须恢复", Airplane.set(false))
+            }
+            reportEvidence("enospcOnline", "PASS 出网探测恢复")
+            // The native task list refreshes asynchronously after the failed attempt.
+            rule.waitUntil(30_000) {
+                rule.onAllNodes(resumeButton).fetchSemanticsNodes().size == 1
+            }
+        }
         rule.onAllNodes(resumeButton).assertCountEquals(1)
         rule.onAllNodes(resumeButton)[0].performScrollTo().assertIsDisplayed()
             .assertIsEnabled().performClick()

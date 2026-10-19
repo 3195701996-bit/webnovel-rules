@@ -7,6 +7,11 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 android_dir="$repo_root/android"
 adb_bin="${ADB:-adb}"
 gradlew="${GRADLEW:-./gradlew}"
+offline_recovery="${ENOSPC_OFFLINE_RECOVERY:-0}"
+if [[ "$offline_recovery" != "0" && "$offline_recovery" != "1" ]]; then
+  echo "ENOSPC_OFFLINE_RECOVERY 仅允许 0 或 1。" >&2
+  exit 2
+fi
 if [[ -z "${ANDROID_SERIAL:-}" ]]; then
   echo "必须显式指定 ANDROID_SERIAL=emulator-5580；拒绝在未指定设备时继续。" >&2
   exit 2
@@ -26,6 +31,14 @@ if [[ "$avd_name" != "StorageStress_API35" || "$sdk_level" != "35" || "$is_emula
   exit 2
 fi
 
+if [[ "$offline_recovery" == "1" ]]; then
+  initial_airplane="$("${adb_cmd[@]}" shell settings get global airplane_mode_on | tr -d '\r')"
+  if [[ "$initial_airplane" != "0" ]]; then
+    echo "组合验收要求专用模拟器初始飞行模式关闭；未改变网络。" >&2
+    exit 2
+  fi
+fi
+
 tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/wr-enospc.XXXXXX")"
 phase1_log="$tmp_dir/phase1.log"
 phase2_log="$tmp_dir/phase2.log"
@@ -33,6 +46,11 @@ test_runner="com.webnovel.mobile.test/androidx.test.runner.AndroidJUnitRunner"
 phase2_ok=0
 cleanup() {
   local rc=$?
+  if [[ "$offline_recovery" == "1" ]]; then
+    if ! "${adb_cmd[@]}" shell cmd connectivity airplane-mode disable >/dev/null; then
+      echo "警告：专用模拟器网络恢复命令失败，请检查设备连接。" >&2
+    fi
+  fi
   if [[ "$rc" == 0 && "$phase2_ok" == 1 ]]; then
     rm -rf "$tmp_dir"
   else
@@ -86,6 +104,7 @@ echo "已确认旧 App 进程退出。"
 echo "[4/6] 独立仪器阶段冷启动引擎，恢复任务并继续下载"
 if ! "${adb_cmd[@]}" shell am instrument -w -r \
   -e enospcHarness 1 \
+  -e enospcOfflineRecovery "$offline_recovery" \
   -e class "com.webnovel.mobile.DownloadResilienceTest#persistedFullStorageFailureResumesAfterColdAppStart" \
   "$test_runner" >"$phase2_log" 2>&1; then
   cat "$phase2_log" >&2
@@ -102,6 +121,21 @@ for evidence in "INSTRUMENTATION_STATUS: enospcRecovered=PASS error" \
     exit 1
   fi
 done
+if [[ "$offline_recovery" == "1" ]]; then
+  for evidence in "INSTRUMENTATION_STATUS: enospcOffline=PASS" \
+                  "INSTRUMENTATION_STATUS: enospcOnline=PASS"; do
+    if ! grep -Fq "$evidence" "$phase2_log"; then
+      cat "$phase2_log" >&2
+      echo "组合验收缺少证据：$evidence" >&2
+      exit 1
+    fi
+  done
+  restored_airplane="$("${adb_cmd[@]}" shell settings get global airplane_mode_on | tr -d '\r')"
+  if [[ "$restored_airplane" != "0" ]]; then
+    echo "组合验收未恢复飞行模式；不能放行。" >&2
+    exit 1
+  fi
+fi
 phase2_ok=1
 cat "$phase2_log"
 
