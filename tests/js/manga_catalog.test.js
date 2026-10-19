@@ -443,7 +443,7 @@ assert.match(androidMain, /items\(\(sortedManga\.size \+ 2\) \/ 3, key = \{ row 
   'cached manga cards must be emitted as stable-keyed rows by the outer lazy shelf');
 assert.match(androidMain, /items\(history, key = \{ entry ->[\s\S]*novel:\$\{entry\.item\.key\}[\s\S]*manga:\$\{entry\.item\.source\}/,
   'combined reading history rows must keep stable cross-content identities');
-assert.match(androidMain, /items\(favorites\.size, key = \{ i ->[\s\S]*favorites\[i\]\.source/,
+assert.match(androidMain, /items\(visibleFavorites\.size, key = \{ i ->[\s\S]*visibleFavorites\[i\]\.source[\s\S]*visibleFavorites\[i\]\.comicId/,
   'favorite grid cards must retain source/comic identity when update counts reorder them');
 
 const favoriteUpdateCheck = mangaPage.match(

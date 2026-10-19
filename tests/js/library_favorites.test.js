@@ -17,6 +17,8 @@ function functionSource(name) {
 }
 
 const helperNames = [
+  'favoriteMangaMatches',
+  'applyFavoriteMangaFilters',
   'favoriteMangaDetailUrl',
   'favoriteMangaCardHTML',
   'favoriteMangaLocalStates',
@@ -33,6 +35,7 @@ const sandbox = vm.createContext({
   },
 });
 vm.runInContext(`${helpers}\nglobalThis.__url = favoriteMangaDetailUrl;\n`
+  + 'globalThis.__matches = favoriteMangaMatches;\n'
   + 'globalThis.__card = favoriteMangaCardHTML;\n'
   + 'globalThis.__locals = favoriteMangaLocalStates;\n'
   + 'globalThis.__libraryVisible = mangaLibraryCardVisible;\n'
@@ -43,6 +46,11 @@ const comic = {
   cover: 'https://example.test/cover.jpg', unread_count: 6,
   source_name: '拷贝漫画', update_time: '2026-10-02',
 };
+assert.equal(sandbox.__matches(comic, '作品 COPYmanga', true), true);
+assert.equal(sandbox.__matches({...comic, unread_count: 0}, '', true), false);
+assert.equal(sandbox.__matches(comic, 'missing', false), false);
+assert.equal(sandbox.__matches(comic, '  ', false), true);
+assert.equal(comic.unread_count, 6, 'filtering must not rewrite actual read-set counts');
 assert.doesNotMatch(sandbox.__card(comic, 'local'), /https:\/\/example.test/,
   'local favorite without a cached cover must not request its source URL');
 assert.match(sandbox.__card({...comic, local_cover_view: '/api/manga/jm/1/cover?catalog=local'}, 'local'),
