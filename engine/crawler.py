@@ -920,6 +920,11 @@ class CrawlTask:
     def _save_state(self):
         bd = self.book.to_dict() if self.book else {}
         bd['source_uid'] = self.source.get('uid', '')
+        from .novel_metadata import overlay_metadata
+        bd = overlay_metadata(self.state_file, {'book': bd})['book']
+        if self.book:
+            self.book.name = bd.get('name', self.book.name)
+            self.book.author = bd.get('author', self.book.author)
         state = {
             'book': bd,
             'chapters': [{'name': c['name'], 'url': c['url']} for c in (self.book.chapters if self.book else [])],
@@ -936,6 +941,8 @@ class CrawlTask:
         try:
             with open(self.state_file, encoding='utf-8') as f:
                 st = json.load(f)
+            from .novel_metadata import overlay_metadata
+            st = overlay_metadata(self.state_file, st)
             self.book = Book(self.source, st['book'].get('book_url', self.book_url))
             for k, v in st.get('book', {}).items():
                 setattr(self.book, k, v)

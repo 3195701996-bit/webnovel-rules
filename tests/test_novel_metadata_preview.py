@@ -1,4 +1,3 @@
-import hashlib
 import json
 from types import SimpleNamespace
 
@@ -36,7 +35,8 @@ def test_metadata_preview_is_bounded_and_does_not_touch_local_files(metadata_env
     assert result["read_only"] is True
     assert result["proposed"] == {"name": "真正 书名", "author": "作者"}
     assert {item["field"] for item in result["changes"]} == {"name", "author"}
-    assert result["state_revision"] == hashlib.sha256(before["_state.json"]).hexdigest()
+    from engine.novel_metadata import metadata_snapshot
+    assert result["state_revision"] == metadata_snapshot(str(folder / "_state.json"))[1]
     assert calls == [("https://metadata.invalid/1", {"fast": True, "deadline": 12})]
     assert {p.name: p.read_bytes() for p in folder.iterdir()} == before
 
@@ -70,3 +70,57 @@ def test_missing_source_and_network_failure_preserve_all_files(metadata_env, mon
     monkeypatch.setattr(api, "SourceCrawler", lambda source: SimpleNamespace(get_book=fail))
     assert client.get("/api/books/book-one/metadata/preview").status_code == 502
     assert {p.name: p.read_bytes() for p in folder.iterdir()} == before
+
+
+def test_confirmed_metadata_is_separate_and_survives_crawler_state_save(metadata_env):
+    client, api, folder = metadata_env
+    from engine.novel_metadata import metadata_snapshot
+    from engine.crawler import Book, CrawlTask
+    from server.state import load_book_state
+    path = str(folder / '_state.json')
+    before = {p.name: p.read_bytes() for p in folder.iterdir()}
+    revision = metadata_snapshot(path)[1]
+    response = client.post('/api/books/book-one/metadata', json={
+        'state_revision': revision, 'metadata': {'name': '确认书名', 'author': '确认作者'}})
+    assert response.status_code == 200
+    assert {p.name: p.read_bytes() for p in folder.iterdir() if p.name != '_metadata.json'} == before
+    assert load_book_state(path)['book']['name'] == '确认书名'
+    stale = client.post('/api/books/book-one/metadata', json={
+        'state_revision': revision, 'metadata': {'name': '过期写入'}})
+    assert stale.status_code == 409
+    source = {'uid': 'source', 'bookSourceUrl': 'https://metadata.invalid'}
+    task = CrawlTask(source, 'https://metadata.invalid/1', str(folder))
+    task.book = Book(source, task.book_url)
+    task.book.name = '下载器旧书名'
+    task.book.chapters = [{'name': '新章', 'url': 'chapter'}]
+    task.completed = ['chapter']
+    task._save_state()
+    assert task.book.name == '确认书名' and task.book.author == '确认作者'
+    assert load_book_state(path)['book']['name'] == '确认书名'
+    assert (folder / 'chapter.cache').read_bytes() == before['chapter.cache']
+    assert (folder / '_progress.json').read_bytes() == before['_progress.json']
+
+
+@pytest.mark.parametrize('fields', [{'chapters': ['bad']}, {'name': ''}, {'name': ' https://wrong.invalid '}, {'name': 1}, {}])
+def test_confirmation_rejects_non_metadata_changes(metadata_env, fields):
+    client, api, folder = metadata_env
+    from engine.novel_metadata import metadata_snapshot
+    revision = metadata_snapshot(str(folder / '_state.json'))[1]
+    response = client.post('/api/books/book-one/metadata', json={'state_revision': revision, 'metadata': fields})
+    assert response.status_code == 400
+    assert not (folder / '_metadata.json').exists()
+
+
+def test_confirmation_refuses_changed_catalog_and_corrupt_metadata_record(metadata_env):
+    client, api, folder = metadata_env
+    from engine.novel_metadata import metadata_snapshot
+    revision = metadata_snapshot(str(folder / '_state.json'))[1]
+    (folder / '_state.json').write_text((folder / '_state.json').read_text() + ' ')
+    response = client.post('/api/books/book-one/metadata', json={'state_revision': revision, 'metadata': {'name': '书名'}})
+    assert response.status_code == 409
+    assert not (folder / '_metadata.json').exists()
+    original = b'{bad metadata'
+    (folder / '_metadata.json').write_bytes(original)
+    response = client.post('/api/books/book-one/metadata', json={'state_revision': revision, 'metadata': {'name': '书名'}})
+    assert response.status_code == 400
+    assert (folder / '_metadata.json').read_bytes() == original

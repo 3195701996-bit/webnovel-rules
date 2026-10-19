@@ -877,14 +877,16 @@ def load_book_state(path, default=None):
         ent = _book_state_cache.get(path)
         if ent is not None and ent[0] == fp:
             _book_state_cache.move_to_end(path)
-            return ent[1]
+            from engine.novel_metadata import overlay_metadata
+            return overlay_metadata(path, ent[1])
     data = load_json(path, default)
     with _book_state_lock:
         _book_state_cache[path] = (fp, data)
         _book_state_cache.move_to_end(path)
         while len(_book_state_cache) > _BOOK_STATE_CACHE_MAX:
             _book_state_cache.popitem(last=False)
-    return data
+    from engine.novel_metadata import overlay_metadata
+    return overlay_metadata(path, data)
 
 
 def invalidate_book_state(path):

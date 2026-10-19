@@ -1537,9 +1537,8 @@ def api_book_metadata_preview(book_key):
     book_key = _safe_seg(book_key, "书籍")
     path = os.path.join(BOOKS_DIR, book_key, "_state.json")
     try:
-        with open(path, "rb") as stream:
-            raw = stream.read()
-        state = json.loads(raw)
+        from engine.novel_metadata import metadata_snapshot
+        state, revision = metadata_snapshot(path)
         info = state.get("book") if isinstance(state, dict) else None
         if not isinstance(info, dict):
             raise ValueError("书籍元数据格式异常")
@@ -1568,9 +1567,30 @@ def api_book_metadata_preview(book_key):
         if not proposed.get("name"):
             return _err_json("源站未返回可信书名，未修改本地数据", 502)
         return jsonify({"ok": True, "read_only": True, "changes": changes,
-                        "proposed": proposed, "state_revision": hashlib.sha256(raw).hexdigest()})
+                        "proposed": proposed, "state_revision": revision})
     except Exception as exc:
         return _err_response(exc, 502, "读取源站元数据失败；本地内容未修改")
+
+
+@bp.route("/api/books/<book_key>/metadata", methods=["POST"])
+def api_book_metadata_apply(book_key):
+    book_key = _safe_seg(book_key, "书籍")
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict) or not isinstance(body.get('state_revision'), str):
+        return _err_json("缺少元数据预览版本", 400)
+    from engine.novel_metadata import save_metadata
+    try:
+        saved = save_metadata(os.path.join(BOOKS_DIR, book_key, '_state.json'),
+                              body['state_revision'], body.get('metadata'))
+        return jsonify({"ok": True, "metadata": saved, "catalog_preserved": True})
+    except FileNotFoundError:
+        return _err_json("书籍不存在", 404)
+    except RuntimeError as exc:
+        return _err_json(str(exc), 409)
+    except ValueError as exc:
+        return _err_json(str(exc), 400)
+    except Exception as exc:
+        return _err_response(exc, 500, "元数据保存失败；章节与进度未修改")
 
 
 @bp.route("/api/books/<book_key>/chapter/<int:idx>", methods=["POST"])
