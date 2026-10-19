@@ -126,7 +126,9 @@ internal fun LocalMediaManagerDialog(gateway: EngineGateway, ep: EngineEndpoint,
         })
     if (confirm) AlertDialog(onDismissRequest = { confirm = false },
         title = { Text("删除选中的本地缓存？") },
-        text = { Text("将删除 ${selected.size} 个单元的本地图片，文件删除后不可恢复。收藏与阅读记录保留；仅按选中 ID 删除。") },
+        text = { Text("将删除 ${selected.size} 个单元的本地图片。" +
+            (if (hiddenSelected > 0) "其中 $hiddenSelected 项位于当前筛选之外。" else "") +
+            "文件删除后不可恢复。收藏与阅读记录保留；仅按选中 ID 删除。") },
         confirmButton = {
             TextButton(onClick = {
                 confirm = false
