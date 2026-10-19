@@ -295,20 +295,8 @@ internal fun ExploreScreen(
                              style = MaterialTheme.typography.labelMedium,
                              color = WnColors.inkDim)
                         Spacer(Modifier.height(WnSpace.sm))
-                        src.categories.forEach { c ->
-                            // 分组标题只在首次出现时显示（源自己的分组结构照原样）
-                            val idx = src.categories.indexOf(c)
-                            if (c.group.isNotBlank() &&
-                                (idx == 0 || src.categories[idx - 1].group != c.group)) {
-                                Text(c.group, style = MaterialTheme.typography.titleSmall,
-                                     fontWeight = FontWeight.Bold,
-                                     modifier = Modifier.padding(top = WnSpace.sm, bottom = WnSpace.xs))
-                            }
-                            OutlinedButton(
-                                onClick = { categoryUrl = c.url; loadBooks(src, c, 1) },
-                                modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
-                                contentPadding = PaddingValues(vertical = 6.dp),
-                            ) { Text(c.title, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                        NovelCategoryMenu(src.categories, src.uid) { c ->
+                            categoryUrl = c.url; loadBooks(src, c, 1)
                         }
                     }
                 }
@@ -397,6 +385,28 @@ internal fun ExploreScreen(
                 }
             }
         }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+internal fun NovelCategoryMenu(categories: List<ExploreCategory>, source: String,
+                              onSelect: (ExploreCategory) -> Unit) {
+    // Keep contiguous source groups and exact entry order, including repeated
+    // labels/URLs. Do not merge separated sections or deduplicate distinct links.
+    var start = 0
+    while (start < categories.size) {
+        val group = categories[start].group
+        var end = start + 1
+        while (end < categories.size && categories[end].group == group) end++
+        if (group.isNotBlank()) {
+            Text(group, style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(top = WnSpace.md, bottom = WnSpace.sm))
+        }
+        CategoryButtons(categories.subList(start, end), source,
+            tagPrefix = "novel_cat_${source}_", onSelect = onSelect)
+        start = end
     }
 }
 
