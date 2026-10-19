@@ -12,6 +12,14 @@ const library = fs.readFileSync(path.join(root, 'templates/library.html'), 'utf8
 const reader = fs.readFileSync(path.join(root, 'templates/reader.html'), 'utf8');
 const sources = fs.readFileSync(path.join(root, 'templates/sources.html'), 'utf8');
 const mangaDetail = fs.readFileSync(path.join(root, 'templates/manga_detail.html'), 'utf8');
+const detailLayout = fs.readFileSync(path.join(root, 'static/css/manga_detail.css'), 'utf8');
+assert.match(mangaDetail, /href="\/static\/css\/manga_detail\.css"/);
+assert.ok(mangaDetail.indexOf('id="continue-btn"') < mangaDetail.indexOf('id="dl-btn"'),
+  'reading is first both visually and in keyboard order');
+assert.match(detailLayout, /\.chap-head\s*\{[^}]*position:static/);
+assert.match(detailLayout, /#chapters\s*\{[^}]*flex-direction:column/);
+assert.match(detailLayout, /:has\(#cover\[hidden\]\)/);
+assert.match(detailLayout, /min-height:48px/);
 const mangaReader = fs.readFileSync(path.join(root, 'templates/manga_reader.html'), 'utf8');
 const tasks = fs.readFileSync(path.join(root, 'templates/tasks.html'), 'utf8');
 const mangaSearch = fs.readFileSync(path.join(root, 'templates/manga.html'), 'utf8');

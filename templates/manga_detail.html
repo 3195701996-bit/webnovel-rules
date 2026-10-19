@@ -161,6 +161,7 @@
 }
 
 </style>
+<link rel="stylesheet" href="/static/css/manga_detail.css">
 </head>
 <body>
 <div id="loading-bar-wrap" class="loading-bar-wrap"><div class="loading-bar"></div></div>
@@ -218,8 +219,8 @@
 
   <!-- 4. 功能按钮区（下载/继续阅读） -->
   <div class="fn-row">
-    <button class="fn-btn fn-download" id="dl-btn" onclick="downloadAll()">↓ 下载</button>
     <button class="fn-btn fn-continue" id="continue-btn" onclick="continueRead()" disabled>▶ 读取阅读记录…</button>
+    <button class="fn-btn fn-download" id="dl-btn" onclick="downloadAll()">↓ 下载</button>
   </div>
 
   <!-- 5. 阅读进度提示 -->
@@ -249,8 +250,10 @@
   </div>
 
   <!-- 7. 章节列表区 -->
-  <div id="local-manager" style="margin-bottom:16px"></div>
-  <div id="update-preview" style="margin-bottom:16px"></div>
+  <div class="detail-tools">
+    <div id="local-manager"></div>
+    <div id="update-preview"></div>
+  </div>
   <div class="chap-sec">
     <div class="chap-head">
       <div class="sec-title">章节 <span id="chap-count" style="font-weight:400;color:var(--text-dim);font-size:.8rem;"></span></div>
@@ -470,7 +473,7 @@ async function load() {
       detail = await r.json();
       if (detail.error) throw new Error((st === 404 ? '404 ' : '') + detail.error);
     document.title = detail.title + ' · 漫画详情';
-    $('#nav-title').textContent = detail.title;
+    $('#nav-title').textContent = '漫画详情';
     $('#title').textContent = detail.title;
     $('#subtitle').textContent = detail.sub_title || '';
     // R25: 少章节告警（包子《迷宫饭》简版仅 1 话等）——提示找更完整版本
