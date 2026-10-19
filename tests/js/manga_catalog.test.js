@@ -284,6 +284,7 @@ const longUnits = [
   })),
 ];
 const opened = [];
+longUnits[240].item.group = '<img src=x onerror=alert(1)>';
 const renderCtx = {
   CHAPTER_BATCH_SIZE: 120,
   chapterObserver: null,
@@ -303,23 +304,29 @@ vm.createContext(renderCtx);
 vm.runInContext(batchRenderer[0], renderCtx);
 more.onclick = renderCtx.renderChapterBatch;
 renderCtx.renderChapterBatch();
-assert.equal(longBox.children.length, 121,
+assert.equal(longBox.children.length, 123,
   'initial render must add one bounded batch and keep the continuation control');
-assert.match(longBox.children[0].innerHTML, /整卷/,
+assert.match(longBox.children[0].textContent, /整卷/,
   'the first rendered reader unit must be the volume');
-assert.equal(longBox.children[0].dataset.chapterIndex, '0');
-assert.equal(longBox.children[1].dataset.chapterIndex, '1');
-assert.match(longBox.children[2].className, /partial/,
+assert.equal(longBox.children[1].dataset.chapterIndex, '0');
+assert.equal(longBox.children[3].dataset.chapterIndex, '1');
+assert.match(longBox.children[4].className, /partial/,
   'provably incomplete local chapter must have a distinct partial-download state');
-assert.match(longBox.children[2].innerHTML, /可补齐/,
+assert.match(longBox.children[4].innerHTML, /可补齐/,
   'partial chapter must tell the reader its local images can be topped up');
-longBox.children[0].onclick();
+longBox.children[1].onclick();
 assert.deepEqual(opened, [0], 'rendered volume must open using its stable reader index');
 more.onclick();
+assert.equal(longBox.children.filter(node => node.className === 'chap-group').length, 2,
+  'lazy batch boundaries must not duplicate a continuing group');
 assert.ok(longBox.children.some(node => node.dataset.chapterIndex === '120'
   && node.classes.has('read')), 'later batches must retain read-state decoration');
 more.onclick();
 assert.equal(renderCtx.chapterRenderState.rendered, 241);
+const headings = longBox.children.filter(node => node.className === 'chap-group');
+assert.equal(headings.length, 3);
+assert.equal(headings[2].textContent, '单话 · <img src=x onerror=alert(1)>',
+  'source group names must be text, not injected HTML');
 assert.ok(!longBox.children.includes(more), 'continuation control must disappear at catalog end');
 assert.match(detail, /LOCAL_CATALOG\s*\?\s*'&catalog=local'/,
   'local detail must preserve catalog mode when entering the reader');

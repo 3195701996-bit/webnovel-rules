@@ -39,6 +39,9 @@
 #chapter-finder input { min-height:44px; font-size:16px; border-radius:8px; }
 .batch-dl { min-height:44px; font-size:14px; color:var(--accent); }
 #chapters { display:flex; flex-direction:column; gap:0; }
+.chap-group { padding:10px 16px; margin-top:12px; background:var(--bg-overlay);
+  color:var(--text-primary); font-size:15px; font-weight:600; line-height:1.6; }
+.chap-group:first-child { margin-top:0; }
 #chapters .chap-item { width:100%; min-height:52px; box-sizing:border-box; border:0; border-bottom:1px solid var(--border); border-radius:0; background:transparent; padding:12px 16px; gap:12px; font-size:16px; line-height:1.6; flex-wrap:wrap; overflow-wrap:anywhere; }
 #chapters .chap-item:hover { background:var(--bg-hover); }
 #chapters .chap-item .grp { color:var(--text-secondary); font-size:13px; }

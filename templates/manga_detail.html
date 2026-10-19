@@ -366,6 +366,15 @@ function renderChapterBatch() {
   for (let idx = start; idx < end; idx++) {
     const entry = state.units[idx];
     const item = entry.item;
+    const previous = state.units[idx - 1];
+    if (!previous || previous.kind !== entry.kind ||
+        (entry.kind === 'chapter' && (previous.item.group || '') !== (item.group || ''))) {
+      const heading = document.createElement('div');
+      heading.className = 'chap-group';
+      heading.textContent = entry.kind === 'volume' ? '整卷' :
+        '单话' + (item.group && item.group !== '单话' ? ' · ' + item.group : '');
+      fragment.appendChild(heading);
+    }
     const btn = document.createElement('button');
     const isDownloaded = state.downloaded.has(item.id);
     const isPartial = !isDownloaded && state.partialDownloaded.has(item.id);
@@ -374,14 +383,11 @@ function renderChapterBatch() {
     btn.className = 'chap-item' + (isDownloaded ? ' dl' : isPartial ? ' partial' : '');
     btn.dataset.chapterIndex = String(idx);
     if (entry.kind === 'volume') {
-      btn.innerHTML = '<span class="grp">整卷</span>'
-        + esc(item.name || ('第' + (entry.sourceIndex + 1) + '卷'))
+      btn.innerHTML = esc(item.name || ('第' + (entry.sourceIndex + 1) + '卷'))
         + localTag;
     } else {
-      const grpLabel = item.group && item.group !== state.curGroup
-        ? `<span class="grp">${esc(item.group)}</span>` : '';
       if (item.group) state.curGroup = item.group;
-      btn.innerHTML = grpLabel + esc(item.name || ('第' + (entry.sourceIndex + 1) + '话'))
+      btn.innerHTML = esc(item.name || ('第' + (entry.sourceIndex + 1) + '话'))
         + localTag;
     }
     if (chapterReadIndices.has(idx)) btn.classList.add('read');
