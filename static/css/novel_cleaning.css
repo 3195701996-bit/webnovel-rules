@@ -6,3 +6,7 @@
 .novel-cleaning-actions { display:flex; justify-content:flex-end; gap:12px; }
 .novel-cleaning-actions button { min-height:44px; padding:8px 16px; border:1px solid var(--border); border-radius:8px; color:var(--text); background:var(--bg); cursor:pointer; }
 .novel-cleaning-actions button:disabled { opacity:.5; cursor:default; }
+.novel-cleaning-actions { flex-wrap:wrap; }
+.novel-recovery-list { margin:12px 0; }
+.novel-recovery-row { display:flex; align-items:center; gap:12px; min-height:48px; border-bottom:1px solid var(--border); padding:8px 0; }
+.novel-recovery-row input { flex-shrink:0; width:20px; height:20px; }
