@@ -456,3 +456,10 @@
 - 准确SHA `2dc667d1992efcd76ea30657c9f3cac0ff1fb679` 的 **39240454934、39240447873** 已核对completed/success；新增详情布局/分组不借用该CI记录。测试浏览器和隔离服务已关闭。
 - Web长简介补齐展开/收起：按实际scrollHeight/clientHeight判断截断，短文本不显示多余按钮、空文本不留区域；ResizeObserver及窗口resize重测，重复挂载时取消旧帧与监听。按钮原生键盘可操作，aria-controls/aria-expanded和可见文案同步；文本只使用textContent，不解释源HTML。
 - 新增Node测试覆盖截断展开/收起、宽度变化、空态、原文安全、监听释放；**37组Web JS通过**。隔离实际模板1536×1024及390×844验证长简介键盘Enter展开后高度增加、全文未截断、点击收起恢复原高度和aria状态，并复验卷序/指定卷跳转；1280/390更多菜单链路仍通过，无JS/console异常及横向溢出。手机截图已实际查看。Browser技能缺失，使用现有Playwright；测试浏览器与服务关闭。并非完整页面或3.0.0验收完成。
+
+### Android Web 资源快照与包内一致性
+
+- 复核快照包含整个static/templates，但原Copy会保留源码已删除的旧文件；改为Gradle Sync，只清理本任务白名单生成目录，不处理用户数据。向专用build快照注入obsolete-qa-sentinel.js后真实重建，文件被移除，未进入APK；无需手动清理构建根或用户目录。
+- 增加只读工具 `tools/check_android_web_assets.py`，读取APK内Chaquopy app.imy，对static/templates每个文件与当前源码逐字节核对，并拒绝缺失、额外残留、重复ZIP条目、内容不一致及空源码误通过。它不解压写盘、不构建/安装/发布，不替代签名和版本身份校验。
+- 实际Release构建22秒、Debug构建18秒成功，两个APK均通过全部Web资源一致性校验。单独核对新详情CSS、简介脚本、本地管理脚本和模板内容一致，测试残留不在包内。新增工具/快照及读写契约专项 **31 passed（4.66秒）**，错误级Ruff与diff检查通过。
+- CI Android构建后增加实际包内资源校验步骤，YAML由系统Ruby解析确认（本地venv未安装PyYAML，未为此新增依赖）。后续远端CI仍需准确SHA结果；本轮查询GitHub遇EOF，未据此判定CI失败或成功。未启动设备、未分发本轮dirty构建产物，完整3.0.0验收仍开放。

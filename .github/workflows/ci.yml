@@ -125,6 +125,10 @@ jobs:
         # 确保 UI 回归本身可构建（运行期手势仍由目标设备验收）。产物不上传/发布。
         run: ./gradlew :app:testDebugUnitTest :app:compileDebugAndroidTestKotlin :app:assembleDebug --no-daemon
 
+      - name: Verify packaged Web resources match source
+        # APK 内再校验，不能只确认生成目录中存在资源。
+        run: python tools/check_android_web_assets.py android/app/build/outputs/apk/debug/app-debug.apk
+
       - name: Assert Android build left no repository residue
         run: |
           if [ -n "$(git status --porcelain)" ]; then

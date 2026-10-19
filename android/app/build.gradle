@@ -228,7 +228,7 @@ configurations.configureEach {
 // 混入产物；所有清单化文件按内容校验。
 def snapshotDir = layout.buildDirectory.dir('generated/python-snapshot')
 def repoRoot = rootProject.file('..')
-tasks.register('syncPythonSnapshot', Copy) {
+tasks.register('syncPythonSnapshot', Sync) {
     // Python 业务包与静态资源
     from(repoRoot) {
         include 'app.py'
