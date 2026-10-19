@@ -8,6 +8,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,6 +19,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -327,7 +330,8 @@ fun BookDetailScreen(
             onDismissRequest = { cleanPreview = null },
             title = { Text("净化已下载正文？") },
             text = {
-                Column {
+                Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())
+                    .testTag("reclean_preview_content")) {
                     Text(
                         "将重新净化 ${o.optInt("chapters")} 章里的 ${o.optInt("changed")} 章，" +
                             "删除 ${o.optInt("removed_lines")} 行广告/分隔线与约 " +
@@ -345,7 +349,24 @@ fun BookDetailScreen(
                         }
                     }
                     Spacer(Modifier.height(6.dp))
-                    Text("正文段落、章节标题、阅读进度都不会动；已下载的书不需要重下。",
+                    val reviewCount = o.optInt("review_count")
+                    if (reviewCount > 0) {
+                        Text("发现 $reviewCount 个疑似推广章节（仅提示，不会自动删除）：",
+                            style = MaterialTheme.typography.labelMedium)
+                        val reviews = o.optJSONArray("review_items")
+                        if (reviews != null) for (i in 0 until reviews.length()) {
+                            val review = reviews.optJSONObject(i) ?: continue
+                            Text("· 目录第${review.optInt("index")}项：${review.optString("name")}",
+                                style = MaterialTheme.typography.bodySmall)
+                        }
+                        if (o.optBoolean("review_truncated")) {
+                            Text("此处最多列出100项；统计已包含其余建议。",
+                                style = MaterialTheme.typography.labelSmall)
+                        }
+                        Spacer(Modifier.height(6.dp))
+                    }
+                    Text("将改写本地正文缓存，请核对样例后执行；章节目录与阅读进度不变。" +
+                        "推广章节仅供审查，不会自动删除；已下载的书不需要重下。",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.outline)
                 }
@@ -366,8 +387,14 @@ fun BookDetailScreen(
                                 "已净化 ${res.optInt("changed")} 章（删除 " +
                                     "${res.optInt("removed_lines")} 行 / ${res.optInt("removed_chars")} 字）" +
                                     (if (res.optBoolean("txt_rebuilt")) "；全文导出已重建" else "") +
-                                    (if (res.optJSONArray("failed")?.length() ?: 0 > 0)
-                                        "；${res.optJSONArray("failed")!!.length()} 章失败（详见日志）" else "")
+                                    (if (res.optJSONArray("failed")?.length() ?: 0 > 0) {
+                                        val failures = res.optJSONArray("failed")!!
+                                        "；${failures.length()} 项失败：" +
+                                            (0 until minOf(3, failures.length())).joinToString("；") { i ->
+                                                failures.optJSONObject(i)?.optString("reason")?.take(100)
+                                                    ?: "未知错误"
+                                            }
+                                    } else "")
                             }
                             reload()
                         }

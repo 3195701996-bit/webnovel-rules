@@ -21,6 +21,7 @@ import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.junit.rules.TestName
 import java.io.File
 
 /**
@@ -43,6 +44,7 @@ class TextPurifyUiTest {
 
     @get:Rule
     val rule = createAndroidComposeRule<MainActivity>()
+    @get:Rule val testName = TestName()
 
     private val ctx get() = InstrumentationRegistry.getInstrumentation().targetContext
     private lateinit var gateway: EngineGateway
@@ -61,10 +63,16 @@ class TextPurifyUiTest {
 
     @Before
     fun setUp() {
+        val descriptor = InstrumentationRegistry.getInstrumentation().uiAutomation
+            .executeShellCommand("getprop ro.kernel.qemu")
+        val qemu = android.os.ParcelFileDescriptor.AutoCloseInputStream(descriptor)
+            .bufferedReader().use { it.readText().trim() }
+        assertTrue("合成净化测试只能运行于专用模拟器", qemu == "1")
         val booksDir = File(ctx.filesDir, "runtime/books")
         bookDir = File(booksDir, key)
         bookDir.deleteRecursively()
         require(bookDir.mkdirs()) { "无法创建合成书目录：$bookDir" }
+        val promotionFixture = testName.methodName == "ui_promotionReviewCanBeCancelledWithoutWriting"
         File(bookDir, "_state.json").writeText(
             JSONObject().apply {
                 put("book", JSONObject().apply {
@@ -74,7 +82,8 @@ class TextPurifyUiTest {
                 })
                 put("chapters", JSONArray().apply {
                     put(JSONObject().put("name", "第一章 干净").put("url", URL1))
-                    put(JSONObject().put("name", "第二章 有广告").put("url", URL2))
+                    put(JSONObject().put("name", if (promotionFixture) "推书《测试作品》" else "第二章 有广告")
+                        .put("url", URL2))
                 })
                 put("completed", JSONArray().put(URL1).put(URL2))
                 put("failed", JSONObject())
@@ -89,6 +98,10 @@ class TextPurifyUiTest {
                     "─".repeat(30) + "\n" + adLine + "\n小书亭app\n" +
                     "全都给我去下国家反诈APP！！！\n他打开了那个app看了看。\n",
                 Charsets.UTF_8)
+        if (promotionFixture) {
+            File(bookDir, cacheKeyOf(URL2) + ".cache")
+                .writeText("推书《测试作品》\n\n《测试作品》\n求帮忙追读！", Charsets.UTF_8)
+        }
 
         gateway = EngineGateway(ctx)
         val st = runBlocking { gateway.connect() }
@@ -97,6 +110,7 @@ class TextPurifyUiTest {
 
     @After
     fun tearDown() {
+        if (!::bookDir.isInitialized) return
         bookDir.deleteRecursively()
         File(ctx.filesDir, "runtime/trash").listFiles()
             ?.filter { it.name.startsWith(key) }?.forEach { it.deleteRecursively() }
@@ -145,6 +159,24 @@ class TextPurifyUiTest {
         assertEquals(0, again.optInt("removed_lines"))
         ev("幂等：第二遍 changed=0")
         Unit
+    }
+
+    @Test
+    fun ui_promotionReviewCanBeCancelledWithoutWriting() {
+        val cache = File(bookDir, cacheKeyOf(URL2) + ".cache")
+        val before = cache.readBytes()
+        rule.openCachedShelf()
+        rule.waitUntil(60_000) { texts(BOOK_NAME) > 0 }
+        rule.onAllNodesWithText(BOOK_NAME)[0].performScrollTo().performClick()
+        rule.waitUntil(60_000) { nodes("reclean_button") > 0 }
+        rule.onAllNodesWithTag("reclean_button")[0].performScrollTo().performClick()
+        rule.waitUntil(60_000) { texts("发现 1 个疑似推广章节", substring = true) > 0 }
+        rule.onAllNodesWithText("· 目录第2项：推书《测试作品》")[0].performScrollTo()
+        assertTrue(texts("不会自动删除", substring = true) > 0)
+        rule.onAllNodesWithText("取消")[0].performClick()
+        rule.waitUntil(10_000) { nodes("reclean_preview_content") == 0 }
+        assertTrue("取消预览不能修改缓存", before.contentEquals(cache.readBytes()))
+        assertFalse("预览不能生成全文", File(bookDir, "book.txt").exists())
     }
 
     @Test
