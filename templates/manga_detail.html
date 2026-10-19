@@ -110,6 +110,19 @@
 .mid-loading .hint { color:var(--text-dim); font-size:.88rem; }
 @keyframes midspin { to { transform:rotate(360deg); } }
 .loading-fade { opacity:.5; transition:opacity .2s; pointer-events:none; }
+.detail-more-dialog { width:min(360px,calc(100vw - 32px)); box-sizing:border-box;
+  margin:auto; max-height:calc(100dvh - 32px); overflow:auto;
+  border:1px solid var(--border); border-radius:12px; padding:20px;
+  background:var(--bg-elevated); color:var(--text-primary); }
+.detail-more-dialog::backdrop { background:rgba(32,42,48,.28); }
+.detail-more-dialog h2 { margin:0 0 12px; font-size:1.1rem; line-height:1.5; }
+.detail-more-dialog button { width:100%; min-height:44px; padding:10px 12px;
+  text-align:left; border:0; border-radius:6px; background:transparent;
+  color:var(--text-primary); font:inherit; font-size:.95rem; cursor:pointer; }
+.detail-more-dialog button:hover { background:var(--bg-hover); }
+.detail-more-dialog button:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.detail-more-dialog .close-action { margin-top:12px; border-top:1px solid var(--border); color:var(--accent); }
+.detail-more-dialog p { margin:12px 0 0; font-size:.85rem; line-height:1.6; overflow-wrap:anywhere; }
 
 /* ═══ R3 信息架构优化（Kimi 协作）═══ */
 /* 主操作按钮：双列网格，拇指友好 */
@@ -159,7 +172,7 @@
     <button class="back" onclick="history.back()">←</button>
     <span id="nav-title" style="font-weight:600;font-size:.95rem;"></span>
     <div class="sp"></div>
-    <button class="more" title="更多操作" onclick="showMore()">⋮</button>
+    <button class="more" title="更多操作" aria-label="更多操作" aria-haspopup="dialog" onclick="showMore()">⋮</button>
   </div>
 </div>
 <div class="container detail-wrap" id="detail-wrap">
@@ -245,6 +258,15 @@
   </div>
 </div>
 <div id="cover-overlay" class="cover-overlay" style="display:none;" onclick="this.style.display='none'"></div>
+<dialog id="detail-more" class="detail-more-dialog" aria-labelledby="detail-more-title">
+  <h2 id="detail-more-title">更多操作</h2>
+  <button type="button" onclick="copyDetailValue('title')">复制标题</button>
+  <button type="button" onclick="copyDetailValue('link')">复制链接</button>
+  <button type="button" onclick="exportCatalogReport()">导出章节核对信息</button>
+  <p>核对信息含作品名和章节 ID，不含图片。分享前请确认内容。</p>
+  <p id="detail-more-status" role="status" aria-live="polite"></p>
+  <button type="button" class="close-action" onclick="document.getElementById('detail-more').close()">关闭</button>
+</dialog>
 
 <script src="/static/js/common.js"></script>
 <script src="/static/js/manga_local_manager.js"></script>
@@ -693,10 +715,22 @@ async function loadFavState() {
 }
 function showMore() {
   if (!detail) return;
-  const pick = prompt('更多操作：\n1. 复制标题\n2. 复制链接\n3. 导出章节核对信息（含作品名和章节 ID，无图片）');
-  if (pick === '1') { navigator.clipboard.writeText(detail.title); alert('已复制'); }
-  if (pick === '2') { navigator.clipboard.writeText(location.href); alert('已复制'); }
-  if (pick === '3') {
+  $('#detail-more-status').textContent = '';
+  $('#detail-more').showModal();
+}
+async function copyDetailValue(kind) {
+  if (!detail) return;
+  const status = $('#detail-more-status');
+  try {
+    await navigator.clipboard.writeText(kind === 'title' ? detail.title : location.href);
+    status.textContent = kind === 'title' ? '标题已复制' : '链接已复制';
+  } catch (error) {
+    status.textContent = '复制失败，请检查浏览器剪贴板权限后重试。';
+  }
+}
+function exportCatalogReport() {
+  if (!detail) return;
+  try {
     const report = mangaChapterTools.report(detail, SOURCE, CID, LOCAL_CATALOG);
     const url = URL.createObjectURL(new Blob([JSON.stringify(report,null,2)], {type:'application/json'}));
     const link = document.createElement('a');
@@ -706,6 +740,9 @@ function showMore() {
     link.click();
     link.remove();
     setTimeout(()=>URL.revokeObjectURL(url),1000);
+    $('#detail-more-status').textContent = '已发起核对信息下载，请查看浏览器下载列表。';
+  } catch (error) {
+    $('#detail-more-status').textContent = '导出未完成，请重试。';
   }
 }
 function searchTag(t) { location.href = '/manga?q=' + encodeURIComponent(t); }
