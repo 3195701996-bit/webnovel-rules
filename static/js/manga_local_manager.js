@@ -2,11 +2,9 @@
   'use strict';
   window.mountMangaLocalManager = function (host, detail, source, comicId, reload) {
     host.replaceChildren();
-    const ids = [...new Set([...(detail.downloaded || []), ...(detail.partial_downloaded || [])]
-      .map(String).filter(Boolean))];
-    if (!ids.length) return;
-    const names = new Map([...(detail.volumes || []), ...(detail.chapters || [])]
-      .map(row => [String(row.id), row.name || row.label || row.id]));
+    let ids = [];
+    let names = new Map();
+    const base = '/api/manga/' + encodeURIComponent(source) + '/' + encodeURIComponent(comicId);
     const selected = new Set();
     const toggle = document.createElement('button');
     toggle.className = 'op-btn';
@@ -25,15 +23,53 @@
     list.className = 'chap-list';
     const checks = [];
     let busy = false;
-    function render() {
-      all.textContent = selected.size === ids.length ? '取消全选' : '全选本地内容';
-      remove.textContent = '删除选中（' + selected.size + '）';
-      remove.disabled = busy || !selected.size;
-      all.disabled = busy;
-      toggle.disabled = busy;
-      checks.forEach(([input, id]) => { input.checked = selected.has(id); input.disabled = busy; });
+    let loading = false;
+    let failed = false;
+    const retry = document.createElement('button');
+    retry.className = 'op-btn';
+    retry.textContent = '重新读取本地缓存';
+    async function refresh() {
+      loading = true;
+      failed = false;
+      status.textContent = '正在读取本地缓存…';
+      render();
+      try {
+        const data = await requestJSON(base + '/local-media');
+        const seen = new Set();
+        if (data.ok !== true || data.local_only !== true || data.source !== source ||
+            data.comic_id !== comicId || !Array.isArray(data.media) || data.count !== data.media.length ||
+            !data.media.every(row => row && typeof row.id === 'string' && row.id.trim() &&
+              typeof row.name === 'string' && typeof row.downloaded === 'boolean' &&
+              typeof row.partial === 'boolean' && row.downloaded !== row.partial &&
+              !seen.has(row.id) && seen.add(row.id))) throw new Error('本地缓存清单格式不正确');
+        ids = data.media.map(row => row.id);
+        const counts = new Map();
+        data.media.forEach(row => counts.set(row.name, (counts.get(row.name) || 0) + 1));
+        names = new Map(data.media.map(row => [row.id, (row.name || row.id) +
+          (row.partial ? ' · 部分缓存' : ' · 完整缓存') +
+          (counts.get(row.name) > 1 ? ' · ID: ' + row.id : '')]));
+        for (const id of selected) if (!seen.has(id)) selected.delete(id);
+        buildList();
+        status.textContent = ids.length ? '共 ' + ids.length + ' 项本地缓存' : '没有可清理的本地缓存';
+      } catch (error) {
+        failed = true;
+        status.textContent = '读取失败：' + error.message + '。未使用在线目录代替。';
+      } finally { loading = false; render(); }
     }
-    ids.forEach(rawId => {
+    function render() {
+      all.textContent = ids.length && selected.size === ids.length ? '取消全选' : '全选本地内容';
+      remove.textContent = '删除选中（' + selected.size + '）';
+      remove.disabled = busy || loading || failed || !selected.size;
+      all.disabled = busy || loading || failed || !ids.length;
+      toggle.disabled = busy || loading;
+      retry.hidden = !failed;
+      retry.disabled = busy || loading;
+      checks.forEach(([input, id]) => { input.checked = selected.has(id); input.disabled = busy || loading || failed; });
+    }
+    function buildList() {
+      checks.length = 0;
+      list.replaceChildren();
+      ids.forEach(rawId => {
       const id = String(rawId);
       const label = document.createElement('label');
       label.className = 'chap-item';
@@ -46,12 +82,17 @@
       label.append(input, document.createTextNode(' ' + (names.get(id) || id)));
       list.append(label);
       checks.push([input, id]);
-    });
+      });
+    }
     toggle.onclick = () => {
+      if (busy || loading) return;
       panel.hidden = !panel.hidden;
       toggle.textContent = panel.hidden ? '管理本地内容' : '完成管理';
+      if (!panel.hidden) return refresh();
     };
+    retry.onclick = refresh;
     all.onclick = () => {
+      if (all.disabled) return;
       const wasAll = selected.size === ids.length;
       selected.clear();
       if (!wasAll) ids.forEach(id => selected.add(String(id)));
@@ -59,15 +100,14 @@
     };
     remove.onclick = async () => {
       const chapterIds = [...selected];
-      if (busy || !chapterIds.length || !confirm('删除选中的 ' + chapterIds.length +
+      if (busy || loading || failed || !chapterIds.length || !confirm('删除选中的 ' + chapterIds.length +
           ' 个章节的本地图片？收藏和阅读历史保留。此操作不可撤销。')) return;
       busy = true;
       render();
       try {
-        const response = await requestJSON('/api/manga/' + encodeURIComponent(source) + '/' +
-          encodeURIComponent(comicId) + '/chapters/delete', {
+        const response = await requestJSON(base + '/chapters/delete', {
           method: 'POST', headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({chapter_ids: chapterIds}), timeout: 60000,
+          body: JSON.stringify({chapter_ids: chapterIds, identity_mode: 'disk'}), timeout: 60000,
         });
         if (!response.ok) throw new Error(response.error || '删除未完成');
         if (response.missing > 0) {
@@ -82,7 +122,7 @@
       } finally { busy = false; render(); }
     };
     controls.append(all, remove);
-    panel.append(controls, status, list);
+    panel.append(controls, status, retry, list);
     host.append(toggle, panel);
     render();
   };
