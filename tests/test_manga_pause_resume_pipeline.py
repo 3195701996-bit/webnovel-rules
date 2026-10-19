@@ -95,6 +95,74 @@ def test_paused_download_survives_reload_and_fetches_only_missing_or_corrupt_pag
 
 
 @pytest.mark.parametrize("restart", [False, True])
+def test_failed_retry_preserves_selection_and_reuses_successful_pages(tmp_path, monkeypatch, restart):
+    monkeypatch.setenv("WR_MANGA_DL_CONCURRENCY", "1")
+    monkeypatch.setattr(module, "images_resolver", None)
+    monkeypatch.setattr(module, "library_change_hook", None)
+    image = io.BytesIO()
+    Image.new("RGB", (1200, 1800), (40, 80, 120)).save(image, format="JPEG")
+    content = image.getvalue()
+    requests = []
+    failing = True
+
+    class Adapter:
+        key = "retry-selection"
+        name = "失败续传隔离源"
+        concurrent = 1
+
+        def comic_info(self, cid):
+            return ComicDetails(id=cid, title="只补选中章节", cover="", author="", chapters=[
+                Chapter(id="selected", name="第1话"), Chapter(id="unselected", name="第2话")])
+
+        def images(self, cid, chapter):
+            assert chapter == "selected", "重试不得扩展用户选章"
+            return [f"https://fixture.example/{index}.jpg" for index in range(3)]
+
+    state_file = tmp_path / "tasks.json"
+    def manager():
+        result = module.DownloadManager(state_file=str(state_file))
+        result.configure(downloads_root=str(tmp_path / "downloads"), state_dir=str(tmp_path / "state"),
+                         cache_root=str(tmp_path / "cache"), library_file=str(tmp_path / "library.json"))
+        result._adapter_pool = {Adapter.key: Adapter()}
+        return result
+
+    def transport(self, url, path, timeout, chapter_id, orig_url):
+        index = int(url.rsplit("/", 1)[-1].split(".")[0])
+        requests.append(index)
+        if failing and index == 1:
+            raise OSError("隔离模拟网络失败")
+        atomic_write_image(path, content)
+        return content, path
+
+    monkeypatch.setattr(ImageDownloader, "_download", transport)
+    original = manager()
+    key = Adapter.key + ":comic"
+    original.start(Adapter.key, "comic", "只补选中章节", chapters=["selected"])
+    _idle(original, key, "error")
+    directory = tmp_path / "downloads" / Adapter.key / "comic"
+    first = directory / "selected" / "0000.jpg"
+    before, mtime = first.read_bytes(), first.stat().st_mtime_ns
+    assert original.status(key)["failed_chapters"] == 1
+    assert not (directory / "unselected").exists()
+    fetched_before = len(requests)
+    failing = False
+    recovered = manager() if restart else original
+    if restart:
+        recovered.load()
+    assert recovered.status(key)["chapters"] == ["selected"]
+    assert recovered.resume_result(key) == "resumed"
+    _idle(recovered, key, "done")
+    assert requests[fetched_before:] == [1], "已成功的第0/2页不得重新请求"
+    assert first.read_bytes() == before and first.stat().st_mtime_ns == mtime
+    assert recovered.status(key)["failed_chapters"] == 0
+    assert recovered.status(key)["failed_ids"] == []
+    assert not (directory / "unselected").exists()
+    for index in range(3):
+        with Image.open(directory / "selected" / f"{index:04d}.jpg") as page:
+            page.verify()
+
+
+@pytest.mark.parametrize("restart", [False, True])
 def test_running_download_accepts_new_identity_once_and_preserves_it_after_restart(
         tmp_path, monkeypatch, restart):
     monkeypatch.setenv("WR_MANGA_DL_CONCURRENCY", "1")

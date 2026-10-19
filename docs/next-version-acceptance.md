@@ -507,6 +507,9 @@
 
 ### Web 阅读版 TXT 导出验收（未发布）
 
+- 下载恢复流水线补充失败重试真实回归（直接恢复/持久化重载两种）：三页中仅第1页传输失败，第0/2页真实写盘；等待任务error后重试只请求第1页，旧第0页字节及mtime不变，三张最终图片Pillow验证通过。源目录包含另一未选章节，取图断言只允许所选身份，恢复前后选择保持单章且未选目录不存在；最终failed_chapters与failed_ids清零。仅替换图片传输，队列、工作线程、缓存校验、状态文件及恢复均走实际实现。
+- 流水线5 passed（4.42秒），与任务恢复/存储写入异常/卷选择联合64 passed（13.17秒）；错误级Ruff/diff通过。未修改生产下载算法（已有实现满足该场景），未将离线注入传输当作真实源或iQOO网络证明。手机当前adb列表为空，未安装；远端rc13/d1aefed7两条CI 39281735060/39281729503仍queued，3.0发布门不放宽。
+
 - 下载操作检查发现App/Web把漫画resume接口HTTP200当恢复成功，忽略resumed:false/reason:no_task；两端改为仅ok===true且resumed===true才提示已请求继续，任务缺失明示未启动并引导详情重新选章，其他异常响应要求刷新。App HTTP失败保留有界响应原因。新增纯JVM反馈分支与JS实际回调回归，包含预编码百分号ID不得二次编码。
 - 按frontend-testing-debugging技能，Browser plugin不可用，沿用现有Python Playwright/系统Chrome；隔离真实LocalServer，任务列表仅用合成过期任务响应，resume请求不拦截，实际服务返回no_task。1280×900/390×844从下载页点击启动，明确未启动提示出现、无成功提示、按钮恢复可用、请求cid百分号一次编码、无console/pageerror与横溢。页面身份/非空/无错误覆盖通过，截图/private/tmp/webnovel-task-resume-{1280,390}.png已查看，浏览器和服务关闭；未改用户任务。
 - 41组JS及Android Release JVM通过（12秒），diff通过。未重新打包/安装，本修复不在冻结rc13-d1aefed7.apk中；未实际验证原生提示视觉或断网续传图片闭环，不当作下载验收全完成。
