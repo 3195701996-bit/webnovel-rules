@@ -112,6 +112,21 @@ html:has(body.manga-page), body.manga-page { overflow-x: clip; }
 .topbar .spacer { flex: 1; }
 
 .container { max-width: 1120px; margin: 0 auto; padding: 28px 26px 60px; }
+.novel-explore h1 { margin: 20px 0 12px; overflow-wrap: anywhere; }
+.novel-explore [hidden] { display: none; }
+.explore-note { color: var(--text-dim); margin: 10px 0 20px; }
+.novel-explore #explore-status[data-kind="error"] { color: var(--red); }
+.novel-explore #explore-menu > .btn { margin: 0 12px 12px 0; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+.explore-category-group { margin: 24px 0; }
+.explore-category-group h2 { font-size: 1.1rem; margin-bottom: 14px; }
+.explore-category-buttons { display: flex; flex-wrap: wrap; gap: 12px; }
+.explore-category-buttons .btn { min-height: 44px; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+.explore-book-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 290px), 1fr)); gap: 16px; margin: 20px 0; }
+.explore-book { min-width: 0; overflow-wrap: anywhere; }
+.explore-book h2 { font-size: 1.1rem; }
+.explore-book .actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.explore-pagination { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 24px; }
+.explore-pagination[hidden] { display: none; }
 .page-title { font-size: var(--fs-2xl); margin-bottom: 6px; }
 .page-sub { color: var(--text-dim); font-size: .92rem; margin-bottom: 26px; }
 
