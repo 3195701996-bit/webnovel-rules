@@ -85,17 +85,13 @@ internal fun DownloadsScreen(
         }
     }
 
-    val running = tasks.filter { it.running || it.status == "queued" }
+    val sections = downloadTaskSections(tasks)
+    val running = sections.running
     // Error tasks are resumable (notably local-storage failures after the user
     // frees space); keep them in the actionable section so TaskCard receives the
     // resume callback instead of rendering a dead-end "delete record" card.
-    val paused = tasks.filter {
-        it.status == "paused" || it.status == "stopped" || it.status == "error"
-    }
-    val finished = tasks.filter {
-        !it.running && it.status != "queued" &&
-            it.status != "paused" && it.status != "stopped" && it.status != "error"
-    }
+    val paused = sections.paused
+    val finished = sections.finished
 
     LazyColumn(
         Modifier.fillMaxSize().testTag("downloads_list"),
@@ -292,7 +288,9 @@ internal fun DownloadsScreen(
         }
         if (finished.isNotEmpty()) {
             item { WnSectionHeader("已结束", count = finished.size) }
-            items(finished.take(20), key = { it.id }) { t ->
+            // LazyColumn only composes visible cards; do not silently hide older
+            // records (novel tasks can precede the just-completed manga task).
+            items(finished, key = { it.id }) { t ->
                 TaskCard(t, busy = false, onPause = null, onResume = null, onStop = null,
                     onDelete = {
                         scope.launch { doDelete(gateway, ep, t).let { actionMsg = it }; refresh() }
