@@ -7,7 +7,27 @@ internal data class DownloadTaskSections(
 )
 
 internal fun EngineData.TaskItem.needsDownloadRefresh(): Boolean =
-    running || status == "queued" || status == "cancel"
+    running || status == "running" || status == "queued" || status == "cancel"
+
+/** Display-only search: keep original task identity, order and queue state. */
+internal fun filterDownloadTasks(tasks: List<EngineData.TaskItem>, query: String, mode: String): List<EngineData.TaskItem> {
+    fun normalize(value: String) = java.text.Normalizer.normalize(value, java.text.Normalizer.Form.NFKC)
+        .lowercase(java.util.Locale.ROOT)
+    val words = normalize(query).trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
+    return tasks.filter { task ->
+        val active = task.needsDownloadRefresh()
+        val recoverable = !active && task.status in setOf("paused", "stopped", "error")
+        val matchesMode = when (mode) {
+            "active" -> active
+            "recoverable" -> recoverable
+            "failed" -> !active && task.status == "error"
+            "finished" -> !active && !recoverable
+            else -> true
+        }
+        val text = normalize(task.title + " " + task.mangaKey.substringBefore(':'))
+        matchesMode && words.all { it in text }
+    }
+}
 
 internal fun mangaResumeMessage(title: String, accepted: Boolean, resumed: Boolean, reason: String): String =
     when {

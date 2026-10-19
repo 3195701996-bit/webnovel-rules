@@ -266,6 +266,11 @@ html:has(body.manga-page), body.manga-page { overflow-x: clip; }
 }
 
 /* 任务管理表 */
+.task-filters { display:flex; flex-wrap:wrap; align-items:flex-end; gap:8px; margin-bottom:8px; }
+.task-filters .task-query-label { flex:1; min-width:180px; }
+.task-filters input, .task-filters select { display:block; box-sizing:border-box; width:100%; min-height:44px; margin-top:4px; padding:8px 10px; border:1px solid var(--border); border-radius:8px; background:var(--bg-elevated); color:var(--text); font:inherit; }
+.task-filters input:focus-visible, .task-filters select:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.task-filters > .btn { min-height:44px; }
 .task-table { width: 100%; border-collapse: collapse; font-size: .88rem; }
 .task-table th, .task-table td {
   padding: 10px 12px; border-bottom: 1px solid var(--border);

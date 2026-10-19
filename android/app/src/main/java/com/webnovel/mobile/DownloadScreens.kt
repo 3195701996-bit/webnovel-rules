@@ -1,4 +1,4 @@
-@file:OptIn(ExperimentalMaterial3Api::class)
+@file:OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 
 package com.webnovel.mobile
 
@@ -25,6 +25,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.FilterChip
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -62,6 +66,8 @@ internal fun DownloadsScreen(
     var actionMsg by remember { mutableStateOf<String?>(null) }
     var libUpdate by remember { mutableStateOf<MangaLibraryUpdate?>(null) }
     var checking by remember { mutableStateOf(false) }
+    var query by rememberSaveable { mutableStateOf("") }
+    var taskFilter by rememberSaveable { mutableStateOf("all") }
     val scope = rememberCoroutineScope()
 
     suspend fun refresh() {
@@ -85,7 +91,8 @@ internal fun DownloadsScreen(
         }
     }
 
-    val sections = downloadTaskSections(tasks)
+    val visibleTasks = remember(tasks, query, taskFilter) { filterDownloadTasks(tasks, query, taskFilter) }
+    val sections = downloadTaskSections(visibleTasks)
     val running = sections.running
     // Error tasks are resumable (notably local-storage failures after the user
     // frees space); keep them in the actionable section so TaskCard receives the
@@ -104,11 +111,26 @@ internal fun DownloadsScreen(
             Text("管理进行中的任务、暂停项和已完成记录。后台任务不会因离开页面而停止。",
                 style = MaterialTheme.typography.bodySmall, color = WnColors.inkDim,
                 modifier = Modifier.padding(top = WnSpace.xs, bottom = WnSpace.md))
+            OutlinedTextField(value = query, onValueChange = { query = it }, singleLine = true,
+                label = { Text("查找任务（作品名或漫画源）") },
+                modifier = Modifier.fillMaxWidth().testTag("download_task_query"),
+                trailingIcon = { if (query.isNotEmpty()) TextButton(onClick = { query = "" }) { Text("清空") } })
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(WnSpace.sm)) {
+                for ((key, label) in listOf("all" to "全部", "active" to "进行中", "recoverable" to "待恢复",
+                    "failed" to "失败", "finished" to "已结束")) {
+                    FilterChip(selected = taskFilter == key, onClick = { taskFilter = key },
+                        label = { Text(label) }, modifier = Modifier.testTag("download_filter_$key"))
+                }
+            }
+            Text("显示 ${visibleTasks.size} / ${tasks.size} 项；筛选不改变队列，批量操作仍作用于全部漫画。",
+                style = MaterialTheme.typography.labelSmall, color = WnColors.inkDim,
+                modifier = Modifier.testTag("download_filter_summary"))
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween) {
                 Text("队列操作", style = MaterialTheme.typography.titleMedium,
                     color = WnColors.ink)
-                if (running.isNotEmpty()) WnStatusPill("${running.size} 个进行中", WnColors.ok)
+                val activeCount = tasks.count { it.needsDownloadRefresh() }
+                if (activeCount > 0) WnStatusPill("$activeCount 个进行中", WnColors.ok)
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(WnSpace.sm)) {
                 Button(
@@ -254,6 +276,13 @@ internal fun DownloadsScreen(
                         title = "当前没有下载任务",
                         body = "小说在「书架 → 详情」里开始下载，漫画在「详情 → 下载本话」开始下载。",
                     )
+                }
+            }
+            visibleTasks.isEmpty() -> item {
+                Column(Modifier.fillMaxWidth().padding(WnSpace.lg)) {
+                    Text("没有匹配的任务", style = MaterialTheme.typography.titleMedium)
+                    Text("可更换关键词或状态，已有下载不会被删除。", color = WnColors.inkDim)
+                    TextButton(onClick = { query = ""; taskFilter = "all" }) { Text("清除筛选") }
                 }
             }
         }

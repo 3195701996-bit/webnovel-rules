@@ -6,6 +6,8 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTextReplacement
+import androidx.compose.ui.test.performScrollTo
 import org.junit.After
 import org.junit.Before
 import org.junit.Rule
@@ -20,6 +22,7 @@ class LibraryUpdateFeedbackUiTest {
     @get:Rule val rule = createAndroidComposeRule<MainActivity>()
     private lateinit var server: ServerSocket
     private val polls = AtomicInteger()
+    private val mutations = AtomicInteger()
 
     @Before fun guard() {
         val qemu = ProcessBuilder("getprop", "ro.kernel.qemu").start().inputStream
@@ -29,7 +32,8 @@ class LibraryUpdateFeedbackUiTest {
     @After fun cleanup() { if (::server.isInitialized) server.close() }
     private fun texts(value: String) = rule.onAllNodesWithText(value, substring = true).fetchSemanticsNodes().size
 
-    private fun open(startCode: Int, statusCode: Int, status: String) {
+    private fun open(startCode: Int, statusCode: Int, status: String, startCheck: Boolean = true,
+                     tasks: String = "{\"tasks\":[]}") {
         server = ServerSocket(0, 10, InetAddress.getByName("127.0.0.1"))
         Thread {
             while (!server.isClosed) {
@@ -37,6 +41,7 @@ class LibraryUpdateFeedbackUiTest {
                     server.accept().use { socket ->
                         val input = socket.getInputStream().bufferedReader()
                         val request = input.readLine().orEmpty()
+                        if (request.startsWith("POST ") || request.startsWith("DELETE ")) mutations.incrementAndGet()
                         while (!input.readLine().isNullOrEmpty()) { }
                         val statusRequest = request.contains("/check-updates/status")
                         val startRequest = request.contains("POST /api/manga/library/check-updates ")
@@ -44,7 +49,7 @@ class LibraryUpdateFeedbackUiTest {
                         val body = when {
                             statusRequest -> { polls.incrementAndGet(); status }
                             startRequest -> "{\"ok\":${startCode == 200}}"
-                            else -> "{\"tasks\":[]}"
+                            else -> tasks
                         }.toByteArray()
                         socket.getOutputStream().apply {
                             write("HTTP/1.1 $code Result\r\nContent-Type: application/json\r\nContent-Length: ${body.size}\r\nConnection: close\r\n\r\n".toByteArray())
@@ -58,7 +63,25 @@ class LibraryUpdateFeedbackUiTest {
         rule.activityRule.scenario.onActivity { activity -> activity.setContent {
             MaterialTheme { DownloadsScreen(gateway, EngineEndpoint("fixture", server.localPort, ""), {}) }
         } }
-        rule.onNodeWithTag("check_library_update").performClick()
+        if (startCheck) rule.onNodeWithTag("check_library_update").performScrollTo().performClick()
+    }
+
+    @Test fun searchAndStateFiltersDoNotMutateFiftyTasks() {
+        val items = (1..50).joinToString(",") { index ->
+            """{"id":"manga_fixture-$index","type":"manga","title":"查找作品$index","status":"${if (index == 42) "error" else "done"}","running":false,"progress":{"done":1,"total":1},"manga_key":"copymanga:fixture-$index"}"""
+        }
+        open(200, 200, "{}", startCheck = false, tasks = "{\"tasks\":[$items]}")
+        rule.waitUntil(10_000) { texts("显示 50 / 50 项") > 0 }
+        rule.onNodeWithTag("download_filter_failed").performClick()
+        rule.waitUntil(5_000) { texts("显示 1 / 50 项") > 0 }
+        rule.onNodeWithTag("download_filter_all").performClick()
+        rule.onNodeWithTag("download_task_query").performTextReplacement("作品４２")
+        rule.waitUntil(5_000) { texts("显示 1 / 50 项") > 0 }
+        rule.onNodeWithTag("download_task_query").performTextReplacement("无匹配作品")
+        rule.waitUntil(5_000) { texts("没有匹配的任务") > 0 }
+        rule.onAllNodesWithText("清除筛选")[0].performScrollTo().performClick()
+        rule.waitUntil(5_000) { texts("显示 50 / 50 项") > 0 }
+        assertEquals(0, mutations.get())
     }
 
     @Test fun failedStartDoesNotPollOrInventCompletion() {

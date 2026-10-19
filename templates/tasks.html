@@ -24,6 +24,19 @@
 <div class="container">
   <div class="section-title">下载进度</div>
   <p class="page-sub">小说与漫画的下载、暂停、恢复和失败重试，都可以在这里继续处理。</p>
+  <div class="task-filters">
+    <label class="task-query-label">查找任务（作品名或漫画源）
+      <input id="task-query" type="search" autocomplete="off">
+    </label>
+    <label>任务状态
+      <select id="task-state-filter">
+        <option value="all">全部</option><option value="active">进行中</option>
+        <option value="recoverable">待恢复</option><option value="failed">失败</option><option value="finished">已结束</option>
+      </select>
+    </label>
+    <button class="btn" id="task-filter-reset" type="button">清除筛选</button>
+  </div>
+  <p id="task-filter-summary" role="status" style="color:var(--text-dim);">筛选不改变队列，批量操作仍作用于全部漫画。</p>
   <div class="task-toolbar" role="group" aria-label="漫画批量下载操作" style="display:flex;gap:8px;margin-bottom:12px;">
     <button class="btn" id="pause-all-btn" onclick="pauseAll()">⏸ 全部暂停（漫画）</button>
     <button class="btn primary" id="resume-all-btn" onclick="resumeAll()">▶ 全部开始（漫画）</button>
@@ -37,6 +50,7 @@
 </div>
 
 <script src="/static/js/common.js"></script>
+<script src="/static/js/download_task_filters.js"></script>
 <script>
 function fmtEta(sec) {
   if (!sec || sec <= 0) return '';
@@ -324,6 +338,22 @@ function bindTaskButtons(box) {
 
 // C02: 加载态用 aria-busy 表达（不再整表 innerHTML 替换）；已有表格时单次
 // 失败仅 toast 提示、保留现有行与焦点；首屏/无表格时才显示错误占位。
+let cachedTaskRecords = null;
+function applyTaskFilters() {
+  if (cachedTaskRecords === null) return;
+  const box = $('#tasks');
+  const tasks = filterDownloadTasks(cachedTaskRecords, $('#task-query').value, $('#task-state-filter').value);
+  $('#task-filter-summary').textContent = `显示 ${tasks.length} / ${cachedTaskRecords.length} 项；筛选不改变队列，批量操作仍作用于全部漫画。`;
+  if (cachedTaskRecords.length && !tasks.length) {
+    box.dataset.view = 'filtered-empty';
+    box.innerHTML = '<div class="empty"><strong>没有匹配的任务</strong><p>可更换关键词或状态，已有下载不会被删除。</p></div>';
+  } else if (tasks.length) renderTasks(box, tasks);
+}
+$('#task-query').addEventListener('input', applyTaskFilters);
+$('#task-state-filter').addEventListener('change', applyTaskFilters);
+$('#task-filter-reset').onclick = () => {
+  $('#task-query').value = ''; $('#task-state-filter').value = 'all'; applyTaskFilters();
+};
 async function loadTasks() {
   const box = $('#tasks');
   let tasks;
@@ -332,6 +362,7 @@ async function loadTasks() {
     // C01: 统一走 requestJSON（超时/非 2xx/非 JSON 都抛错进 catch），
     // 不再出现 500 返回 HTML 让 json() 抛无意义错误的情况
     ({tasks} = await requestJSON('/api/tasks'));
+    if (!Array.isArray(tasks)) throw new Error('任务列表格式异常');
   } catch (e) {
     box.removeAttribute('aria-busy');
     if (box.querySelector('.task-table')) {
@@ -345,6 +376,8 @@ async function loadTasks() {
     return null;   // B03: 失败供轮询器指数退避
   }
   box.removeAttribute('aria-busy');
+  cachedTaskRecords = tasks;
+  applyTaskFilters();
   if (!tasks.length) {
     if (box.dataset.view !== 'empty') {   // 空态幂等：已为空态不重复写 DOM
       box.dataset.view = 'empty';
@@ -352,7 +385,6 @@ async function loadTasks() {
     }
     return tasks;
   }
-  renderTasks(box, tasks);
   return tasks;   // B03: 返回任务列表供轮询器按状态调速
 }
 async function pauseAll() {

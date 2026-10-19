@@ -6,6 +6,23 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DownloadTaskSectionsTest {
+    @Test fun filtersAreDisplayOnlyAndPreserveIdentityOrderAndActivePrecedence() {
+        val old = task("old").copy(title = "旧作品")
+        val failed = task("failed", "error").copy(title = "第４２话", mangaKey = "copymanga:opaque-id")
+        val active = task("active", "error", true).copy(title = "活动作品")
+        val paused = task("paused", "paused")
+        val tasks = listOf(old, failed, active, paused)
+        assertEquals(listOf(failed), filterDownloadTasks(tasks, "42 COPYMANGA", "failed"))
+        assertEquals(listOf(failed, paused), filterDownloadTasks(tasks, "", "recoverable"))
+        assertEquals(listOf(active), filterDownloadTasks(tasks, "", "active"))
+        assertEquals(listOf(old), filterDownloadTasks(tasks, "", "finished"))
+        assertEquals(tasks, filterDownloadTasks(tasks, "", "all"))
+        assertTrue(filterDownloadTasks(tasks, "opaque-id", "all").isEmpty())
+        assertEquals("error", active.status)
+        assertTrue(active.running)
+        assertTrue(filterDownloadTasks(tasks, "42", "all").single() === failed)
+    }
+
     @Test fun resumeFeedbackRequiresConfirmedStateTransition() {
         assertEquals("已请求继续：测试", mangaResumeMessage("测试", true, true, ""))
         assertTrue(mangaResumeMessage("测试", true, false, "no_task").contains("任务记录已不存在，未启动下载"))
