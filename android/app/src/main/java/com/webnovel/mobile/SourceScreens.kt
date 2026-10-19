@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -1013,7 +1014,7 @@ fun BackupScreen(
             navigationIcon = { TextButton(onClick = onBack) { Text("← 返回") } },
         )
     }) { pad ->
-        Column(Modifier.padding(pad).fillMaxSize().padding(WnSpace.lg)) {
+        Column(Modifier.padding(pad).fillMaxSize().verticalScroll(rememberScrollState()).padding(WnSpace.lg)) {
             WnSectionHeader("备份内容")
             Text(
                 "书源配置与启用状态、小说阅读进度、漫画书库、阅读历史与收藏。\n" +
@@ -1055,7 +1056,7 @@ fun BackupScreen(
             WnSectionHeader("操作")
             Button(onClick = { createLauncher.launch(Backup.suggestName()) },
                 enabled = !busy, shape = WnPillShape,
-                modifier = Modifier.fillMaxWidth()) {
+                modifier = Modifier.fillMaxWidth().testTag("backup_create")) {
                 Text(if (busy) "处理中…" else "创建备份（选择保存位置）")
             }
             Spacer(Modifier.height(WnSpace.sm))
@@ -1065,7 +1066,7 @@ fun BackupScreen(
             }, enabled = !busy, shape = WnPillShape,
                 border = BorderStroke(1.dp, if (busy) WnColors.line else WnColors.danger),
                 colors = ButtonDefaults.outlinedButtonColors(contentColor = WnColors.danger),
-                modifier = Modifier.fillMaxWidth()) {
+                modifier = Modifier.fillMaxWidth().testTag("backup_restore")) {
                 Text("从备份恢复（选择文件）")
             }
             Spacer(Modifier.height(WnSpace.md))
