@@ -1,5 +1,6 @@
 """Management inventories must not weaken the complete-only local reader."""
 import json
+import threading
 
 import pytest
 
@@ -17,6 +18,8 @@ def media_env(tmp_path, monkeypatch):
         raise AssertionError("local media management must not call adapters")
     monkeypatch.setattr(api, "_manga_adapter", no_adapter)
     monkeypatch.setattr(api, "_manga_stats_request", lambda *args: None)
+    from engine.manga.download_manager import DownloadManager
+    monkeypatch.setattr(api, "_manga_dl", DownloadManager())
     return app.app.test_client(), downloads, cache
 
 
@@ -156,3 +159,79 @@ def test_missing_disk_id_does_not_fall_back_but_legacy_mode_remains_compatible(m
     assert response.get_json()["deleted"] == deleted
     assert response.get_json()["missing"] == (1 if mode == "disk" else 0)
     assert (base / "legacy-id").exists() == (mode == "disk")
+
+
+@pytest.mark.parametrize("status,alive", [("running", False), ("queued", False), ("cancel", False), ("paused", True)])
+def test_chapter_delete_rejects_active_or_stopping_alias_and_releases_reservations(media_env, status, alive):
+    client, downloads, _ = media_env
+    import server.manga_api as api
+    directory = downloads / "copymanga" / "busy-alias" / "one"
+    page(directory)
+    key = "copymanga_web:busy-alias"
+    api._manga_dl._tasks[key] = {"status": status}
+    if alive:
+        api._manga_dl._worker_alive.add(key)
+    response = client.post("/api/manga/copymanga/busy-alias/chapters/delete",
+                           json={"chapter_ids": ["one"], "identity_mode": "disk"})
+    assert response.status_code == 409
+    assert (directory / "0000.jpg").exists()
+    assert not api._manga_dl._media_deleting
+
+
+def test_inflight_chapter_delete_blocks_start_resume_and_second_delete_for_all_aliases(media_env, monkeypatch):
+    client, downloads, _ = media_env
+    import app
+    import shutil
+    import server.manga_api as api
+    directory = downloads / "copymanga" / "delete-reservation" / "one"
+    page(directory)
+    entered, release = threading.Event(), threading.Event()
+    result = {}
+    original = shutil.rmtree
+    def blocked_rmtree(path, *args, **kwargs):
+        if str(path) == str(directory):
+            entered.set()
+            assert release.wait(10), "test did not release filesystem gate"
+        return original(path, *args, **kwargs)
+    monkeypatch.setattr(shutil, "rmtree", blocked_rmtree)
+    def deleting_request():
+        try:
+            with app.app.test_client() as worker_client:
+                result["response"] = worker_client.post(
+                    "/api/manga/copymanga/delete-reservation/chapters/delete",
+                    json={"chapter_ids": ["one"], "identity_mode": "disk"})
+        except Exception as error:
+            result["error"] = error
+    worker = threading.Thread(target=deleting_request)
+    worker.start()
+    try:
+        assert entered.wait(5), result
+        for source in ("copymanga", "copymanga_web"):
+            key = source + ":delete-reservation"
+            assert api._manga_dl.is_media_deleting(key)
+            assert api._manga_dl.start(source, "delete-reservation", "fixture", chapters=["one"])[1] == "deleting"
+            assert api._manga_dl.resume_result(key) == "deleting"
+        duplicate = client.post("/api/manga/copymanga_web/delete-reservation/chapters/delete",
+                                json={"chapter_ids": ["one"], "identity_mode": "disk"})
+        assert duplicate.status_code == 409
+        assert api._manga_dl.is_media_deleting("copymanga:delete-reservation")
+    finally:
+        release.set()
+        worker.join(5)
+    assert not worker.is_alive()
+    assert "error" not in result, result
+    assert result["response"].status_code == 200
+    assert result["response"].get_json()["deleted"] == 1
+    assert not api._manga_dl._media_deleting
+
+
+def test_delete_exception_always_releases_alias_reservations(media_env, monkeypatch):
+    client, _, _ = media_env
+    import server.manga_api as api
+    def broken(*args):
+        raise OSError("fixture failure")
+    monkeypatch.setattr(api, "_delete_manga_chapters_reserved", broken)
+    response = client.post("/api/manga/copymanga/exception-release/chapters/delete",
+                           json={"chapter_ids": ["one"], "identity_mode": "disk"})
+    assert response.status_code == 500  # App's existing global error handler.
+    assert not api._manga_dl._media_deleting

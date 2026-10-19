@@ -2885,9 +2885,26 @@ def api_manga_chapters_delete(source, comic_id):
             ids.append(x)
     if not ids:
         return _err_json("缺少 chapter_ids")
-    _st = _manga_dl.status(_manga_dl_key(source, comic_id))
-    if _st.get("status") in ("running", "queued"):
-        return _err_json("该作品正在下载中，等任务结束（或先暂停）再删除章节", 409)
+    # Aliased sources share media roots, but retain separate legacy task keys.
+    # Reserve every affected key before touching files, not merely a status read.
+    keys = list(dict.fromkeys(_manga_dl_key(variant, comic_id)
+                              for variant in manga_source_aliases(source)))
+    reserved = []
+    try:
+        for key in keys:
+            if (_manga_dl.status(key).get("status") in ("running", "queued", "cancel")
+                    or not _manga_dl.begin_media_delete(key)):
+                return _err_json("该作品仍在下载或停止中，请先停止任务再删除章节", 409)
+            reserved.append(key)
+        return _delete_manga_chapters_reserved(source, comic_id, ids, identity_mode)
+    finally:
+        for key in reversed(reserved):
+            _manga_dl.end_media_delete(key)
+
+
+def _delete_manga_chapters_reserved(source, comic_id, ids, identity_mode):
+    """Caller holds all source-alias download reservations until return/exception."""
+    exact_disk = identity_mode == "disk"
     import shutil
     from engine.manga.downloader import _safe_chapter_dir
     variants = ([source, "copymanga", "copymanga_web"]
