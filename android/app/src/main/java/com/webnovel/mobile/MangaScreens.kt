@@ -292,6 +292,7 @@ fun MangaDetailScreen(
     var checking by remember { mutableStateOf(false) }
     var showChapterFinder by remember { mutableStateOf(false) }
     var update by remember { mutableStateOf<MangaUpdateCheck?>(null) }
+    var updateRevision by remember { mutableIntStateOf(0) }
     var favoritedState by remember(source, comicId) { mutableStateOf<Boolean?>(null) }
     var favoriteBusy by remember(source, comicId) { mutableStateOf(false) }
     var exporting by remember { mutableStateOf(false) }
@@ -450,6 +451,12 @@ fun MangaDetailScreen(
     var dlBusy by remember { mutableStateOf(false) }
     var pollTick by remember { mutableIntStateOf(0) }
 
+    fun downloadStarted() {
+        // A preview describes the pre-download snapshot and must not remain actionable.
+        updateRevision++; update = null
+        pollTick++
+    }
+
     suspend fun fetchDl(): EngineData.MangaDlStatus {
         val r = gateway.httpText(ep.port,
             "/api/manga/download/status?source=${Uri.encode(source)}" +
@@ -466,6 +473,8 @@ fun MangaDetailScreen(
             dl = st
             if (!st.active) {
                 if (wasActive || st.status == "done") {
+                    updateRevision++; update = null
+                    if (st.status == "done" && wasActive) actionMsg = "下载已完成，可重新检查更新。"
                     MangaReadCache.invalidate(source, comicId)
                     OfflineStore.invalidateMangaIndex(OfflineStore.runtimeDir(ctx), source, comicId)
                     reload()
@@ -713,12 +722,15 @@ fun MangaDetailScreen(
                                     scope.launch {
                                         checking = true
                                         update = null
-                                        val r = gateway.httpPost(ep.port,
-                                            mangaPath(d.source, d.comicId, "/check-update"))
-                                        update = if (r.ok) EngineData.mangaUpdateCheck(r.body)
-                                                 else MangaUpdateCheck(
-                                                     false, false, 0, "", "HTTP ${r.code}", emptyList())
-                                        checking = false
+                                        val revision = ++updateRevision
+                                        try {
+                                            val r = gateway.httpPost(ep.port,
+                                                mangaPath(d.source, d.comicId, "/check-update"))
+                                            if (revision == updateRevision) {
+                                                update = if (r.ok) EngineData.mangaUpdateCheck(r.body)
+                                                    else MangaUpdateCheck(false, false, 0, "", "HTTP ${r.code}", emptyList())
+                                            }
+                                        } finally { checking = false }
                                     }
                                 },
                                 enabled = !checking && !deleting,
@@ -763,7 +775,7 @@ fun MangaDetailScreen(
                                                 .toString()
                                             val r = gateway.httpPost(ep.port,
                                                 mangaPath(d.source, d.comicId, "/download"), body)
-                                            if (r.ok) pollTick++
+                                            if (r.ok) downloadStarted()
                                             actionMsg = downloadStartMessage(
                                                 r, "已创建下载任务：${missing.size} 个单元（见下载页）")
                                         }
@@ -791,7 +803,7 @@ fun MangaDetailScreen(
                                                     .toString()
                                                 val rr = gateway.httpPost(ep.port,
                                                     mangaPath(d.source, d.comicId, "/download"), body)
-                                                if (rr.ok) pollTick++
+                                                if (rr.ok) downloadStarted()
                                                 actionMsg = downloadStartMessage(
                                                     rr, "已创建下载任务：缺失章节 ${missing.size} 个（见下载页）")
                                             }
@@ -862,7 +874,7 @@ fun MangaDetailScreen(
                                                 .toString()
                                             val r = gateway.httpPost(ep.port,
                                                 mangaPath(d.source, d.comicId, "/download"), body)
-                                            if (r.ok) pollTick++
+                                            if (r.ok) downloadStarted()
                                             actionMsg = downloadStartMessage(
                                                 r, "已创建下载任务：选中的 ${ids.size} 个单元（见下载页）")
                                             if (r.ok) selected = emptySet()
