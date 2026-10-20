@@ -749,9 +749,19 @@ def index():
     return render_template("index.html")
 
 
+@app.route("/explore")
+def explore_page():
+    return render_template("explore.html")
+
+
 @app.route("/sources")
 def sources_page():
     return render_template("sources.html")
+
+
+@app.route("/diagnostics")
+def diagnostics_page():
+    return render_template("diagnostics.html")
 
 
 @app.route("/library")

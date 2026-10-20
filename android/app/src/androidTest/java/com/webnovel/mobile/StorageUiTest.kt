@@ -1,10 +1,12 @@
 package com.webnovel.mobile
 
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToNode
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.LargeTest
 import androidx.test.platform.app.InstrumentationRegistry
@@ -73,7 +75,8 @@ class StorageUiTest {
                     put(JSONObject().put("name", "第三章").put("url", URL3))
                 })
                 put("completed", JSONArray().put(URL1).put(URL3))
-                put("failed", JSONObject().put(URL2, "自检：模拟抓取失败"))
+                put("failed", JSONObject().put(URL2, "自检：模拟抓取失败")
+                    .put(URL1, "自检：正文已恢复但历史失败仍在"))
                 put("updated_at", "2026-01-01T00:00:00")
             }.toString(), Charsets.UTF_8)
         File(bookDir, cacheKeyOf(URL1) + ".cache")
@@ -110,7 +113,7 @@ class StorageUiTest {
         assertEquals("总章数", 3, b.optInt("total"))
         // 第 1、3 章有缓存文件（第 3 章是空文件，也算"占用"），第 2 章没有
         assertEquals("已缓存章节数", 2, b.optInt("cached"))
-        assertEquals("失败章节数", 1, b.optInt("failed"))
+        assertEquals("历史失败记录数（含正文已恢复的旧记录）", 2, b.optInt("failed"))
         assertTrue("应有字节数（含空文件与 state）", b.optLong("bytes") > 0)
         ev("占用明细：${b.optString("name")} 已缓存 ${b.optInt("cached")}/${b.optInt("total")}，" +
             "失败 ${b.optInt("failed")}，${b.optLong("bytes")} 字节")
@@ -167,6 +170,8 @@ class StorageUiTest {
         ev("界面总占用：$totalNode")
         assertTrue("总占用应显示可读大小（GB/MB/KB/字节）", totalNode.contains("MB") ||
             totalNode.contains("KB") || totalNode.contains("GB") || totalNode.contains("字节"))
+        rule.onAllNodesWithTag("storage_list")[0]
+            .performScrollToNode(hasText(BOOK_NAME, substring = true))
         rule.waitUntil(60_000) { texts(BOOK_NAME) > 0 }
         ev("逐书明细里出现《$BOOK_NAME》")
 

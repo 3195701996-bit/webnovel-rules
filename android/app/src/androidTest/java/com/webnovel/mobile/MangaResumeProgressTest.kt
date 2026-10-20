@@ -5,6 +5,8 @@ import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeDown
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.LargeTest
 import androidx.test.platform.app.InstrumentationRegistry
@@ -53,6 +55,15 @@ class MangaResumeProgressTest {
         rule.waitUntil(timeoutMs) { texts(t, substring) > 0 }
     }
 
+    private fun refreshShelfAfterFixtureWrite() {
+        waitText("书架", timeoutMs = 60_000)
+        rule.onAllNodesWithText("书架")[0].performClick()
+        rule.waitUntil(30_000) { texts("已缓存") > 0 }
+        rule.onAllNodesWithText("已缓存")[0].performClick()
+        rule.onAllNodesWithText("已缓存")[0].performTouchInput { swipeDown() }
+        rule.waitUntil(30_000) { texts(SelfTestComic.TITLE) > 0 }
+    }
+
     @Before
     fun setUp() {
         val uniq = "__selftest_resume_%d__".format(System.currentTimeMillis() % 1_000_000)
@@ -88,7 +99,7 @@ class MangaResumeProgressTest {
 
         // 1) 详情必须带身份字段（quick 路径曾缺 comic_id）
         val det = runBlocking {
-            gateway.httpText(ep.port, "/api/manga/${comic.sourceKey}/${comic.comicIdValue}")
+            gateway.httpText(ep.port, comic.detailUrl)
         }
         assertTrue("详情应 200：HTTP ${det.code}", det.ok)
         val d = JSONObject(det.body)
@@ -122,13 +133,16 @@ class MangaResumeProgressTest {
         ev("历史匹配 idx=$readIdx；续读落点=${detail.resumeIndex(readIdx)}（第 2 话）")
 
         // 4) 界面上点「继续阅读」→ 阅读器必须是第 2 话
-        waitText(SelfTestComic.TITLE)
+        refreshShelfAfterFixtureWrite()
         rule.onAllNodesWithText(SelfTestComic.TITLE)[0].performScrollTo().performClick()
         waitText("继续阅读", timeoutMs = 60_000, substring = true)
         ev("详情页按钮：继续阅读（承接进度）")
         rule.onAllNodesWithText("继续阅读", substring = true)[0].performClick()
-        // 阅读器顶栏是「<漫画标题> · <话名>」的**合并字符串**，所以按子串断言
-        // （此前用精确匹配永远等不到，实测踩到）
+        rule.waitUntil(30_000) {
+            nodes("manga_pages") > 0 || nodes("manga_pager") > 0
+        }
+        rule.tapReaderCenterAndShowControls()
+        // 阅读器顶栏是「<漫画标题> · <话名>」的合并字符串，且需中心点按唤出。
         rule.waitUntil(60_000) { texts(SelfTestComic.CH2_NAME, substring = true) > 0 }
         assertTrue("阅读器必须停在第 2 话（顶栏应含『${SelfTestComic.CH2_NAME}』）",
             texts(SelfTestComic.CH2_NAME, substring = true) > 0)
@@ -165,7 +179,7 @@ class MangaResumeProgressTest {
 
         // 2) 详情必须按身份解析出第 2 话（而不是退回第 1 话）
         val det = runBlocking {
-            gateway.httpText(ep.port, "/api/manga/${comic.sourceKey}/${comic.comicIdValue}")
+            gateway.httpText(ep.port, comic.detailUrl)
         }
         assertTrue("详情应 200：HTTP ${det.code}", det.ok)
         val d = EngineData.mangaDetail(det.body)!!
@@ -178,10 +192,14 @@ class MangaResumeProgressTest {
             "by=${res.by} exact=${res.exact} page=${res.page}")
 
         // 3) 界面上进阅读器 → 必须是第 2 话
-        waitText(SelfTestComic.TITLE)
+        refreshShelfAfterFixtureWrite()
         rule.onAllNodesWithText(SelfTestComic.TITLE)[0].performScrollTo().performClick()
         waitText("继续阅读", timeoutMs = 60_000, substring = true)
         rule.onAllNodesWithText("继续阅读", substring = true)[0].performClick()
+        rule.waitUntil(30_000) {
+            nodes("manga_pages") > 0 || nodes("manga_pager") > 0
+        }
+        rule.tapReaderCenterAndShowControls()
         rule.waitUntil(60_000) { texts(SelfTestComic.CH2_NAME, substring = true) > 0 }
         assertTrue("阅读器必须停在第 2 话（顶栏应含『${SelfTestComic.CH2_NAME}』）",
             texts(SelfTestComic.CH2_NAME, substring = true) > 0)

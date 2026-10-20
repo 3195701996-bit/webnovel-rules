@@ -1,0 +1,20 @@
+.novel-cleaning { box-sizing:border-box; inset:0; margin:auto; width:min(640px,calc(100% - 32px)); max-height:85dvh; padding:24px; border:1px solid var(--border); border-radius:12px; background:var(--bg); color:var(--text); }
+.novel-cleaning::backdrop { background:rgb(0 0 0 / .4); }
+.novel-cleaning h2 { margin:0 0 16px; font-size:1.2rem; }
+.novel-cleaning-content { max-height:50dvh; overflow:auto; overflow-wrap:anywhere; font-size:.9rem; }
+.novel-cleaning-content p { margin:0 0 8px; line-height:1.6; }
+.novel-cleaning-actions { display:flex; justify-content:flex-end; gap:12px; }
+.novel-cleaning-actions button { min-height:44px; padding:8px 16px; border:1px solid var(--border); border-radius:8px; color:var(--text); background:var(--bg); cursor:pointer; }
+.novel-cleaning-actions button:disabled { opacity:.5; cursor:default; }
+.novel-cleaning-actions { flex-wrap:wrap; }
+.novel-recovery-list { margin:12px 0; }
+.novel-recovery-row { display:flex; align-items:center; gap:12px; min-height:48px; border-bottom:1px solid var(--border); padding:8px 0; }
+.novel-recovery-row input { flex-shrink:0; width:20px; height:20px; }
+.novel-recovery[open] { display:flex; flex-direction:column; height:min(760px,90dvh); max-height:90dvh; overflow:hidden; }
+.novel-recovery > * { flex-shrink:0; }
+.novel-recovery .novel-recovery-list { flex:1 1 0; min-height:0; max-height:none; overscroll-behavior:contain; }
+.novel-recovery > [role="status"] { margin:8px 0; max-height:20dvh; overflow:auto; overflow-wrap:anywhere; }
+@media (max-width:600px) {
+  .novel-recovery { width:calc(100% - 16px); padding:16px; }
+  .novel-recovery h2 { margin-bottom:8px; }
+}

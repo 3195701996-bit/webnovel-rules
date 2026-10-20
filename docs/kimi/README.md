@@ -1,5 +1,7 @@
 # Kimi Coding 协作记录
 
+> 历史协作资料，不是当前操作指南。文中模型参数、工具路径和旧测试数量均为当时记录；不存在的旧工具不要照抄执行。当前开发流程见 [开发指南](../development.md)，本目录不存放 API 凭据。
+
 ## 通道
 - API: `https://api.kimi.com/coding/v1/chat/completions`
 - 模型: `kimi-for-coding`（官方 code-plan）

@@ -49,12 +49,13 @@
    *   opts.chunkSize    分段大小（默认 TOC_CHUNK）
    *   opts.doc          Document 注入（测试用；默认全局 document）
    *   opts.expandClass  展开按钮 class（默认 'toc-expand'，两页各自的 CSS 作用域限定）
+   *   opts.captureScroll 可选：前置章节前返回位置恢复函数；整页滚动详情使用，侧栏默认仍保留内部滚动
    *   opts.emptyHTML    目录为空时的占位 HTML
    *   opts.noMatchHTML  搜索无命中时的占位 HTML
    *
    * 返回视图对象：
    *   setData(chapters)   设置全量目录（重置分段/过滤挂载状态）
-   *   setFilter(kw)       设置搜索关键字（render 时生效）
+   *   setFilter(kw, filter?) 设置关键字；可选全目录筛选函数用于下载状态/精确序号，空关键字也生效
    *   getFilter()         当前关键字
    *   locate(idx)         确保 idx 所在段纳入挂载区间；返回区间是否变化
    *   render()            按当前状态重绘（未过滤态整段重绘；过滤态重置为首段+增量）
@@ -81,13 +82,14 @@
       chapters = list || [];
       from = 0; to = 0; hits = []; hitMounted = 0;
     }
-    function setFilter(k) { kw = (k || '').trim().toLowerCase(); }
+    var customFilter = null;
+    function setFilter(k, filter) { kw = (k || '').trim().toLowerCase(); customFilter = filter || null; }
     function getFilter() { return kw; }
 
     // 定位：确保 idx（1 起）所在分段纳入挂载区间；过滤态不干预（由用户自行滚动）。
     // 返回 true 表示区间发生变化（或首次定位），调用方应重绘。
     function locate(idx) {
-      if (kw || idx < 1 || idx > chapters.length) return false;
+      if (kw || customFilter || idx < 1 || idx > chapters.length) return false;
       if (!to || idx < from || idx > to) {
         var w = chunkWindow(idx, chapters.length, chunk);
         var changed = (w.from !== from || w.to !== to);
@@ -98,7 +100,7 @@
     }
 
     function mountedCount() {
-      if (kw) return hitMounted;
+      if (kw || customFilter) return hitMounted;
       return (from >= 1 && to >= from) ? to - from + 1 : 0;
     }
 
@@ -113,16 +115,19 @@
     function render() {
       container.innerHTML = '';
       if (!chapters.length) { container.innerHTML = emptyHTML; return; }
-      if (kw) { renderFiltered(); return; }
+      if (kw || customFilter) { renderFiltered(); return; }
       if (!to) { var w = chunkWindow(1, chapters.length, chunk); from = w.from; to = w.to; }
       var total = chapters.length;
       if (from > 1) {
         container.appendChild(makeExpand('▴ 展开上一段（第 1-' + (from - 1) + ' 章）', function () {
           // 向上前置内容会下移视口：渲染后补偿滚动位移，保持列表位置稳定
           var prevH = container.scrollHeight, prevTop = container.scrollTop;
+          var restoreScroll = opts.captureScroll ? opts.captureScroll() : null;
           from = Math.max(1, from - chunk);
           render();
-          if (typeof container.scrollHeight === 'number' && typeof container.scrollTop === 'number') {
+          if (typeof restoreScroll === 'function') {
+            restoreScroll();
+          } else if (typeof container.scrollHeight === 'number' && typeof container.scrollTop === 'number') {
             container.scrollTop = prevTop + (container.scrollHeight - prevH);
           }
         }));
@@ -141,7 +146,7 @@
 
     // 过滤态：整段重绘为首段；「显示更多」增量挂载下一段（不重绘已挂载条目）
     function renderFiltered() {
-      hits = filterChapters(chapters, kw);
+      hits = customFilter ? customFilter(chapters, kw) : filterChapters(chapters, kw);
       hitMounted = 0;
       if (!hits.length) { container.innerHTML = noMatchHTML; return; }
       var more = makeExpand('', null);

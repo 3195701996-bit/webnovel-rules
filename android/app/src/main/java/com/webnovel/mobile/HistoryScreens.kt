@@ -75,6 +75,12 @@ internal fun HistoryScreen(
             loading = false
             return
         }
+        if (!hr.ok) {
+            error = "漫画阅读历史读取失败：" + EngineData.httpErrorMessage(hr.body,
+                fallback = "HTTP ${hr.code}")
+            loading = false
+            return
+        }
         val novels = if (nb.ok) EngineData.novels(nb.body) else emptyList()
         val manga = if (hr.ok) EngineData.mangaHistory(hr.body) else emptyList()
         entries = (novels.filter { it.started }.map {

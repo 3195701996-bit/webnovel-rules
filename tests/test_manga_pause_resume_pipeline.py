@@ -1,0 +1,329 @@
+"""Real queue/cache/persistence pipeline, with only image transport replaced."""
+import io
+import json
+import time
+import threading
+
+import pytest
+
+from PIL import Image
+
+from engine.manga.base import Chapter, ComicDetails
+from engine.manga import download_manager as module
+from engine.manga.downloader import ImageDownloader, atomic_write_image
+
+
+def test_pause_after_mid_download_network_loss_stops_retry_and_resumes_missing_page(tmp_path, monkeypatch):
+    from engine.manga import downloader as transport_module
+    from types import SimpleNamespace
+
+    monkeypatch.setenv("WR_MANGA_DL_CONCURRENCY", "1")
+    monkeypatch.setattr(module, "images_resolver", None)
+    monkeypatch.setattr(module, "library_change_hook", None)
+    stream = io.BytesIO()
+    Image.new("RGB", (1200, 1800), (40, 80, 120)).save(stream, format="JPEG")
+    content = stream.getvalue()
+
+    class Adapter:
+        key = "offline-pause-pipeline"
+        name = "断网暂停隔离源"
+        concurrent = 1
+
+        def comic_info(self, cid):
+            return ComicDetails(id=cid, title="断网续传", cover="", author="",
+                                chapters=[Chapter(id="ch1", name="第1话")])
+
+        def images(self, cid, chapter):
+            return [f"https://fixture.example/{i}.jpg" for i in range(2)]
+
+        def image_headers(self, url):
+            return {}
+
+        def image_url(self, url):
+            return url
+
+    state_file = tmp_path / "tasks.json"
+    manager = module.DownloadManager(state_file=str(state_file))
+    manager.configure(downloads_root=str(tmp_path / "downloads"),
+                      state_dir=str(tmp_path / "state"), cache_root=str(tmp_path / "cache"),
+                      library_file=str(tmp_path / "library.json"))
+    manager._adapter_pool = {Adapter.key: Adapter()}
+    key = Adapter.key + ":comic"
+    network_lost = threading.Event()
+    release_request = threading.Event()
+    online = False
+    requests = []
+
+    def fetch(url, headers, timeout=20, **kwargs):
+        index = int(url.rsplit("/", 1)[-1].split(".")[0])
+        requests.append(index)
+        if index == 1 and not online:
+            network_lost.set()
+            assert release_request.wait(3)
+            raise ConnectionError("network lost during chapter")
+        return SimpleNamespace(status_code=200, headers={"Content-Type": "image/jpeg"}, content=content)
+
+    monkeypatch.setattr(transport_module, "fetch_image_checked", fetch)
+    try:
+        manager.start(Adapter.key, "comic", "断网续传", chapters=["ch1"])
+        assert network_lost.wait(3)
+        directory = tmp_path / "downloads" / Adapter.key / "comic" / "ch1"
+        first = directory / "0000.jpg"
+        original_bytes, original_mtime = first.read_bytes(), first.stat().st_mtime_ns
+        assert manager.pause(key)
+        release_request.set()
+        _idle(manager, key, "paused")
+        assert requests == [0, 1], "Paused network failure must not start attempts 2 and 3"
+        assert json.loads(state_file.read_text())[key]["status"] == "paused"
+        assert not (directory / "0001.jpg").exists()
+        assert first.read_bytes() == original_bytes and first.stat().st_mtime_ns == original_mtime
+        assert manager._active == 0
+
+        online = True
+        assert manager.resume_result(key) == "resumed"
+        _idle(manager, key, "done")
+        assert requests == [0, 1, 1], "Recovery must only fetch the missing page"
+        assert first.read_bytes() == original_bytes and first.stat().st_mtime_ns == original_mtime
+        for path in directory.glob("*.jpg"):
+            with Image.open(path) as image:
+                image.verify()
+        assert manager.status(key)["images_done"] == 2
+        assert json.loads(state_file.read_text())[key]["status"] == "done"
+        assert manager._active == 0
+    finally:
+        release_request.set()
+        if manager.status(key).get("status") in ("running", "queued"):
+            manager.pause(key)
+
+
+def _idle(manager, key, expected):
+    deadline = time.monotonic() + 8
+    while time.monotonic() < deadline:
+        with manager._lock:
+            if manager._tasks[key]["status"] == expected and key not in manager._worker_alive:
+                return
+        time.sleep(0.01)
+    raise AssertionError(manager.status(key))
+
+
+def test_paused_download_survives_reload_and_fetches_only_missing_or_corrupt_pages(
+        tmp_path, monkeypatch):
+    monkeypatch.setenv("WR_MANGA_DL_CONCURRENCY", "1")
+    monkeypatch.setattr(module, "images_resolver", None)
+    monkeypatch.setattr(module, "library_change_hook", None)
+    image = io.BytesIO()
+    Image.new("RGB", (1200, 1800), (40, 80, 120)).save(image, format="JPEG")
+    content = image.getvalue()
+    assert len(content) > 4096
+
+    class Adapter:
+        key = "resume-pipeline"
+        name = "离线续传测试源"
+        concurrent = 1
+
+        def comic_info(self, cid):
+            return ComicDetails(id=cid, title="续传测试", cover="", author="",
+                                chapters=[Chapter(id="ch1", name="第1话")])
+
+        def images(self, cid, chapter):
+            return [f"https://fixture.example/{i}.jpg" for i in range(3)]
+
+    state_file = tmp_path / "tasks.json"
+
+    def manager():
+        result = module.DownloadManager(state_file=str(state_file))
+        result.configure(downloads_root=str(tmp_path / "downloads"),
+                         state_dir=str(tmp_path / "state"),
+                         cache_root=str(tmp_path / "cache"),
+                         library_file=str(tmp_path / "library.json"))
+        result._adapter_pool = {Adapter.key: Adapter()}
+        return result
+
+    original = manager()
+    key = Adapter.key + ":comic"
+    requests = []
+
+    def transport(self, url, path, timeout, chapter_id, orig_url, *, cancel_check=None):
+        requests.append(int(url.rsplit("/", 1)[-1].split(".")[0]))
+        if len(requests) == 1:
+            assert original.pause(key)
+        atomic_write_image(path, content)
+        return content, path
+
+    monkeypatch.setattr(ImageDownloader, "_download", transport)
+    original.start(Adapter.key, "comic", "续传测试", chapters=["ch1"])
+    _idle(original, key, "paused")
+    directory = tmp_path / "downloads" / Adapter.key / "comic" / "ch1"
+    first = directory / "0000.jpg"
+    old_bytes, old_mtime = first.read_bytes(), first.stat().st_mtime_ns
+    assert requests == [0]
+    assert json.loads(state_file.read_text())[key]["status"] == "paused"
+    # A partial/corrupt page must not be reused on recovery.
+    (directory / "0001.jpg").write_bytes(b"incomplete-image")
+
+    recovered = manager()
+    recovered.load()
+    assert recovered.status(key)["status"] == "paused"
+    assert recovered.resume_result(key) == "resumed"
+    _idle(recovered, key, "done")
+    assert requests == [0, 1, 2]
+    assert first.read_bytes() == old_bytes and first.stat().st_mtime_ns == old_mtime
+    for index in range(3):
+        with Image.open(directory / f"{index:04d}.jpg") as page:
+            page.verify()
+    manifest = json.loads((directory.parent / "_info.json").read_text())
+    assert manifest["chapters"][0]["download_page_count"] == 3
+    assert recovered.status(key)["images_done"] == 3
+    assert recovered._active == 0
+
+
+@pytest.mark.parametrize("restart", [False, True])
+def test_failed_retry_preserves_selection_and_reuses_successful_pages(tmp_path, monkeypatch, restart):
+    monkeypatch.setenv("WR_MANGA_DL_CONCURRENCY", "1")
+    monkeypatch.setattr(module, "images_resolver", None)
+    monkeypatch.setattr(module, "library_change_hook", None)
+    image = io.BytesIO()
+    Image.new("RGB", (1200, 1800), (40, 80, 120)).save(image, format="JPEG")
+    content = image.getvalue()
+    requests = []
+    failing = True
+
+    class Adapter:
+        key = "retry-selection"
+        name = "失败续传隔离源"
+        concurrent = 1
+
+        def comic_info(self, cid):
+            return ComicDetails(id=cid, title="只补选中章节", cover="", author="", chapters=[
+                Chapter(id="selected", name="第1话"), Chapter(id="unselected", name="第2话")])
+
+        def images(self, cid, chapter):
+            assert chapter == "selected", "重试不得扩展用户选章"
+            return [f"https://fixture.example/{index}.jpg" for index in range(3)]
+
+    state_file = tmp_path / "tasks.json"
+    def manager():
+        result = module.DownloadManager(state_file=str(state_file))
+        result.configure(downloads_root=str(tmp_path / "downloads"), state_dir=str(tmp_path / "state"),
+                         cache_root=str(tmp_path / "cache"), library_file=str(tmp_path / "library.json"))
+        result._adapter_pool = {Adapter.key: Adapter()}
+        return result
+
+    def transport(self, url, path, timeout, chapter_id, orig_url, *, cancel_check=None):
+        index = int(url.rsplit("/", 1)[-1].split(".")[0])
+        requests.append(index)
+        if failing and index == 1:
+            raise OSError("隔离模拟网络失败")
+        atomic_write_image(path, content)
+        return content, path
+
+    monkeypatch.setattr(ImageDownloader, "_download", transport)
+    original = manager()
+    key = Adapter.key + ":comic"
+    original.start(Adapter.key, "comic", "只补选中章节", chapters=["selected"])
+    _idle(original, key, "error")
+    directory = tmp_path / "downloads" / Adapter.key / "comic"
+    first = directory / "selected" / "0000.jpg"
+    before, mtime = first.read_bytes(), first.stat().st_mtime_ns
+    assert original.status(key)["failed_chapters"] == 1
+    assert not (directory / "unselected").exists()
+    fetched_before = len(requests)
+    failing = False
+    recovered = manager() if restart else original
+    if restart:
+        recovered.load()
+    assert recovered.status(key)["chapters"] == ["selected"]
+    assert recovered.resume_result(key) == "resumed"
+    _idle(recovered, key, "done")
+    assert requests[fetched_before:] == [1], "已成功的第0/2页不得重新请求"
+    assert first.read_bytes() == before and first.stat().st_mtime_ns == mtime
+    assert recovered.status(key)["failed_chapters"] == 0
+    assert recovered.status(key)["failed_ids"] == []
+    assert not (directory / "unselected").exists()
+    for index in range(3):
+        with Image.open(directory / "selected" / f"{index:04d}.jpg") as page:
+            page.verify()
+
+
+@pytest.mark.parametrize("restart", [False, True])
+def test_running_download_accepts_new_identity_once_and_preserves_it_after_restart(
+        tmp_path, monkeypatch, restart):
+    monkeypatch.setenv("WR_MANGA_DL_CONCURRENCY", "1")
+    monkeypatch.setattr(module, "images_resolver", None)
+    monkeypatch.setattr(module, "library_change_hook", None)
+    image = io.BytesIO()
+    Image.new("RGB", (1200, 1800), (70, 80, 90)).save(image, format="JPEG")
+    content = image.getvalue()
+    entered, release = threading.Event(), threading.Event()
+    requests, published = [], []
+    state_file = tmp_path / "tasks.json"
+    key = "append-pipeline:comic"
+
+    class Adapter:
+        key = "append-pipeline"
+        name = "追加下载测试"
+        concurrent = 1
+
+        def comic_info(self, cid):
+            return ComicDetails(id=cid, title="追加测试", cover="", author="", chapters=[
+                Chapter(id="ch41", name="第41话"), Chapter(id="ch42", name="第42话")])
+
+        def images(self, cid, chapter):
+            return [f"https://fixture.example/{chapter}/0.jpg"]
+
+    def manager():
+        result = module.DownloadManager(state_file=str(state_file))
+        result.configure(downloads_root=str(tmp_path / "downloads"),
+                         state_dir=str(tmp_path / "state"),
+                         library_file=str(tmp_path / "library.json"))
+        result._adapter_pool = {Adapter.key: Adapter()}
+        mark = result._mark_done
+
+        def observe(*args, **kwargs):
+            mark(*args, **kwargs)
+            published.append(result.status(key)["status"])
+
+        result._mark_done = observe
+        return result
+
+    def transport(self, url, path, timeout, chapter_id, orig_url, *, cancel_check=None):
+        requests.append(chapter_id)
+        if len(requests) == 1:
+            entered.set()
+            assert release.wait(5)
+        atomic_write_image(path, content)
+        return content, path
+
+    monkeypatch.setattr(ImageDownloader, "_download", transport)
+    original = manager()
+    original.start(Adapter.key, "comic", "追加测试", chapters=["ch41"])
+    try:
+        assert entered.wait(5)
+        assert original.start(Adapter.key, "comic", "追加测试", chapters=["ch42"])[1] == "running"
+        assert original.start(Adapter.key, "comic", "追加测试", chapters=["ch42"])[1] == "running"
+        assert original.status(key)["chapters"] == ["ch41"]
+        assert original.status(key)["pending_chapters"] == ["ch42"]
+        assert json.loads(state_file.read_text())[key]["pending_chapters"] == ["ch42"]
+        assert original._active == 1
+        if restart:
+            assert original.pause(key)
+            assert original.resume_result(key) == "stopping"
+            assert original.status(key)["paused"] is True
+            assert original.status(key)["pending_chapters"] == ["ch42"]
+    finally:
+        release.set()
+    if restart:
+        _idle(original, key, "paused")
+        recovered = manager()
+        recovered.load()
+        assert recovered.status(key)["pending_chapters"] == ["ch42"]
+        assert recovered.resume_result(key) == "resumed"
+        _idle(recovered, key, "done")
+    else:
+        _idle(original, key, "done")
+        assert published == ["queued", "done"], "追加批次前不可发布最终完成"
+    assert requests == ["ch41", "ch42"], "追加或重启均不得重复回源旧页"
+    for chapter in requests:
+        path = tmp_path / "downloads" / Adapter.key / "comic" / chapter / "0000.jpg"
+        with Image.open(path) as page:
+            page.verify()

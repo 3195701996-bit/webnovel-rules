@@ -16,7 +16,7 @@ import os
 import shutil
 import time
 
-from engine.app_utils import cache_key_of
+from engine.app_utils import cache_key_of, chapter_cache_valid
 from engine.config import (BOOKS_DIR, DATA_DIR, MANGA_CACHE_DIR,
                            MANGA_DOWNLOADS_DIR, MANGA_LIBRARY_FILE,
                            SEARCH_CACHE_FILE, TOC_CACHE_FILE)
@@ -26,7 +26,7 @@ from server.state import load_book_state
 CATEGORIES = [
     {"key": "novel_books", "label": "小说正文缓存",
      "kind": "user_data", "regenerable": False,
-     "note": "已下载的小说章节，删了要重新联网抓；不在书中时不影响书架与阅读进度"},
+     "note": "包含小说章节、TXT与清洗前原文存档；整本移入回收站时存档随书移动，清空回收站后无法恢复；重新下载不能等价恢复原文"},
     {"key": "manga_downloads", "label": "漫画已下载（离线阅读）",
      "kind": "user_data", "regenerable": False,
      "note": "离线阅读用的图片；删除后需重新下载才能离线看"},
@@ -212,15 +212,15 @@ def usage():
 
 # ── 备份范围（"完整备份范围明确"）──────────────────────────────────
 # 备份 = 用户数据里**体积小、丢了最麻烦、又无法从源站重新拿到**的那部分：
-# 书源配置、启用状态、阅读进度、漫画书库与历史。正文与图片明确不进：
+# 书源配置、启用状态、阅读进度、漫画书库、历史与收藏。正文与图片明确不进：
 # 它们体积大（桌面实测 11.4 GB）且可以从书源重新下载。
 BACKUP_INCLUDE = [
     {"what": "书源配置与启用状态", "why": "丢了要重新一个个加；源站变化后未必找得回来"},
     {"what": "小说阅读进度（读到第几章/章内位置）", "why": "丢了要从头找位置"},
-    {"what": "漫画书库与阅读历史", "why": "丢了不知道看过哪些"},
+    {"what": "漫画书库、阅读历史与收藏", "why": "保留本地作品清单、阅读位置及追更/未读基准"},
 ]
 BACKUP_EXCLUDE = [
-    {"what": "小说正文缓存", "why": "可以从书源重新下载",
+    {"what": "小说目录、书名作者修复记录、正文缓存、原始TXT与清洗前原文存档", "why": "不在配置备份范围；书名作者修复记录和清洗前原文存档不可由重新下载等价恢复，请另行保留所需信息与原文",
      "category": "novel_books"},
     {"what": "漫画已下载图片", "why": "可以从源站重新下载；体积最大",
      "category": "manga_downloads"},
@@ -250,7 +250,8 @@ def backup_scope():
     progress_files = []
     total_bytes = src_bytes
     for rel in ("book_progress.json", os.path.join("manga", "_library.json"),
-                os.path.join("manga", "_history.json")):
+                os.path.join("manga", "_history.json"),
+                os.path.join("manga", "_favorites.json")):
         p = os.path.join(DATA_DIR, rel)
         if os.path.isfile(p):
             sz = _file_size(p)
@@ -268,7 +269,7 @@ def backup_scope():
         "exclude_detail": {c["category"]: by.get(c["category"], 0)
                            for c in BACKUP_EXCLUDE},
         "excluded_total_bytes": sum(by.get(c["category"], 0) for c in BACKUP_EXCLUDE),
-        "note": "备份是配置与进度，不是离线全文副本；正文与图片请用「离线阅读」功能。",
+        "note": "备份是配置与进度，不是离线全文副本；不含正文、图片、原始TXT与清洗前原文存档。需要保留的文本请另行导出；离线阅读不等于备份。",
     }
 
 
@@ -402,28 +403,30 @@ def clear(target):
         failed = state.get("failed", {}) or {}
         only = (target.get("only") or "").strip()
         wanted = set()
+        recovered_urls = []
         if only == "failed":
-            # "错误缓存"：抓取失败的章节 + 内容为空的损坏缓存
+            # 历史 failed 不等于正文损坏；清错误缓存不能删除已恢复的正常正文。
             for i, c in enumerate(chapters):
                 u = c.get("url", "")
-                if u in failed:
-                    wanted.add(i + 1)
                 p = os.path.join(d, cache_key_of(u) + ".cache")
-                if os.path.exists(p):
-                    try:
-                        with open(p, encoding="utf-8") as f:
-                            if not f.read().strip():
-                                wanted.add(i + 1)
-                    except (OSError, UnicodeDecodeError):
-                        wanted.add(i + 1)
+                if chapter_cache_valid(p):
+                    if u in failed:
+                        recovered_urls.append(u)
+                    continue
+                if u in failed or os.path.exists(p):
+                    wanted.add(i + 1)
         elif isinstance(target.get("chapters"), (list, tuple)):
             for v in target["chapters"]:
                 try:
+                    if isinstance(v, bool) or not isinstance(v, (int, str)):
+                        raise ValueError("章节号必须是整数")
                     n = int(v)
-                except (TypeError, ValueError):
-                    continue
-                if 1 <= n <= len(chapters):
-                    wanted.add(n)
+                    if not 1 <= n <= len(chapters):
+                        raise ValueError("章节号越界")
+                except (TypeError, ValueError, OverflowError):
+                    return {"ok": False, "error": "章节列表含无效序号，未删除任何章节",
+                            "freed_bytes": 0}
+                wanted.add(n)
         else:
             return {"ok": False, "error": "缺少 only=failed 或 chapters 列表（防止误删全部）",
                     "freed_bytes": 0}
@@ -435,12 +438,12 @@ def clear(target):
             if not os.path.exists(p):
                 removed_urls.append(u)
         # 状态不撒谎：completed 里剔除已删章节 → 下次"继续下载"会重新抓
-        if removed_urls:
+        if removed_urls or recovered_urls:
             _completed = state.get("completed", [])
             _kept_completed = [u for u in _completed if u not in set(removed_urls)]
             if len(_kept_completed) != len(_completed):
                 state["completed"] = _kept_completed
-            for u in removed_urls:
+            for u in removed_urls + recovered_urls:
                 failed.pop(u, None)
             state["failed"] = failed
             try:
@@ -449,7 +452,9 @@ def clear(target):
                 atomic_write(os.path.join(d, "_state.json"), state)
                 invalidate_book_state(os.path.join(d, "_state.json"))
             except Exception as e:                  # noqa: BLE001
-                notes.append(f"缓存已删，但状态回写失败（继续下载时会自愈）：{e}")
+                notes.append(f"清理状态回写失败（继续下载时会自愈）：{e}")
+        if recovered_urls:
+            notes.append(f"保留 {len(recovered_urls)} 章已恢复的正常正文，并纠正过期失败记录")
         notes.append("已下载的其他章节与书架记录未受影响；被删章节可在下载页点「继续」重抓")
         if not wanted:
             notes.append("没有匹配到需要清理的章节（失败章节没有缓存、也没有空缓存）")

@@ -8,15 +8,20 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -34,6 +39,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
@@ -53,6 +60,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -83,6 +91,7 @@ private fun bookPath(key: String, suffix: String = ""): String =
 
 // ── 详情页（原生，替代 WebView 过渡）────────────────────────
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun BookDetailScreen(
     gateway: EngineGateway,
@@ -105,8 +114,19 @@ fun BookDetailScreen(
     // 净化预检结果（dry-run）：确认前不写盘
     var cleaning by remember { mutableStateOf(false) }
     var cleanPreview by remember { mutableStateOf<org.json.JSONObject?>(null) }
+    var showOriginalRecovery by rememberSaveable(bookKey) { mutableStateOf(false) }
+    var showReaderEdition by rememberSaveable(bookKey) { mutableStateOf(false) }
+    var showMetadata by rememberSaveable(bookKey) { mutableStateOf(false) }
+    var toolsExpanded by rememberSaveable(bookKey) { mutableStateOf(false) }
+    var exportPath by rememberSaveable(bookKey) { mutableStateOf(bookPath(bookKey, "/txt")) }
     var missingCount by remember { mutableIntStateOf(0) }
     var confirmDelete by remember { mutableStateOf(false) }
+    var chapterQuery by rememberSaveable(bookKey) { mutableStateOf("") }
+    var chapterMode by rememberSaveable(bookKey) { mutableStateOf("all") }
+    val detailListState = rememberLazyListState()
+    val visibleChapters = remember(detail, chapterQuery, chapterMode) {
+        filterNovelChapters(detail?.chapters.orEmpty(), chapterQuery, chapterMode)
+    }
     val scope = rememberCoroutineScope()
 
     // 通过系统文件选择器（SAF）导出全文：内容由本机引擎提供，流式写入选定位置
@@ -117,10 +137,11 @@ fun BookDetailScreen(
             exportMsg = "已取消导出"
             return@rememberLauncherForActivityResult
         }
+        val selectedExportPath = exportPath
         scope.launch {
             exporting = true; exportMsg = "正在导出…"
             exportMsg = try {
-                val r = Export.streamToUri(ctx, ep.port, ep.token, bookPath(bookKey, "/txt"), uri)
+                val r = Export.streamToUri(ctx, ep.port, ep.token, selectedExportPath, uri)
                 "已导出 ${Export.human(r.bytes)}" + (r.warning?.let { "（$it）" } ?: "")
             } catch (t: kotlinx.coroutines.CancellationException) {
                 throw t
@@ -148,6 +169,12 @@ fun BookDetailScreen(
     }
     LaunchedEffect(bookKey) { reload() }
 
+    if (showOriginalRecovery) {
+        NovelRecoveryScreen(bookKey, ep.port, gateway, onClose = { showOriginalRecovery = false },
+            onChanged = { reload() })
+        return
+    }
+
     Scaffold(topBar = {
         TopAppBar(
             title = { Text(detail?.name ?: "书籍详情", maxLines = 1, overflow = TextOverflow.Ellipsis) },
@@ -163,7 +190,8 @@ fun BookDetailScreen(
                     Spacer(Modifier.height(WnSpace.md))
                     Button(onClick = { reload() }) { Text("重试") }
                 }
-                else -> LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = WnSpace.xl)) {
+                else -> LazyColumn(Modifier.fillMaxSize().testTag("book_detail_list"), state = detailListState,
+                    contentPadding = PaddingValues(bottom = WnSpace.xl)) {
                     item { DetailHeader(d, progress, introExpanded) { introExpanded = !introExpanded } }
                     item {
                         val resume = d.resumeIndex(progress)
@@ -180,7 +208,10 @@ fun BookDetailScreen(
                                 Row(Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.spacedBy(WnSpace.sm)) {
                                     OutlinedButton(
-                                        onClick = { exportLauncher.launch(Export.safeFileName(d.name, "book") + ".txt") },
+                                        onClick = {
+                                            exportPath = bookPath(bookKey, "/txt")
+                                            exportLauncher.launch(Export.safeFileName(d.name, "book") + ".txt")
+                                        },
                                         enabled = !exporting,
                                         modifier = Modifier.weight(1f),
                                     ) { Text(if (exporting) "导出中…" else "导出 TXT") }
@@ -188,6 +219,10 @@ fun BookDetailScreen(
                                         onClick = { confirmDelete = true },
                                         modifier = Modifier.weight(1f),
                                     ) { Text("从书架删除") }
+                                }
+                                Spacer(Modifier.height(WnSpace.sm))
+                                Row(Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(WnSpace.sm)) {
                                     OutlinedButton(
                                         onClick = {
                                             scope.launch {
@@ -250,7 +285,7 @@ fun BookDetailScreen(
                                                         "已下载正文不需要净化（没有检测到广告或分隔线）"
                                                     } else {
                                                         "预检：$ch 章需要净化，将删除 $lines 行垃圾、" +
-                                                            "约 $chars 字（作者正文不会动）"
+                                                            "约 $chars 字（请先核对样例）"
                                                     }
                                                 }
                                             }
@@ -260,6 +295,18 @@ fun BookDetailScreen(
                                             .weight(1f)
                                             .testTag("reclean_button"),
                                     ) { Text(if (cleaning) "统计中…" else "净化正文") }
+                                }
+                                TextButton(onClick = { toolsExpanded = !toolsExpanded },
+                                    modifier = Modifier.testTag("novel_tools_toggle")) {
+                                    Text(if (toolsExpanded) "收起更多工具" else "更多工具")
+                                }
+                                if (toolsExpanded) {
+                                    TextButton(onClick = { showOriginalRecovery = true }, enabled = !cleaning && !checking,
+                                        modifier = Modifier.testTag("novel_recovery_button")) { Text("恢复清洗前原文") }
+                                    TextButton(onClick = { showReaderEdition = true }, enabled = !exporting && !cleaning,
+                                        modifier = Modifier.testTag("reader_edition_button")) { Text("导出阅读版 TXT") }
+                                    TextButton(onClick = { showMetadata = true }, enabled = !checking && !cleaning,
+                                        modifier = Modifier.testTag("novel_metadata_button")) { Text("刷新书名与作者") }
                                 }
                                 if (missingCount > 0) {
                                     Spacer(Modifier.height(WnSpace.sm))
@@ -309,7 +356,30 @@ fun BookDetailScreen(
                         }
                         Spacer(Modifier.height(WnSpace.md))
                     }
-                    items(d.chapters, key = { it.index }) { c ->
+                    item(key = "chapter_filters") {
+                        Column(Modifier.fillMaxWidth().padding(horizontal = WnSpace.lg)) {
+                            OutlinedTextField(value = chapterQuery, onValueChange = { chapterQuery = it },
+                                label = { Text("查找章节（章名或目录序号）") }, singleLine = true,
+                                modifier = Modifier.fillMaxWidth().testTag("novel_chapter_query"))
+                            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                for ((mode, label) in listOf("all" to "全部", "downloaded" to "已下载", "missing" to "待下载")) {
+                                    FilterChip(selected = chapterMode == mode, onClick = { chapterMode = mode },
+                                        label = { Text(label) }, modifier = Modifier.testTag("novel_chapter_filter_$mode"))
+                                }
+                            }
+                            Text("显示 ${visibleChapters.size} / ${d.chapters.size} 章 · 纯数字按目录序号定位",
+                                style = MaterialTheme.typography.labelSmall, color = WnColors.inkDim,
+                                modifier = Modifier.testTag("novel_chapter_filter_summary"))
+                            if (chapterQuery.isNotEmpty() || chapterMode != "all") {
+                                TextButton(onClick = { chapterQuery = ""; chapterMode = "all" },
+                                    modifier = Modifier.testTag("novel_chapter_filter_reset")) { Text("清除章节筛选") }
+                            }
+                            if (visibleChapters.isEmpty()) Text("没有匹配的章节，可更换关键词或筛选条件。",
+                                style = MaterialTheme.typography.bodyMedium,
+                                modifier = Modifier.padding(vertical = WnSpace.md))
+                        }
+                    }
+                    items(visibleChapters, key = { it.index }) { c ->
                         val readIdx = progress?.idx ?: 0
                         ChapterRow(c, isCurrent = c.index == readIdx,
                             isRead = readIdx >= 1 && c.index < readIdx) { onRead(c.index) }
@@ -318,12 +388,23 @@ fun BookDetailScreen(
             }
         }
     }
+    if (showMetadata) {
+        NovelMetadataDialog(bookKey, ep.port, gateway, onClose = { showMetadata = false }, onChanged = { reload() })
+    }
+    if (showReaderEdition) {
+        ReaderEditionDialog(bookKey, ep.port, gateway, onClose = { showReaderEdition = false }, onExport = { path ->
+            exportPath = path
+            showReaderEdition = false
+            exportLauncher.launch(Export.safeFileName(detail?.name ?: "book", "book") + "-阅读版.txt")
+        })
+    }
     cleanPreview?.let { o ->
         AlertDialog(
             onDismissRequest = { cleanPreview = null },
             title = { Text("净化已下载正文？") },
             text = {
-                Column {
+                Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())
+                    .testTag("reclean_preview_content")) {
                     Text(
                         "将重新净化 ${o.optInt("chapters")} 章里的 ${o.optInt("changed")} 章，" +
                             "删除 ${o.optInt("removed_lines")} 行广告/分隔线与约 " +
@@ -337,13 +418,30 @@ fun BookDetailScreen(
                         for (i in 0 until samples.length()) {
                             Text("· " + samples.optString(i).take(60),
                                 style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.outline)
+                                color = WnColors.inkDim)
                         }
                     }
                     Spacer(Modifier.height(6.dp))
-                    Text("正文段落、章节标题、阅读进度都不会动；已下载的书不需要重下。",
+                    val reviewCount = o.optInt("review_count")
+                    if (reviewCount > 0) {
+                        Text("发现 $reviewCount 个疑似推广章节（仅提示，不会自动删除）：",
+                            style = MaterialTheme.typography.labelMedium)
+                        val reviews = o.optJSONArray("review_items")
+                        if (reviews != null) for (i in 0 until reviews.length()) {
+                            val review = reviews.optJSONObject(i) ?: continue
+                            Text("· 目录第${review.optInt("index")}项：${review.optString("name")}",
+                                style = MaterialTheme.typography.bodySmall)
+                        }
+                        if (o.optBoolean("review_truncated")) {
+                            Text("此处最多列出100项；统计已包含其余建议。",
+                                style = MaterialTheme.typography.labelSmall)
+                        }
+                        Spacer(Modifier.height(6.dp))
+                    }
+                    Text("将改写本地正文缓存，请核对样例后执行；章节目录与阅读进度不变。" +
+                        "推广章节仅供审查，不会自动删除；已下载的书不需要重下。",
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.outline)
+                        color = WnColors.inkDim)
                 }
             },
             confirmButton = {
@@ -362,8 +460,14 @@ fun BookDetailScreen(
                                 "已净化 ${res.optInt("changed")} 章（删除 " +
                                     "${res.optInt("removed_lines")} 行 / ${res.optInt("removed_chars")} 字）" +
                                     (if (res.optBoolean("txt_rebuilt")) "；全文导出已重建" else "") +
-                                    (if (res.optJSONArray("failed")?.length() ?: 0 > 0)
-                                        "；${res.optJSONArray("failed")!!.length()} 章失败（详见日志）" else "")
+                                    (if (res.optJSONArray("failed")?.length() ?: 0 > 0) {
+                                        val failures = res.optJSONArray("failed")!!
+                                        "；${failures.length()} 项失败：" +
+                                            (0 until minOf(3, failures.length())).joinToString("；") { i ->
+                                                failures.optJSONObject(i)?.optString("reason")?.take(100)
+                                                    ?: "未知错误"
+                                            }
+                                    } else "")
                             }
                             reload()
                         }
@@ -488,6 +592,7 @@ fun NovelReaderScreen(
     startPct: Int,
     onBack: () -> Unit,
 ) {
+    ReadingScreenAwake()
     val ctx = androidx.compose.ui.platform.LocalContext.current
     var prefs by remember { mutableStateOf(ReaderPrefs.load(ctx)) }
     var index by remember { mutableIntStateOf(startIndex.coerceAtLeast(1)) }

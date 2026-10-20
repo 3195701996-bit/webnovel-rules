@@ -222,6 +222,21 @@ class CopyManga(MangaAdapter):
     version = "1.4.1"
     concurrent = 2
 
+    def categories(self):
+        return copy_web.web_categories()
+
+    def browse(self, category="ordering=-datetime_updated", page=1):
+        try:
+            return copy_web.web_browse(category, page)
+        except copy_web.WebUnreachable:
+            from ..config import IS_MOBILE
+            if IS_MOBILE:
+                raise
+            # Desktop search can use the browser while plain HTTP is blocked.
+            # Reuse that existing desktop transport; never require it on Android.
+            from .copymanga_web import CopyMangaWeb
+            return CopyMangaWeb().browse(category, page)
+
     def __init__(self, state_dir=None, throttle=True):
         """throttle=False = 阅读通道实例：绕过令牌桶限流与 210 状态机升级，
         逐张读图不被 4s/请求 串行化（下载任务保持 throttle=True 防风控）"""
@@ -704,6 +719,7 @@ class CopyManga(MangaAdapter):
             if not path_word:
                 continue
             offset = 0
+            group_ids = set()
             while True:
                 rid = self._get_request_id()
                 # limit=100（实测 limit=500 返回 total=0/list=0 空数据，
@@ -712,12 +728,19 @@ class CopyManga(MangaAdapter):
                       f"?limit=100&offset={offset}&in_mainland=true&request_id={rid}")
                 try:
                     cd = self._get(cu)
-                except Exception:
-                    break
+                except Exception as exc:
+                    raise MangaError("拷贝漫画章节目录未取全，请稍后重试") from exc
                 total = (cd.get("results") or {}).get("total", 0)
-                for ch in (cd.get("results") or {}).get("list", []):
+                page = (cd.get("results") or {}).get("list", [])
+                if not page and offset < (total or 0):
+                    raise MangaError("拷贝漫画章节分页为空，目录未取全")
+                for ch in page:
+                    chapter_id = str(ch.get("uuid") or ch.get("id") or "")
+                    if not chapter_id or chapter_id in group_ids:
+                        raise MangaError("拷贝漫画章节标识缺失或重复，目录未取全")
+                    group_ids.add(chapter_id)
                     ch_list.append(Chapter(
-                        id=ch.get("uuid", ch.get("id", "")),
+                        id=chapter_id,
                         name=ch.get("name", ""), group=ginfo.get("name", gname),
                         url=ch.get("id", "")))
                 offset += 100
@@ -780,18 +803,26 @@ class CopyManga(MangaAdapter):
             if not path_word:
                 continue
             offset = 0
+            group_ids = set()
             while True:
                 rid = self._get_request_id()
                 cu = (f"{self.api_url}/api/v3/comic/{comic_id}/group/{path_word}/chapters"
                       f"?limit=100&offset={offset}&in_mainland=true&request_id={rid}")
                 try:
                     cd = self._get(cu)
-                except Exception:
-                    break
+                except Exception as exc:
+                    raise MangaError("拷贝漫画章节目录未取全，请稍后重试") from exc
                 total = (cd.get("results") or {}).get("total", 0)
-                for ch in (cd.get("results") or {}).get("list", []):
+                page = (cd.get("results") or {}).get("list", [])
+                if not page and offset < (total or 0):
+                    raise MangaError("拷贝漫画章节分页为空，目录未取全")
+                for ch in page:
+                    chapter_id = str(ch.get("uuid") or ch.get("id") or "")
+                    if not chapter_id or chapter_id in group_ids:
+                        raise MangaError("拷贝漫画章节标识缺失或重复，目录未取全")
+                    group_ids.add(chapter_id)
                     ch_list.append(Chapter(
-                        id=ch.get("uuid", ch.get("id", "")),
+                        id=chapter_id,
                         name=ch.get("name", ""), group=ginfo.get("name", gname),
                         url=ch.get("id", "")))
                 offset += 100

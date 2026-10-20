@@ -85,13 +85,13 @@ def test_download_and_check_update_share_one_impl():
         "server 模块应从 download_manager 引入同一实现，不得自行复制正则"
 
     worker = inspect.getsource(dm.DownloadManager._worker)
-    # 0.74.12：过滤逻辑抽成纯函数 filter_volume_only（政策可测），
-    # worker 必须走它；判据本体仍由本文件管着。
+    # 下载 worker 保留旧兼容入口；策略是不按标题丢弃任何卷单元。
     assert "filter_volume_only" in worker, "下载 worker 未做整卷过滤（应调用 filter_volume_only）"
     fn = inspect.getsource(dm.filter_volume_only)
-    assert "_is_volume_only" in fn, "过滤函数必须复用同一整卷判据"
-    # 两条例外（用户选择优先 / 滤完不剩则不滤）必须写在实现里
-    assert "sel_chapters" in fn and "不再按整卷规则排除" in fn
+    assert "return chs, \"\"" in fn, "卷条目不得按标题被下载规则剔除"
+    check = inspect.getsource(server.state._manga_check_one)
+    assert "cur_chapters = [c for c in cur_chapters" not in check, \
+        "更新检查必须把卷单元纳入最新目录和未读对比"
 
 
 # ── 真实书库数据回归 ─────────────────────────────────────────

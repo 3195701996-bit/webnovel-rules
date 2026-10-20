@@ -99,8 +99,13 @@ class TestTasksTemplate:
 class TestMangaDownloadTemplate:
     def test_uses_requestjson(self):
         assert re.search(r"await requestJSON\(`/api/manga/\$\{SOURCE\}/", MANGA_DL)
-        assert re.search(r"method: 'POST', body: \{title: TITLE, chapters: chapters\}", MANGA_DL)
+        assert re.search(r"method: 'POST', body: \{title: TITLE, cover: COVER, chapters: chapters\}", MANGA_DL)
         assert re.search(r"await requestJSON\(`/api/manga/download/status", MANGA_DL)
+
+    def test_auto_favorite_failure_is_visible_without_hiding_download(self):
+        assert "autoFavoriteWarning" in MANGA_DL
+        assert "自动收藏失败" in MANGA_DL
+        assert "d.favorited === false" in MANGA_DL
 
     def test_post_failure_recovers_button_no_fake_success(self):
         # POST 失败：状态栏显示可恢复错误 + 重试入口 + 按钮恢复；不进入轮询假成功

@@ -204,6 +204,30 @@ def test_clear_trash_only_touches_trash(store):
 
 
 # ── 5) 章节级：按明确章节 / only=failed，且状态同步 ─────────────────
+def test_cleaning_archive_survives_regen_and_other_chapter_clear(store):
+    from engine.text_recovery import save_cleaned_cache, restore_cleaned_cache
+
+    S, root, books, dl, cache, trash = store
+    d, chs = _mk_book(books, "srcA_archive", chapters=2, cached=(1, 2))
+    first = d / (cache_key_of(chs[0]["url"]) + ".cache")
+    original = first.read_text(encoding="utf-8")
+    identity = save_cleaned_cache(str(d), first.name, original, "净化后的正文")
+    archive = d / ".reclean-originals" / (identity + ".json")
+    archived = archive.read_bytes()
+    before = S.usage()
+    row = next(b for b in before["novel_books"] if b["key"] == "srcA_archive")
+    expected = sum(p.stat().st_size for p in d.rglob("*") if p.is_file())
+    assert row["bytes"] == expected  # 隐藏存档计入实际小说占用
+
+    assert S.clear({"scope": "regen"})["ok"]
+    assert S.clear({"scope": "book_chapters", "key": "srcA_archive", "chapters": [2]})["ok"]
+    assert archive.read_bytes() == archived
+    assert restore_cleaned_cache(str(d), identity, dry_run=True)["restored"] is False
+    assert first.read_text(encoding="utf-8") == "净化后的正文"
+    assert restore_cleaned_cache(str(d), identity, dry_run=False)["restored"] is True
+    assert first.read_text(encoding="utf-8") == original
+
+
 def test_clear_book_chapters_explicit_list(store):
     S, root, books, dl, cache, trash = store
     d, chs = _mk_book(books, "srcA_aaaa", chapters=3, cached=(1, 2, 3))
@@ -245,12 +269,27 @@ def test_clear_book_chapters_prunes_failed_entry(store):
     """删失败章节的缓存时，failed 里那条也要清（否则界面一直显示上次失败原因）"""
     S, root, books, dl, cache, trash = store
     d, chs = _mk_book(books, "srcA_aaaa", chapters=2, cached=(1,), failed=(2,))
-    _write(d / (cache_key_of(chs[1]["url"]) + ".cache"), 200)   # 失败章也有半截缓存
+    (d / (cache_key_of(chs[1]["url"]) + ".cache")).write_bytes(b"\xff" * 200)
     res = S.clear({"scope": "book_chapters", "key": "srcA_aaaa", "only": "failed"})
     assert res["ok"] and res["freed_bytes"] == 200
     state = json.load(open(str(d / "_state.json"), encoding="utf-8"))
     assert state["failed"] == {}
     assert chs[1]["url"] not in state["completed"]
+
+
+def test_clear_failed_preserves_recovered_body_and_clears_stale_failure(store):
+    S, root, books, dl, cache, trash = store
+    d, chs = _mk_book(books, "recovered_book", chapters=2, cached=(1, 2), failed=(1,))
+    path = d / (cache_key_of(chs[0]["url"]) + ".cache")
+    path.write_text("正常正文已恢复，不可被旧失败记录删除。", encoding="utf-8")
+    before = path.read_bytes(), path.stat().st_mtime_ns
+    response = S.clear({"scope": "book_chapters", "key": "recovered_book", "only": "failed"})
+    assert response["ok"]
+    assert (path.read_bytes(), path.stat().st_mtime_ns) == before
+    state = json.loads((d / "_state.json").read_text(encoding="utf-8"))
+    assert chs[0]["url"] in state["completed"]
+    assert state["failed"] == {}
+    assert response["freed_bytes"] == 0
 
 
 # ── 6) 参数校验：一律先拒绝、后动手 ─────────────────────────────────
@@ -271,14 +310,28 @@ def test_clear_rejects_bad_targets_without_deleting(store):
     # 不存在的书
     r = S.clear({"scope": "book_chapters", "key": "no_such_book", "chapters": [1]})
     assert r["ok"] is False and "不存在" in r["error"]
-    # 越界章节号被忽略，不会误删别的
+    # 任意无效章节号拒绝整个列表，不会部分删除。
     r = S.clear({"scope": "book_chapters", "key": "srcA_aaaa", "chapters": [99, -1, "x"]})
-    assert r["ok"] is True and r["freed_bytes"] == 0
+    assert r["ok"] is False and r["freed_bytes"] == 0
 
     assert S.usage()["total_bytes"] == before, "被拒绝的请求不得删掉任何东西"
 
 
 # ── 7) 删不掉就照实说：freed 只算真删掉的 ───────────────────────────
+@pytest.mark.parametrize("invalid", [True, False, 1.9, 1.0, None, {}, [], "1.2", "nan", "inf", 99, -1])
+def test_clear_chapter_list_rejects_entire_invalid_batch(store, invalid):
+    S, root, books, dl, cache, trash = store
+    d, chs = _mk_book(books, "invalid_batch", cached=(1,))
+    path = d / (cache_key_of(chs[0]["url"]) + ".cache")
+    before = path.read_bytes(), path.stat().st_mtime_ns
+    state_before = (d / "_state.json").read_bytes()
+    result = S.clear({"scope": "book_chapters", "key": "invalid_batch", "chapters": [1, invalid]})
+    assert result["ok"] is False
+    assert result["freed_bytes"] == 0
+    assert (path.read_bytes(), path.stat().st_mtime_ns) == before
+    assert (d / "_state.json").read_bytes() == state_before
+
+
 def test_clear_reports_kept_when_delete_fails(store, monkeypatch):
     S, root, books, dl, cache, trash = store
     _mk_manga(dl, cache, source="jm", cid="100", images=1, temp_works=1, temp_files=1)

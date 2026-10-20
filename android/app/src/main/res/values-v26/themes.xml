@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.MobileServer" parent="Theme.MobileServer.Base">
+        <item name="android:navigationBarColor">#FBF8F2</item>
+        <item name="android:windowLightNavigationBar">true</item>
+    </style>
+</resources>

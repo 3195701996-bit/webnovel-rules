@@ -296,6 +296,12 @@ def test_categories_cached_within_ttl(jm, monkeypatch):
     assert len(cats_calls) == 1
 
 
+def test_discovery_snapshot_does_not_wait_for_network(jm, monkeypatch):
+    monkeypatch.setenv("WR_TEST", "1")
+    monkeypatch.setattr(jm, "_top_categories", lambda **kwargs: pytest.fail("discovery performed network IO"))
+    assert [c["key"] for c in jm.categories_snapshot()] == ["o:mr", "o:mv", "o:mp", "o:tf", "o:tr", "o:md"]
+
+
 def test_categories_cache_expires(jm, monkeypatch):
     """TTL 过期后必须重新取（不能把陈旧分类永远钉住）。"""
     import engine.manga.jm as jm_mod

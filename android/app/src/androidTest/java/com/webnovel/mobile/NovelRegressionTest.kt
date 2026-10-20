@@ -46,20 +46,19 @@ class NovelRegressionTest {
     )
 
     /**
-     * 最小回归源集（改动这里必须同步更新 `报告归档/03-验证结果/小说最小回归源集-*.md`）。
+     * 最小回归源集（改动这里必须同步更新 `docs/2.0.0-upgrade-plan.md` 的设备探针记录）。
      *
-     * 当轮选源证据（2026-09-16 设备探针 NovelSourceProbeTest，候选 17 个 → 搜索命中 12、目录可用 11）：
+     * 当轮选源证据（2026-10-02 API 35 设备探针 NovelSourceProbeTest，候选 17 个 → 搜索命中 15、目录可用 12）：
      *   · 入集 3 个——设备上**已启用**、搜索与目录当轮都通过，且分属**三个不同域名**：
-     *     爱下电子书 ixdzs8.com（1278 章）、精华书阁 m.jhsssd.com（605 章）、啃书网 kenshuzw.la（1396 章）。
-     *   · 同轮可用但**未入最小集**（备用，不参与断言）：大帝书阁 ddsk.la/dingdiansk.com（1306 章）、
-     *     思路客 isiluke.la（1304 章）、顶点 m.23uswx.la（1304 章）、全本 quanbenw.com（218 章，已停用）。
-     *   · 明确**不入集**：quanben.io（已启用但搜索对「剑来/斗破苍穹」0 结果）、
-     *     笔趣阁新 xinbqg.org（搜索 ok 但目录 HTTP 500）、aixiaxsw.com（搜索 0 结果）。
+     *     爱下电子书 ixdzs8.com（1294 章）、思路客 isiluke.la（1305 章）、顶点 m.23uswx.la（1305 章）。
+     *   · 同轮可用但未入集的备选：啃书网 kenshuzw.la（1397 章）、笔趣阁新 xinbqg.org（1308 章）；
+     *     啃书网在刚结束的全量套件中曾短时 0 结果，独立探针随后恢复命中，暂列备选。
+     *   · 旧集精华书阁 m.jhsssd.com 本轮目录 HTTP 504；大帝书阁两个镜像目录 HTTP 500，故从当轮可用集移除。
      */
     private val regressionSet = listOf(
         RegSource("爱下书_ixdzs8__ixdzs8.com", "爱下电子书(ixdzs8)", listOf("剑来")),
-        RegSource("精华书阁_m.jhsssd.com_", "精华书阁(m.jhsssd.com)", listOf("剑来")),
-        RegSource("啃书网_kenshuwx__www.kenshuzw.la", "啃书网(kenshuzw.la)", listOf("剑来")),
+        RegSource("思路客_isiluke_la__www.isiluke.la", "思路客(isiluke.la)", listOf("剑来")),
+        RegSource("顶点_m__m.23uswx.la", "顶点(m.23uswx.la)", listOf("剑来")),
     )
 
     private fun ev(line: String) = println("NOVEL_REGRESSION_EVIDENCE $line")

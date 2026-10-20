@@ -317,7 +317,13 @@ def test_txn_lock_lives_outside_staging(client, monkeypatch):
     import server.manga_api as m
     from engine.config import MANGA_STATE_DIR
     d = _seed_chapter("ov_lock_place", "ch1")
-    _repair(client, "ov_lock_place", "ch1")
+    # This test asserts lock placement, not source availability. Keep the
+    # overwrite path deterministic and offline so CI does not wait on CopyManga.
+    _patch_web_adapter(monkeypatch, _FakeWebAdapter(
+        imgs=["https://img.example.com/new_0.webp"]))
+    _patch_fetch(monkeypatch, lambda idx, url: (200, _WEBP_NEW))
+    response = _repair(client, "ov_lock_place", "ch1")
+    assert response.status_code == 200 and response.get_json().get("ok")
     locks = os.path.join(MANGA_STATE_DIR, "_repair_locks")
     assert os.path.isdir(locks), "锁文件应落在 _repair_locks/ 下"
     assert any(n.endswith(".lock") for n in os.listdir(locks)), os.listdir(locks)

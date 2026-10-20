@@ -93,6 +93,25 @@ def test_latency_lines_reuse_measurement(monkeypatch):
     assert any("requests" in ln for ln in lines), lines
 
 
+def test_report_reuses_recent_latency_and_never_starts_network_probe(monkeypatch):
+    """导出报告不能同步打源站；仅复用显式测速的近期结果。"""
+    data = {"source": "jm", "transport": "requests",
+            "steps": {"search": {"ok": False, "ms": 12,
+                                   "detail": "offline fixture"}}}
+    monkeypatch.setattr(diag, "_last_latency", data, raising=False)
+    monkeypatch.setattr(diag, "_last_latency_ts", __import__("time").time(),
+                        raising=False)
+    monkeypatch.setattr(diag, "measure_latency",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            AssertionError("report must not probe a source")))
+    report = diag.build_report()
+    assert "search" in report and "offline fixture" in report
+
+    monkeypatch.setattr(diag, "_last_latency", None, raising=False)
+    report = diag.build_report()
+    assert "未触发实时源站测速" in report
+
+
 def test_latency_endpoint_shape(monkeypatch):
     import app
     app.app.config["TESTING"] = True

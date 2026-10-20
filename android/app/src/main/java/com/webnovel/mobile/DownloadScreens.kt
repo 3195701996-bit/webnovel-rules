@@ -1,4 +1,4 @@
-@file:OptIn(ExperimentalMaterial3Api::class)
+@file:OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 
 package com.webnovel.mobile
 
@@ -25,6 +25,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.FilterChip
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -62,6 +66,8 @@ internal fun DownloadsScreen(
     var actionMsg by remember { mutableStateOf<String?>(null) }
     var libUpdate by remember { mutableStateOf<MangaLibraryUpdate?>(null) }
     var checking by remember { mutableStateOf(false) }
+    var query by rememberSaveable { mutableStateOf("") }
+    var taskFilter by rememberSaveable { mutableStateOf("all") }
     val scope = rememberCoroutineScope()
 
     suspend fun refresh() {
@@ -81,16 +87,18 @@ internal fun DownloadsScreen(
         // 停下来的任务不再轮询，界面显示的是服务端状态
         while (true) {
             delay(1500)
-            if (tasks.any { it.running || it.status == "queued" }) refresh()
+            if (tasks.any { it.needsDownloadRefresh() }) refresh()
         }
     }
 
-    val running = tasks.filter { it.running || it.status == "queued" }
-    val paused = tasks.filter { it.status == "paused" || it.status == "stopped" }
-    val finished = tasks.filter {
-        !it.running && it.status != "queued" &&
-            it.status != "paused" && it.status != "stopped"
-    }
+    val visibleTasks = remember(tasks, query, taskFilter) { filterDownloadTasks(tasks, query, taskFilter) }
+    val sections = downloadTaskSections(visibleTasks)
+    val running = sections.running
+    // Error tasks are resumable (notably local-storage failures after the user
+    // frees space); keep them in the actionable section so TaskCard receives the
+    // resume callback instead of rendering a dead-end "delete record" card.
+    val paused = sections.paused
+    val finished = sections.finished
 
     LazyColumn(
         Modifier.fillMaxSize().testTag("downloads_list"),
@@ -103,11 +111,26 @@ internal fun DownloadsScreen(
             Text("管理进行中的任务、暂停项和已完成记录。后台任务不会因离开页面而停止。",
                 style = MaterialTheme.typography.bodySmall, color = WnColors.inkDim,
                 modifier = Modifier.padding(top = WnSpace.xs, bottom = WnSpace.md))
+            OutlinedTextField(value = query, onValueChange = { query = it }, singleLine = true,
+                label = { Text("查找任务（作品名或漫画源）") },
+                modifier = Modifier.fillMaxWidth().testTag("download_task_query"),
+                trailingIcon = { if (query.isNotEmpty()) TextButton(onClick = { query = "" }) { Text("清空") } })
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(WnSpace.sm)) {
+                for ((key, label) in listOf("all" to "全部", "active" to "进行中", "recoverable" to "待恢复",
+                    "failed" to "失败", "finished" to "已结束")) {
+                    FilterChip(selected = taskFilter == key, onClick = { taskFilter = key },
+                        label = { Text(label) }, modifier = Modifier.testTag("download_filter_$key"))
+                }
+            }
+            Text("显示 ${visibleTasks.size} / ${tasks.size} 项；筛选不改变队列，批量操作仍作用于全部漫画。",
+                style = MaterialTheme.typography.labelSmall, color = WnColors.inkDim,
+                modifier = Modifier.testTag("download_filter_summary"))
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween) {
                 Text("队列操作", style = MaterialTheme.typography.titleMedium,
                     color = WnColors.ink)
-                if (running.isNotEmpty()) WnStatusPill("${running.size} 个进行中", WnColors.ok)
+                val activeCount = tasks.count { it.needsDownloadRefresh() }
+                if (activeCount > 0) WnStatusPill("$activeCount 个进行中", WnColors.ok)
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(WnSpace.sm)) {
                 Button(
@@ -122,7 +145,7 @@ internal fun DownloadsScreen(
                         }
                     },
                     modifier = Modifier.weight(1f),
-                ) { Text("全部暂停") }
+                ) { Text("暂停全部漫画") }
                 OutlinedButton(
                     onClick = {
                         scope.launch {
@@ -130,12 +153,19 @@ internal fun DownloadsScreen(
                             val n = runCatching {
                                 org.json.JSONObject(r.body).optInt("resumed")
                             }.getOrDefault(0)
-                            actionMsg = if (r.ok) "已恢复 $n 个漫画下载" else "全部继续失败：HTTP ${r.code}"
+                            val skipped = runCatching {
+                                org.json.JSONObject(r.body).optInt("skipped")
+                            }.getOrDefault(0)
+                            actionMsg = if (r.ok) "已恢复 $n 个漫画下载" +
+                                (if (skipped > 0) "，$skipped 个未启动（任务状态已变化）" else "")
+                            else "全部继续失败：" + (runCatching {
+                                org.json.JSONObject(r.body).optString("error").ifBlank { "HTTP ${r.code}" }
+                            }.getOrDefault("HTTP ${r.code}"))
                             refresh()
                         }
                     },
                     modifier = Modifier.weight(1f),
-                ) { Text("全部继续") }
+                ) { Text("继续全部漫画") }
             }
             actionMsg?.let {
                 Spacer(Modifier.height(6.dp))
@@ -147,30 +177,36 @@ internal fun DownloadsScreen(
                 OutlinedButton(
                     onClick = {
                         scope.launch {
-                            checking = true; actionMsg = "正在检查书库更新…"
+                            checking = true; libUpdate = null; actionMsg = "正在检查书库更新…"
+                            try {
                             val start = gateway.httpPost(ep.port,
                                 "/api/manga/library/check-updates")
                             if (start.code == 409) {
                                 actionMsg = "已有一轮检查在进行中，跟随它的进度"
                             } else if (!start.ok) {
                                 actionMsg = "启动检查失败：HTTP ${start.code}"
-                                checking = false
+                                return@launch
                             }
                             var u = MangaLibraryUpdate(false, 0, 0, emptyList())
                             for (i in 0 until 90) {
                                 kotlinx.coroutines.delay(2000)
                                 val st = gateway.httpText(ep.port,
                                     "/api/manga/library/check-updates/status")
-                                val o = runCatching {
-                                    org.json.JSONObject(st.body)
-                                }.getOrNull() ?: continue
+                                require(st.ok) { "读取检查进度失败：HTTP ${st.code}" }
+                                val o = org.json.JSONObject(st.body)
+                                require(o.opt("running") is Boolean && o.opt("done") is Number &&
+                                    o.opt("total") is Number && o.optJSONArray("results") != null) {
+                                    "检查进度响应无效"
+                                }
                                 u = EngineData.mangaLibraryUpdate(st.body)
                                 if (!u.running) break
                                 actionMsg = "检查书库更新：${u.label}"
                             }
                             libUpdate = u
-                            actionMsg = u.label
-                            checking = false
+                            actionMsg = if (u.running) "检查尚未结束，请稍后重新检查；不会自动下载。" else null
+                            } catch (error: Exception) {
+                                actionMsg = "检查未完成，请重试：${error.message}"
+                            } finally { checking = false }
                         }
                     },
                     enabled = !checking,
@@ -183,12 +219,23 @@ internal fun DownloadsScreen(
                             val n = runCatching {
                                 org.json.JSONObject(r.body).optInt("started")
                             }.getOrDefault(0)
-                            actionMsg = if (r.ok) "已创建更新下载任务：$n 部（见上方队列）"
-                                        else "下载更新失败：HTTP ${r.code} ${r.body.take(80)}"
+                            val favoriteFailures = runCatching {
+                                org.json.JSONObject(r.body).optInt("favorite_failures")
+                            }.getOrDefault(0)
+                            val skippedBusy = runCatching {
+                                org.json.JSONObject(r.body).optInt("skipped_busy")
+                            }.getOrDefault(0)
+                            actionMsg = if (r.ok) {
+                                "已提交更新下载：$n 部（见上方队列）" +
+                                    (if (favoriteFailures > 0)
+                                        "；$favoriteFailures 部自动收藏失败，请手动收藏" else "") +
+                                    (if (skippedBusy > 0)
+                                        "；$skippedBusy 部任务忙，未提交；请暂停并等待停稳后重试" else "")
+                            } else "下载更新失败：HTTP ${r.code} ${r.body.take(80)}"
                             refresh()
                         }
                     },
-                    enabled = !checking && (libUpdate?.withUpdate?.isNotEmpty() == true),
+                    enabled = !checking && libUpdate?.running == false && (libUpdate?.withUpdate?.isNotEmpty() == true),
                     modifier = Modifier.weight(1f),
                 ) { Text("下载更新（${libUpdate?.withUpdate?.size ?: 0} 部）") }
             }
@@ -198,7 +245,7 @@ internal fun DownloadsScreen(
                      color = MaterialTheme.colorScheme.primary)
                 u.withUpdate.take(3).forEach { (title, c) ->
                     Text("· $title：${c.label}", style = MaterialTheme.typography.labelSmall,
-                         color = MaterialTheme.colorScheme.outline,
+                         color = WnColors.inkDim,
                          maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
@@ -207,7 +254,7 @@ internal fun DownloadsScreen(
                 "任务由本机引擎执行：退出界面或锁屏不会停止正在进行的任务；" +
                     "系统限制后台时会保存进度，回到应用后继续。",
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.outline,
+                color = WnColors.inkDim,
             )
         }
 
@@ -231,6 +278,13 @@ internal fun DownloadsScreen(
                         title = "当前没有下载任务",
                         body = "小说在「书架 → 详情」里开始下载，漫画在「详情 → 下载本话」开始下载。",
                     )
+                }
+            }
+            visibleTasks.isEmpty() -> item {
+                Column(Modifier.fillMaxWidth().padding(WnSpace.lg)) {
+                    Text("没有匹配的任务", style = MaterialTheme.typography.titleMedium)
+                    Text("可更换关键词或状态，已有下载不会被删除。", color = WnColors.inkDim)
+                    TextButton(onClick = { query = ""; taskFilter = "all" }) { Text("清除筛选") }
                 }
             }
         }
@@ -271,7 +325,9 @@ internal fun DownloadsScreen(
         }
         if (finished.isNotEmpty()) {
             item { WnSectionHeader("已结束", count = finished.size) }
-            items(finished.take(20), key = { it.id }) { t ->
+            // LazyColumn only composes visible cards; do not silently hide older
+            // records (novel tasks can precede the just-completed manga task).
+            items(finished, key = { it.id }) { t ->
                 TaskCard(t, busy = false, onPause = null, onResume = null, onStop = null,
                     onDelete = {
                         scope.launch { doDelete(gateway, ep, t).let { actionMsg = it }; refresh() }
@@ -290,7 +346,7 @@ internal fun DownloadsScreen(
                 "小说任务与导出的完整操作仍在网页界面（/tasks_page）；" +
                     "此页只做队列状态与控制，不复制一套规则。",
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.outline,
+                color = WnColors.inkDim,
             )
         }
     }
@@ -310,8 +366,15 @@ private suspend fun doAction(
         val path = "/api/manga/download/$action?source=${android.net.Uri.encode(t.mangaSource)}" +
             "&cid=${android.net.Uri.encode(t.mangaComicId)}"
         val r = gateway.httpPost(ep.port, path)
+        if (r.ok && action == "resume") {
+            val result = runCatching { org.json.JSONObject(r.body) }.getOrNull()
+            return mangaResumeMessage(t.title, result?.opt("ok") == true,
+                result?.opt("resumed") == true, result?.optString("reason").orEmpty())
+        }
         return if (r.ok) "已请求${if (action == "pause") "暂停" else "继续"}：${t.title}"
-        else "操作失败：HTTP ${r.code}"
+        else "操作失败：" + (runCatching {
+            org.json.JSONObject(r.body).optString("error").ifBlank { "HTTP ${r.code}" }
+        }.getOrDefault("HTTP ${r.code}"))
     }
     val r = gateway.httpPost(ep.port, "/api/tasks/${android.net.Uri.encode(t.id)}/$action")
     return if (r.ok) "已请求${when (action) {
@@ -344,7 +407,7 @@ private fun TaskCard(
     onStop: (() -> Unit)?,
     onDelete: (() -> Unit)? = null,
 ) {
-    WnHairlineCard {
+    WnHairlineCard(modifier = Modifier.testTag("task_card_${if (t.isManga) t.mangaKey else t.id}")) {
         Column(Modifier.padding(WnSpace.md)) {
             Text(t.title.ifBlank { t.id }, style = MaterialTheme.typography.bodyMedium,
                  maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -356,7 +419,7 @@ private fun TaskCard(
                 color = when {
                     t.status == "error" || t.status == "stopped" -> WnColors.danger
                     t.running -> WnColors.accent
-                    t.status == "paused" -> WnColors.inkDim
+                    t.status == "paused" || t.status == "cancel" -> WnColors.inkDim
                     else -> WnColors.ok
                 },
             )
@@ -372,7 +435,7 @@ private fun TaskCard(
             if (t.current.isNotBlank()) {
                 Spacer(Modifier.height(WnSpace.xs))
                 Text(t.current, style = MaterialTheme.typography.labelSmall,
-                     color = MaterialTheme.colorScheme.outline, maxLines = 1,
+                     color = WnColors.inkDim, maxLines = 1,
                      overflow = TextOverflow.Ellipsis)
             }
             // 漫画任务的图片级进度（章级 x/y 之外的真实颗粒度；数据来自服务端）
@@ -380,7 +443,12 @@ private fun TaskCard(
                 Spacer(Modifier.height(2.dp))
                 Text("图片 ${t.imagesDone}/${t.imagesTotal}",
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.outline)
+                    color = WnColors.inkDim)
+            }
+            if (t.isManga && t.pendingChapters > 0) {
+                Text("待补 ${t.pendingChapters} 章 · 当前批完成后继续",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary)
             }
             // P1-1：为什么停了 —— 服务端给的结构化原因（用户停的 / 系统停的服务 /
             // 进程被结束 / 任务出错），不显示"未知状态"让用户猜
@@ -389,7 +457,7 @@ private fun TaskCard(
                 Text(
                     t.stopReason,
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.outline,
+                    color = WnColors.inkDim,
                     modifier = Modifier.testTag("task_stop_reason"),
                 )
                 if (t.checkpointLabel.isNotBlank()) {
@@ -397,7 +465,7 @@ private fun TaskCard(
                     Text(
                         "${t.checkpointLabel}（继续会从断点接着下）",
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.outline,
+                        color = WnColors.inkDim,
                         modifier = Modifier.testTag("task_checkpoint"),
                     )
                 }
@@ -408,7 +476,7 @@ private fun TaskCard(
                     if (onPause != null && t.running) {
                         OutlinedButton(onClick = onPause, enabled = !busy) { Text("暂停") }
                     }
-                    if (onResume != null && !t.running && t.resumable) {
+                    if (onResume != null && !t.needsDownloadRefresh() && t.resumable) {
                         OutlinedButton(onClick = onResume, enabled = !busy,
                             modifier = Modifier.testTag("task_resume")) { Text("继续") }
                     }

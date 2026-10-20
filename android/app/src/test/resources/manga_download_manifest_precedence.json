@@ -1,0 +1,15 @@
+{
+  "cases": [
+    {
+      "name": "download_manifest_wins_over_stale_cache_manifest",
+      "source": "jm",
+      "comic_id": "manifest-precedence-series",
+      "chapter_id": "chapter-1",
+      "chapter_name": "第1话",
+      "page_indices": [0, 1],
+      "downloads_expected_page_count": 2,
+      "cache_expected_page_count": 3,
+      "expected_complete": true
+    }
+  ]
+}

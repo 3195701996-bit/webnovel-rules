@@ -17,8 +17,8 @@ import java.io.File
  * 删除类操作的契约验收（之前几轮一直标为"未做"的那部分）：
  *
  *   - 小说：DELETE /api/books/<key> → 软删除（移入 trash），书架不再列出；
- *   - 漫画：DELETE /api/manga/library/<source>/<id> → 移除书库记录 + 源缓存 + 阅读历史，
- *     但**已下载的图片文件保留**（界面文案必须这么写，用例把这条行为钉住）；
+ *   - 漫画：DELETE /api/manga/library/<source>/<id> → 只移除书库关联，
+ *     **下载图片、阅读历史与收藏都保留**；
  *   - 任务：DELETE /api/tasks/manga_<source:id> 成功（未知任务空操作），
  *     小说任务不存在时必须 404（明确失败，不假装成功）；
  *   - 删除后用合成数据重建，验证删除不影响其它书。
@@ -97,10 +97,10 @@ class DeletePathTest {
         assertFalse("移除后书库不应再列出该漫画",
             EngineData.manga(gateway.httpText(ep.port, "/api/manga/library").body)
                 .any { it.comicId == comic.comicIdValue })
-        assertEquals("移除后该漫画的阅读历史应被清理", 0, comic.historyEntryCount())
-        // 这条是本轮界面文案的依据：服务端**不删** downloads 目录
+        assertEquals("移出书架后阅读历史必须保留", 1, comic.historyEntryCount())
+        // 移出书架不会删除 downloads、阅读历史与收藏，三种数据生命周期互相独立。
         assertTrue("已下载的图片文件应保留（界面文案据此说明）", imgBefore.isFile)
-        ev("漫画移除：书库与历史已清；已下载图片保留=${imgBefore.isFile}")
+        ev("漫画移除：书库项已移除；历史=${comic.historyEntryCount()}、图片保留=${imgBefore.isFile}")
 
         // 4) 又一次移除 → 仍然成功但 removed 为空（幂等，不报错也不假装删了东西）
         val delAgain = gateway.httpDelete(ep.port,

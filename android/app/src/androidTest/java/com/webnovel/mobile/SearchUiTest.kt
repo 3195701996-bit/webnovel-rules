@@ -1,13 +1,17 @@
 package com.webnovel.mobile
 
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollToIndex
+import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.swipeUp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.LargeTest
 import org.junit.Assert.assertTrue
@@ -76,7 +80,7 @@ class SearchUiTest {
         rule.onAllNodesWithText("← 返回")[0].performClick()
         waitText("搜漫画")
         rule.onNodeWithText("搜漫画").performClick()
-        waitText("漫画搜索")
+        waitText("发现漫画")
         rule.onNodeWithTag("manga_search_field").performTextInput("巨人")
         rule.onNodeWithTag("manga_search_btn").performClick()
         rule.waitUntil(180_000) {
@@ -97,12 +101,27 @@ class SearchUiTest {
             rule.waitUntil(180_000) {
                 rule.onAllNodesWithText("搜索中…").fetchSemanticsNodes().isEmpty()
             }
-            val more = rule.onAllNodesWithTag("manga_search_more").fetchSemanticsNodes().size
-            val noMore = rule.onAllNodesWithText("没有更多了", substring = true)
-                .fetchSemanticsNodes().size
-            assertTrue("分页状态必须明确（加载更多 或 没有更多了），当前 more=$more noMore=$noMore",
-                more + noMore > 0)
-            ev(if (more > 0) "漫画搜索：提供『加载更多』入口" else "漫画搜索：明确显示『没有更多了』")
+            val pager = rule.onAllNodesWithTag("manga_search_pager").fetchSemanticsNodes().size
+            assertTrue("有搜索结果时必须显示分页控制", pager > 0)
+            rule.onNodeWithTag("manga_search_pager").assertIsDisplayed()
+            ev("漫画搜索：分页控件在位（上一页/下一页状态与服务端 has_more 对齐）")
+
+            // 搜索条件与返回标题必须属于结果列表的同一滚动窗口，而不是固定在顶部挤占空间。
+            rule.onNodeWithTag("manga_search_field").assertIsDisplayed()
+            repeat(8) {
+                rule.onNodeWithTag("manga_search_results").performTouchInput { swipeUp() }
+            }
+            rule.waitUntil(5_000) {
+                runCatching { rule.onNodeWithTag("manga_search_field").assertIsNotDisplayed() }
+                    .isSuccess
+            }
+            rule.onNodeWithTag("manga_search_field").assertIsNotDisplayed()
+            rule.onNodeWithTag("manga_search_back").assertIsNotDisplayed()
+            ev("结果滚动时搜索栏和返回标题一同离开视口")
+
+            // 后续用例步骤需从页面顶部返回浏览页。
+            rule.onNodeWithTag("manga_search_results").performScrollToIndex(0)
+            rule.onNodeWithTag("manga_search_back").assertIsDisplayed()
         }
 
         // 4) 返回浏览页不崩溃
@@ -113,7 +132,7 @@ class SearchUiTest {
         // 5) P0-E：再次进入搜索页时，**查询词与结果必须还在**。
         //    过去状态在页面内 remember 里，离开页面即丢，用户每次返回都要重搜。
         rule.onNodeWithText("搜漫画").performClick()
-        waitText("漫画搜索")
+        waitText("发现漫画")
         val keywordBack = rule.onAllNodesWithText("巨人").fetchSemanticsNodes().size
         assertTrue("返回后查询词应仍在输入框里（实际匹配到 $keywordBack 处）", keywordBack > 0)
         val hitsBack = rule.onAllNodesWithTag("manga_search_results")

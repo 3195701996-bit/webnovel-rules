@@ -18,6 +18,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 import urllib.parse
 
 import pytest
@@ -32,6 +33,7 @@ IMG = b"\xff\xd8\xff\xe0" + b"P" * 2048            # 最小 JPEG 头 + 填充
 
 
 class _Handler(http.server.BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
     def do_GET(self):
         u = urllib.parse.urlparse(self.path)
         if u.path == "/img.jpg":
@@ -43,14 +45,17 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         elif u.path == "/hop":
             self.send_response(302)
             self.send_header("Location", "/img.jpg")
+            self.send_header("Content-Length", "0")
             self.end_headers()
         elif u.path == "/to-private":
             self.send_response(302)
             self.send_header("Location", "http://10.0.0.1/secret.jpg")
+            self.send_header("Content-Length", "0")
             self.end_headers()
         elif u.path == "/loop":
             self.send_response(302)
             self.send_header("Location", "/loop")
+            self.send_header("Content-Length", "0")
             self.end_headers()
         else:
             self.send_response(404)
@@ -128,9 +133,98 @@ def test_fallback_refuses_when_pin_unavailable(server, monkeypatch):
 
 def test_fallback_session_disables_env_proxy():
     """降级会话必须 trust_env=False：绑定语义要求直连，不能悄悄走环境/系统代理"""
-    sess = DL._requests_session()
+    sess, lock = DL._acquire_requests_session(timeout=1)
     assert sess.trust_env is False
-    assert DL._requests_session() is sess, "同线程应复用同一会话（保持 keep-alive）"
+    try:
+        assert sess in DL._req_session_pool
+    finally:
+        DL._release_requests_session(lock)
+
+
+def test_requests_pool_reuses_keepalive_across_calling_threads(server, fallback):
+    """Android requests 通道跨 API 请求复用连接，而非依赖同一工作线程。"""
+    import concurrent.futures
+
+    connection_ids = []
+    original = _Handler.do_GET
+
+    def observe(self):
+        connection_ids.append(id(self.connection))
+        return original(self)
+
+    _Handler.do_GET = observe
+    try:
+        def fetch_once(_):
+            return DL.fetch_image_checked(f"{server}/img.jpg", {}, timeout=5)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            first = pool.submit(fetch_once, 1).result(timeout=6)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            second = pool.submit(fetch_once, 2).result(timeout=6)
+        responses = [first, second]
+    finally:
+        _Handler.do_GET = original
+    assert all(r.status_code == 200 and r.content == IMG for r in responses)
+    assert len(fallback["pins"]) == 2
+    assert len(set(connection_ids)) == 1, "separate API threads failed to reuse keep-alive"
+
+
+def test_requests_pool_leases_are_exclusive_and_returned_after_failure(monkeypatch,
+                                                                      fallback):
+    """Pooled Session is never concurrently shared and failures return its lease."""
+    import concurrent.futures
+
+    monkeypatch.setattr(DL, "url_is_public_resolved", lambda u: (True, ""))
+    monkeypatch.setattr(DL, "pin_requests_session", lambda *a, **k: True)
+    entered = threading.Event()
+    release = threading.Event()
+    overlap = []
+    active_sessions = set()
+    guard = threading.Lock()
+
+    class BlockingSession:
+        trust_env = False
+
+        def __init__(self):
+            import requests
+            self.cookies = requests.cookies.RequestsCookieJar()
+            self.adapters = {}
+            self.proxies = {}
+
+        def get(self, *_args, **_kwargs):
+            with guard:
+                if id(self) in active_sessions:
+                    overlap.append(id(self))
+                active_sessions.add(id(self))
+                entered.set()
+            assert release.wait(2)
+            with guard:
+                active_sessions.remove(id(self))
+            raise RuntimeError("injected network failure")
+
+    sessions = [BlockingSession(), BlockingSession()]
+    locks = [threading.Lock(), threading.Lock()]
+    monkeypatch.setattr(DL, "_req_session_pool", sessions)
+    monkeypatch.setattr(DL, "_req_session_locks", locks)
+    errors = []
+
+    def request():
+        try:
+            DL._fetch_image_checked_requests("https://public.example/a.jpg", {}, 1)
+        except RuntimeError as exc:
+            errors.append(str(exc))
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(request)
+        assert entered.wait(1)
+        second = pool.submit(request)
+        time.sleep(0.05)
+        release.set()
+        first.result(timeout=2)
+        second.result(timeout=2)
+    assert not overlap
+    assert errors == ["injected network failure"] * 2
+    assert all(not lock.locked() for lock in locks)
 
 
 def test_curl_engine_still_preferred_when_available(server, monkeypatch):

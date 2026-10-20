@@ -55,6 +55,33 @@ def test_update_json_write_failure_propagates(tmp_path, monkeypatch):
         update_json(str(tmp_path / "p.json"), lambda d: {"x": 1}, {})
 
 
+def test_update_json_preserves_corrupt_original_before_rebuilding(tmp_path):
+    """损坏历史文件不能在下一次保存时无痕地被空状态覆盖。"""
+    p = tmp_path / "favorites.json"
+    original = b'{"manga:one": {"title": "keep"}, broken'
+    p.write_bytes(original)
+
+    saved = update_json(str(p), lambda data: {**(data or {}), "manga:two": {}}, {})
+
+    assert saved == {"manga:two": {}}
+    assert json.loads(p.read_text(encoding="utf-8")) == saved
+    assert (tmp_path / "favorites.json.corrupt").read_bytes() == original
+
+
+def test_update_json_refuses_to_overwrite_corrupt_file_if_preservation_fails(
+        tmp_path, monkeypatch):
+    p = tmp_path / "history.json"
+    original = b"not json"
+    p.write_bytes(original)
+    monkeypatch.setattr(AU.shutil, "copy2",
+                        lambda *_args: (_ for _ in ()).throw(OSError("denied")))
+    called = []
+    with pytest.raises(OSError, match="原件无法安全留存"):
+        update_json(str(p), lambda data: called.append(data) or {}, {})
+    assert called == []
+    assert p.read_bytes() == original
+
+
 # ── 并发：不同键的进度必须都保留 ─────────────────────────────
 
 def test_update_json_concurrent_distinct_keys_no_lost_update(tmp_path):
@@ -177,6 +204,36 @@ def test_manga_history_write_failure_returns_500(client, tmp_path, monkeypatch):
     assert _read_json(str(hist), {})["jm:1"]["idx"] == 5
 
 
+@pytest.mark.parametrize("original", [
+    b'{"jm:old": {"idx": 7, "read_chapter_ids": ["old-chapter"]}, broken',
+    b'[]',
+    b'null',
+])
+def test_manga_history_save_refuses_corrupt_or_wrong_root_without_replacing(
+        client, tmp_path, monkeypatch, original):
+    import server.manga_api as MA
+
+    hist = tmp_path / "history-protected.json"
+    hist.write_bytes(original)
+    monkeypatch.setattr(MA, "MANGA_HISTORY_FILE", str(hist))
+
+    response = client.post("/api/manga/history", json={
+        "source": "mangadex", "comic_id": "new-read",
+        "chapter_id": "new-chapter", "chapter_label": "第1话",
+        "idx": 0, "pos": "第1话 P1",
+    })
+
+    assert response.status_code == 503
+    assert response.get_json() == {
+        "ok": False, "recoverable": True,
+        "error": "阅读历史异常，原数据已保留；进度未保存，请先备份并修复历史文件",
+    }
+    assert hist.read_bytes() == original, "failed progress save must preserve exact history bytes"
+    if original.startswith(b'{') and b"broken" in original:
+        assert (tmp_path / "history-protected.json.corrupt").read_bytes() == original
+    assert not list(tmp_path.glob("*.tmp")), "failed validation must leave no temporary files"
+
+
 def test_manga_history_concurrent_saves_both_kept(client, tmp_path, monkeypatch):
     """端点级并发：两部漫画同时存进度，两条都必须保留"""
     import server.manga_api as MA
@@ -198,3 +255,38 @@ def test_manga_history_concurrent_saves_both_kept(client, tmp_path, monkeypatch)
     assert results == [200, 200]
     hist = _read_json(str(tmp_path / "hist.json"), {})
     assert "jm:100" in hist and "jm:200" in hist
+
+
+def test_manga_history_concurrent_chapter_saves_same_comic_keep_read_set(
+        client, tmp_path, monkeypatch):
+    """Two reader autosaves for different chapters must merge into one read set."""
+    import server.manga_api as MA
+
+    history_file = tmp_path / "same-comic-history.json"
+    monkeypatch.setattr(MA, "MANGA_HISTORY_FILE", str(history_file))
+    barrier = threading.Barrier(2)
+    results = []
+
+    def save(chapter_id, chapter_label):
+        barrier.wait(timeout=10)
+        response = client.post("/api/manga/history", json={
+            "source": "mangadex", "comic_id": "same-work",
+            "chapter_id": chapter_id, "chapter_label": chapter_label,
+            "idx": 0, "pos": f"{chapter_label} P1",
+        })
+        results.append(response.status_code)
+
+    threads = [
+        threading.Thread(target=save, args=("chapter-1", "第1话")),
+        threading.Thread(target=save, args=("chapter-2", "第2话")),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=30)
+
+    assert results == [200, 200]
+    saved = _read_json(str(history_file), {})["mangadex:same-work"]
+    assert set(saved["read_chapter_ids"]) == {"chapter-1", "chapter-2"}
+    assert {row["id"] for row in saved["read_chapters"]} == {
+        "chapter-1", "chapter-2"}

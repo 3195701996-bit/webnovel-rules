@@ -53,3 +53,31 @@ def test_failed_count_keeps_truly_missing(tmp_path):
     chs = _make_book(d, with_cache=False)
     live = na._failed_live(d, {chs[2]["url"]: "真的没拿到"})
     assert list(live) == [chs[2]["url"]], f"真正缺失的章被吞掉了：{live}"
+
+
+def test_detail_recovered_chapter_has_no_stale_failure():
+    import app
+    import server.novel_api as na
+    d = os.path.join(na.BOOKS_DIR, "src_recovered_detail")
+    _make_book(d, with_cache=True)
+    body = app.app.test_client().get("/api/books/src_recovered_detail").get_json()
+    assert body["failed_count"] == 0
+    assert body["chapters"][2]["downloaded"] is True
+    assert body["chapters"][2]["failed"] is False
+    assert body["chapters"][2]["failed_reason"] == ""
+
+
+def test_shelf_and_detail_failure_counts_follow_same_disk_truth():
+    import app
+    import server.novel_api as na
+    key = "src_shelf_recovered"
+    directory = os.path.join(na.BOOKS_DIR, key)
+    chapters = _make_book(directory, with_cache=True)
+    client = app.app.test_client()
+    for expected in (0, 1):
+        if expected:
+            os.remove(os.path.join(directory, cache_key_of(chapters[2]["url"]) + ".cache"))
+        detail = client.get(f"/api/books/{key}").get_json()
+        shelf = client.get("/api/books").get_json()["books"]
+        book = next(row for row in shelf if row["key"] == key)
+        assert book["failed"] == detail["failed_count"] == expected

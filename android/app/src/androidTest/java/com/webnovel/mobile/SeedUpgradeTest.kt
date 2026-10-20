@@ -5,11 +5,13 @@ import androidx.test.filters.LargeTest
 import androidx.test.platform.app.InstrumentationRegistry
 import org.json.JSONArray
 import org.json.JSONObject
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
+import java.io.IOException
 import java.security.MessageDigest
 
 /**
@@ -74,6 +76,55 @@ class SeedUpgradeTest {
             .put("bookSourceName", "跨版本源")
             .put("searchUrl", rule)
             .put("enabled", enabled).toString()).toByteArray(Charsets.UTF_8)
+
+    @Test
+    fun interruptedAtomicWrite_preservesPreviousSourceAndAllowsRetry() {
+        val d = freshDir()
+        try {
+            val name = "atomic-source.json"
+            val file = File(d, name)
+            val previous = source("/previous/search")
+            val next = source("/next/search")
+            file.writeBytes(previous)
+            val manifest = fakeManifest(name, sha(next), sha(previous),
+                enabledByDefault = true, revision = "atomic-retry")
+            var injected = false
+
+            val firstPass = BundledSources.applySeed(
+                ctx, d, manifestText = manifest,
+                assetReader = { asset -> if (asset == name) next else null },
+                fileWriter = { target, payload ->
+                    if (target == file && !injected) {
+                        injected = true
+                        BundledSources.writeAtomically(target, payload) { stream, bytes ->
+                            stream.write(bytes, 0, bytes.size / 2)
+                            throw IOException("injected process/write interruption")
+                        }
+                    } else {
+                        BundledSources.writeAtomically(target, payload)
+                    }
+                }
+            )
+
+            assertTrue("seed merge must attempt to update the old factory source", injected)
+            assertEquals("失败写入不应计入已成功变更", 0, firstPass)
+            assertArrayEquals("failed replacement must restore the original bytes",
+                previous, file.readBytes())
+            assertTrue("失败的合并不能写入成功标记",
+                !File(d, ".seed-applied").exists())
+
+            val retry = BundledSources.applySeed(ctx, d, manifestText = manifest,
+                assetReader = { asset -> if (asset == name) next else null })
+            assertEquals("下次启动应能完成规则升级", 1, retry)
+            assertArrayEquals("a later startup retry must install the full new file",
+                next, file.readBytes())
+            assertEquals("retried source must remain valid JSON",
+                "/next/search", JSONObject(file.readText(Charsets.UTF_8)).optString("searchUrl"))
+            ev("半写失败后旧源字节完整保留；再次启动写入成功")
+        } finally {
+            d.deleteRecursively()
+        }
+    }
 
     @Test
     fun crossVersionMerge_upgradesRules_keepsUserEdits_andIsIdempotent() {

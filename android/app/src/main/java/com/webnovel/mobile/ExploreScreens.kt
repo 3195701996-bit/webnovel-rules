@@ -2,10 +2,15 @@
 
 package com.webnovel.mobile
 
+import androidx.activity.compose.BackHandler
+
 import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,6 +31,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -52,6 +58,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.ImageLoader
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.util.concurrent.atomic.AtomicLong
 import org.json.JSONObject
 
 /**
@@ -85,7 +94,10 @@ internal fun ExploreScreen(
     var page by rememberSaveable { mutableIntStateOf(1) }
     var error by rememberSaveable { mutableStateOf("") }
     var msg by rememberSaveable { mutableStateOf("") }
-    val scope = rememberCoroutineScope()
+    // UI continuations must resume on the Android main looper, including under
+    // instrumentation's frame-clock/continuation interceptor.
+    val scope = rememberCoroutineScope { Dispatchers.Main.immediate }
+    val bookRequestGeneration = remember { AtomicLong() }
 
     val (sources, counts) = remember(sourcesBody) {
         if (sourcesBody.isBlank()) emptyList<ExploreSource>() to (0 to 0)
@@ -107,6 +119,7 @@ internal fun ExploreScreen(
     // 选中的漫画分类（源 + 分类）：同样按"标识"保存，非空时进入独立结果视图。
     // 不做成"结果追加在当前列表下方"——19 个分类按钮之后的结果等于没显示。
     var mangaSelSrc by rememberSaveable { mutableStateOf("") }
+    var categorySourceKey by rememberSaveable { mutableStateOf("") }
     var mangaSelCat by rememberSaveable { mutableStateOf("") }
     val mangaSel: Pair<EngineData.MangaBrowseSource, ExploreCategory>? =
         remember(mangaSources, mangaSelSrc, mangaSelCat) {
@@ -131,13 +144,20 @@ internal fun ExploreScreen(
         loading = false
     }
     // 已有清单就不再重拉（返回时不能被一次刷新盖掉）；需要最新时用「重试/刷新」
-    LaunchedEffect(ep) { if (sourcesBody.isBlank()) loadSources() else loading = false }
+    LaunchedEffect(ep) {
+        withContext(Dispatchers.Main.immediate) {
+            if (sourcesBody.isBlank()) loadSources() else loading = false
+        }
+    }
 
     fun loadBooks(src: ExploreSource, cat: ExploreCategory, nextPage: Int) {
+        val generation = bookRequestGeneration.incrementAndGet()
         scope.launch {
             loadingBooks = true; error = ""; msg = ""
             val r = gateway.httpText(ep.port,
                 "/api/explore?source=${Uri.encode(src.uid)}&url=${Uri.encode(cat.url)}&page=$nextPage")
+            if (generation != bookRequestGeneration.get() ||
+                currentUid != src.uid || categoryUrl != cat.url) return@launch
             if (!r.ok) {
                 val why = runCatching { JSONObject(r.body).optString("error") }.getOrDefault("")
                 error = "读取榜单失败：HTTP ${r.code}" + if (why.isNotBlank()) " · $why" else ""
@@ -155,6 +175,21 @@ internal fun ExploreScreen(
         }
     }
 
+    fun navigateBack() {
+        bookRequestGeneration.incrementAndGet()
+        loadingBooks = false
+        error = ""; msg = ""
+        when {
+            mangaSelSrc.isNotBlank() -> { mangaSelSrc = ""; mangaSelCat = "" }
+            categoryUrl.isNotBlank() -> { categoryUrl = ""; bookPages = arrayListOf() }
+            currentUid.isNotBlank() -> currentUid = ""
+            else -> onBack()
+        }
+    }
+    BackHandler(enabled = mangaSelSrc.isNotBlank() || categoryUrl.isNotBlank() || currentUid.isNotBlank()) {
+        navigateBack()
+    }
+
     Scaffold(topBar = {
         TopAppBar(
             title = {
@@ -170,14 +205,7 @@ internal fun ExploreScreen(
                 )
             },
             navigationIcon = {
-                IconButton(onClick = {
-                    when {
-                        mangaSel != null -> { mangaSelSrc = ""; mangaSelCat = "" }
-                        categoryUrl.isNotBlank() -> { categoryUrl = ""; bookPages = arrayListOf() }
-                        current != null -> currentUid = ""
-                        else -> onBack()
-                    }
-                }) {
+                IconButton(onClick = { navigateBack() }) {
                     Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                 }
             },
@@ -222,7 +250,7 @@ internal fun ExploreScreen(
                 category != null -> Column(Modifier.fillMaxSize()) {
                     if (msg.isNotBlank()) {
                         Text(msg, style = MaterialTheme.typography.labelMedium,
-                             color = MaterialTheme.colorScheme.outline,
+                             color = WnColors.inkDim,
                              modifier = Modifier.padding(WnSpace.md))
                     }
                     if (loadingBooks && books.isEmpty()) {
@@ -245,7 +273,7 @@ internal fun ExploreScreen(
                                                     b.lastChapter.takeIf { it.isNotBlank() },
                                                 ).joinToString(" · ").ifBlank { b.sourceName },
                                                 style = MaterialTheme.typography.labelSmall,
-                                                color = MaterialTheme.colorScheme.outline,
+                                                color = WnColors.inkDim,
                                                 maxLines = 1, overflow = TextOverflow.Ellipsis)
                                         }
                                         OutlinedButton(onClick = {
@@ -272,22 +300,10 @@ internal fun ExploreScreen(
                     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(WnSpace.md)) {
                         Text("${src.name} · ${src.categories.size} 个分类",
                              style = MaterialTheme.typography.labelMedium,
-                             color = MaterialTheme.colorScheme.outline)
+                             color = WnColors.inkDim)
                         Spacer(Modifier.height(WnSpace.sm))
-                        src.categories.forEach { c ->
-                            // 分组标题只在首次出现时显示（源自己的分组结构照原样）
-                            val idx = src.categories.indexOf(c)
-                            if (c.group.isNotBlank() &&
-                                (idx == 0 || src.categories[idx - 1].group != c.group)) {
-                                Text(c.group, style = MaterialTheme.typography.titleSmall,
-                                     fontWeight = FontWeight.Bold,
-                                     modifier = Modifier.padding(top = WnSpace.sm, bottom = WnSpace.xs))
-                            }
-                            OutlinedButton(
-                                onClick = { categoryUrl = c.url; loadBooks(src, c, 1) },
-                                modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
-                                contentPadding = PaddingValues(vertical = 6.dp),
-                            ) { Text(c.title, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                        NovelCategoryMenu(src.categories, src.uid) { c ->
+                            categoryUrl = c.url; loadBooks(src, c, 1)
                         }
                     }
                 }
@@ -303,65 +319,59 @@ internal fun ExploreScreen(
                             "当前 ${counts.first} 个内置源里只有 ${counts.second} 个声明了探索规则。" +
                             "没有数据的源不会被编造出榜单。",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.outline,
+                        color = WnColors.inkDim,
                     )
                     if (mangaNote.second.isNotBlank()) {
                         Spacer(Modifier.height(6.dp))
                         Text("漫画侧：" + mangaNote.second,
                              style = MaterialTheme.typography.bodySmall,
-                             color = MaterialTheme.colorScheme.outline)
+                             color = WnColors.inkDim)
                     }
                 }
                 else -> LazyColumn(Modifier.fillMaxSize().testTag("explore_sources"),
                     contentPadding = PaddingValues(WnSpace.md),
                     verticalArrangement = Arrangement.spacedBy(WnSpace.sm)) {
-                    item {
-                        Text(
-                            "漫画：" + (if (mangaNote.first) "见下方漫画分类"
-                                       else mangaNote.second.ifBlank { "当前不提供探索" }),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.outline,
-                        )
-                        Spacer(Modifier.height(WnSpace.xs))
-                        Text(
-                            "小说：${counts.second} / ${counts.first} 个内置源提供榜单或分类；" +
-                                "其余源不提供，不做假榜单。",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.outline,
-                        )
-                    }
                     if (mangaSources.isNotEmpty()) {
                         item {
                             Spacer(Modifier.height(WnSpace.xs))
-                            Text("漫画分类（来自适配器自己声明的排名/分类）",
+                            Text("漫画分类",
                                  style = MaterialTheme.typography.titleSmall,
                                  fontWeight = FontWeight.Bold)
                         }
-                        items(mangaSources, key = { "manga_src_" + it.key }) { ms ->
-                            Column(Modifier.fillMaxWidth().padding(top = 6.dp)) {
-                                Text("${ms.name} · ${ms.categories.size} 个入口",
-                                     style = MaterialTheme.typography.bodyMedium,
-                                     fontWeight = FontWeight.Medium)
-                                // 分组标题由适配器自己声明（排行/分类），只在变化处显示
-                                ms.categories.forEachIndexed { idx, c ->
-                                    if (c.group.isNotBlank() &&
-                                        (idx == 0 || ms.categories[idx - 1].group != c.group)) {
-                                        Text(c.group,
-                                             style = MaterialTheme.typography.labelMedium,
-                                             color = MaterialTheme.colorScheme.outline,
-                                             modifier = Modifier.padding(top = 6.dp, bottom = 2.dp))
-                                    }
-                                    OutlinedButton(
-                                        onClick = { mangaSelSrc = ms.key; mangaSelCat = c.url },
-                                        // 分类按钮带稳定 testTag（<源key>_<分类key>）：
-                                        // 界面验收要能精确点到某个分类，而不是靠文字猜
-                                        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)
-                                            .testTag("manga_cat_" + ms.key + "_" + c.url),
-                                        contentPadding = PaddingValues(vertical = 6.dp),
-                                    ) { Text(c.title, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                        item {
+                            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                mangaSources.forEach { source ->
+                                    FilterChip(
+                                        selected = source.key == (categorySourceKey.ifBlank { mangaSources.first().key }),
+                                        onClick = { categorySourceKey = source.key },
+                                        label = { Text(source.name) },
+                                        modifier = Modifier.testTag("category_source_" + source.key),
+                                    )
                                 }
                             }
                         }
+                        val selectedSource = mangaSources.firstOrNull { it.key == categorySourceKey }
+                            ?: mangaSources.first()
+                        item(key = "manga_src_" + selectedSource.key) {
+                            val ms = selectedSource
+                            Column(Modifier.fillMaxWidth().padding(top = 6.dp)) {
+                                Text(ms.name,
+                                     style = MaterialTheme.typography.titleLarge,
+                                     fontWeight = FontWeight.Medium)
+                                ms.categories.groupBy { it.group.ifBlank { "分类" } }.forEach { (group, categories) ->
+                                    Text(group, style = MaterialTheme.typography.titleMedium,
+                                        modifier = Modifier.padding(top = 24.dp, bottom = 12.dp))
+                                    CategoryButtons(categories, ms.key) { c ->
+                                        mangaSelSrc = ms.key; mangaSelCat = c.url
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if (sources.isNotEmpty()) {
+                        item { Text("小说榜单", style = MaterialTheme.typography.titleMedium,
+                            modifier = Modifier.padding(top = 24.dp)) }
                     }
                     items(sources, key = { it.uid + "|" + it.name }) { s ->
                         Card(Modifier.fillMaxWidth().clickable { currentUid = s.uid }) {
@@ -374,13 +384,53 @@ internal fun ExploreScreen(
                                         if (!s.enabled) "（该源当前已停用）" else null,
                                     ).joinToString(" · "),
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.outline,
+                                    color = WnColors.inkDim,
                                 )
                             }
                         }
                     }
                 }
             }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+internal fun NovelCategoryMenu(categories: List<ExploreCategory>, source: String,
+                              onSelect: (ExploreCategory) -> Unit) {
+    // Keep contiguous source groups and exact entry order, including repeated
+    // labels/URLs. Do not merge separated sections or deduplicate distinct links.
+    var start = 0
+    while (start < categories.size) {
+        val group = categories[start].group
+        var end = start + 1
+        while (end < categories.size && categories[end].group == group) end++
+        if (group.isNotBlank()) {
+            Text(group, style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(top = WnSpace.md, bottom = WnSpace.sm))
+        }
+        CategoryButtons(categories.subList(start, end), source,
+            tagPrefix = "novel_cat_${source}_", onSelect = onSelect)
+        start = end
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+internal fun CategoryButtons(categories: List<ExploreCategory>, source: String,
+                            tagPrefix: String = "manga_cat_" + source + "_",
+                            onSelect: (ExploreCategory) -> Unit) {
+    FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        categories.forEach { category ->
+            androidx.compose.material3.FilledTonalButton(
+                onClick = { onSelect(category) },
+                shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+                modifier = Modifier.testTag(tagPrefix + category.url),
+                contentPadding = PaddingValues(horizontal = 18.dp, vertical = 12.dp),
+            ) { Text(category.title) }
         }
     }
 }
@@ -408,22 +458,36 @@ internal fun MangaBrowseResultsScreen(
     var page by rememberSaveable(src.key, cat.url) { mutableIntStateOf(1) }
     var loading by remember { mutableStateOf(true) }
     var more by remember { mutableStateOf(false) }
+    var region by rememberSaveable(src.key, cat.url) { mutableStateOf("") }
+    var status by rememberSaveable(src.key, cat.url) { mutableStateOf("") }
+    var ordering by rememberSaveable(src.key, cat.url) {
+        mutableStateOf(Uri.parse("https://local/?${cat.url}").getQueryParameter("ordering") ?: "-datetime_updated")
+    }
+    val filterKey = "$region|$status|$ordering"
+    var currentFilter by remember { mutableStateOf(filterKey) }
+    currentFilter = filterKey
     val scope = rememberCoroutineScope()
 
-    val hits: List<MangaSearchHit> = remember(pages.size) {
+    val hits: List<MangaSearchHit> = remember(pages) {
         pages.fold(emptyList<MangaSearchHit>()) { acc, body ->
             val (h, _) = EngineData.mangaSearch(body)
             val seen = acc.map { it.source + ":" + it.comicId }.toSet()
             acc + h.filter { (it.source + ":" + it.comicId) !in seen }
         }
     }
+    val lastPage = pages.lastOrNull()?.let { runCatching { JSONObject(it) }.getOrNull() }
+    val totalPages = lastPage?.optInt("total_pages", 0) ?: 0
+    val hasMore = lastPage?.optBoolean("has_more", true) ?: true
 
     suspend fun load(nextPage: Int) {
+        val requestedFilter = currentFilter
         if (nextPage == 1) loading = true else more = true
         error = ""
         val r = gateway.httpText(ep.port,
             "/api/manga/browse?source=${Uri.encode(src.key)}" +
-                "&category=${Uri.encode(cat.url)}&page=$nextPage")
+                "&category=${Uri.encode(cat.url)}&page=$nextPage" +
+                if (src.key == "copymanga") "&region=$region&status=$status&ordering=${Uri.encode(ordering)}" else "")
+        if (requestedFilter != currentFilter) return
         if (!r.ok) {
             val why = runCatching { JSONObject(r.body).optString("error") }.getOrDefault("")
             error = "读取分类失败：HTTP ${r.code}" + if (why.isNotBlank()) " · $why" else ""
@@ -439,15 +503,52 @@ internal fun MangaBrowseResultsScreen(
     // 已有结果（从详情返回时）就不再重拉：否则"返回恢复"立刻被一次网络刷新盖掉
     LaunchedEffect(src.key, cat.url) { if (pages.isEmpty()) load(1) else loading = false }
 
+    fun changeFilter(key: String, value: String) {
+        when (key) {
+            "region" -> region = value
+            "status" -> status = value
+            else -> ordering = value
+        }
+        currentFilter = "$region|$status|$ordering"
+        pages = arrayListOf(); page = 1; error = ""; more = false
+        scope.launch { load(1) }
+    }
+
     Column(Modifier.fillMaxSize()) {
+        if (src.key == "copymanga") {
+            // Collapse controls into one menu so a small phone retains room for results.
+            var expanded by remember { mutableStateOf(false) }
+            Box(Modifier.padding(horizontal = WnSpace.md)) {
+                OutlinedButton(onClick = { expanded = !expanded }, modifier = Modifier.testTag("browse_filters")) {
+                    Text("筛选与排序")
+                }
+                androidx.compose.material3.DropdownMenu(expanded, onDismissRequest = { expanded = false }) {
+                    val groups = listOf(
+                        Triple("region", region, listOf("" to "全部地区", "0" to "日漫", "1" to "韩漫", "2" to "美漫")),
+                        Triple("status", status, listOf("" to "全部状态", "0" to "连载中", "1" to "已完结", "2" to "短篇")),
+                        Triple("ordering", ordering, listOf("-datetime_updated" to "时间倒序", "datetime_updated" to "时间正序", "-popular" to "热度倒序", "popular" to "热度正序")),
+                    )
+                    groups.forEach { (key, selected, options) ->
+                        options.forEach { (value, label) ->
+                            androidx.compose.material3.DropdownMenuItem(
+                                text = { Text((if (selected == value) "✓ " else "") + label) },
+                                onClick = { expanded = false; changeFilter(key, value) },
+                                modifier = Modifier.testTag("browse_filter_${key}_$value"),
+                            )
+                        }
+                        androidx.compose.material3.HorizontalDivider()
+                    }
+                }
+            }
+        }
         Text(
             listOfNotNull(
                 "${src.name} · ${cat.title}",
                 if (hits.isNotEmpty()) "${hits.size} 部" else null,
-                if (hits.isNotEmpty()) "第 $page 页" else null,
+                if (hits.isNotEmpty()) "第 $page${if (totalPages > 0) " / $totalPages" else ""} 页" else null,
             ).joinToString(" · "),
             style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.outline,
+            color = WnColors.inkDim,
             modifier = Modifier.padding(start = WnSpace.md, top = WnSpace.sm, end = WnSpace.md)
                 .testTag("manga_browse_caption"),
         )
@@ -463,7 +564,7 @@ internal fun MangaBrowseResultsScreen(
             hits.isEmpty() -> Text(
                 "「${cat.title}」本次没有取到内容（源站可能暂时不可达，稍后再试）。",
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.outline,
+                color = WnColors.inkDim,
                 modifier = Modifier.padding(WnSpace.lg),
             )
             else -> LazyColumn(Modifier.fillMaxSize().testTag("manga_browse_list"),
@@ -483,9 +584,9 @@ internal fun MangaBrowseResultsScreen(
                 item {
                     Row(horizontalArrangement = Arrangement.spacedBy(WnSpace.sm),
                         modifier = Modifier.padding(top = 6.dp)) {
-                        OutlinedButton(enabled = !more, onClick = {
+                        OutlinedButton(enabled = !more && hasMore, onClick = {
                             scope.launch { load(page + 1) }
-                        }) { Text(if (more) "加载中…" else "加载更多") }
+                        }) { Text(if (more) "加载中…" else if (!hasMore) "已到末页" else "加载更多") }
                     }
                 }
                 if (error.isNotBlank()) {
@@ -535,7 +636,7 @@ private fun MangaBrowseCard(
                 h.sourceName.takeIf { it.isNotBlank() },
             ).joinToString(" · "),
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.outline,
+            color = WnColors.inkDim,
             maxLines = 1, overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(horizontal = WnSpace.sm, vertical = 2.dp),
         )

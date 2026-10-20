@@ -130,6 +130,14 @@ class TestEtaFix:
     def test_unknown_rate_marks_eta_none(self):
         assert 't["eta"] = int(rem / rate) if rate > 0 else None' in DL_MANAGER
 
+    def test_speed_and_eta_update_during_long_chapter(self):
+        start = DL_MANAGER.index('_t["images_done"] = _t.get("images_done", 0) + 1')
+        end = DL_MANAGER.index("# 速度/ETA（每次章节后更新", start)
+        in_flight = DL_MANAGER[start:end]
+        assert "_sample_image_speed(" in in_flight
+        assert "self._speed_samples.setdefault(" in in_flight
+        assert 'self._speed_samples.pop(key, None)' in DL_MANAGER
+
     def test_frontend_unknown_eta_shows_estimating(self):
         # 前端：ETA 未知显示"估算中"
         assert "估算中" in TASKS
@@ -213,8 +221,9 @@ class TestCoverLazyLoading:
     def test_library(self):
         # 封面地址：cover_view（服务器封面接口，本地优先/离线可看）优先，
         # 回退到原源站 URL
-        m = re.search(r'<img src="\$\{esc\(c\.cover_view \|\| c\.cover[^>]*>', LIBRARY)
+        m = re.search(r'<img class="manga-library-cover" src="\$\{esc\(c\.cover_view \|\| c\.cover[^>]*>', LIBRARY)
         assert m and 'loading="lazy"' in m.group(0) and 'decoding="async"' in m.group(0)
+        assert 'alt="${esc(c.title || \'漫画\')}封面"' in m.group(0)
 
     def test_novel_detail(self):
         m = re.search(r"cv\.innerHTML = '<img src=\"' \+ esc\(d\.cover\) \+ '\" ([^']*)'", NOVEL_DETAIL)

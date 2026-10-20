@@ -32,6 +32,8 @@ class ReaderPathTest {
 
     @Before
     fun setUp() {
+        assertTrue("Synthetic reader fixtures are forbidden on physical devices",
+            Shell.run("getprop ro.kernel.qemu").trim() == "1")
         val ctx = InstrumentationRegistry.getInstrumentation().targetContext
         book = SelfTestBook()
         book.create()
@@ -43,6 +45,7 @@ class ReaderPathTest {
 
     @After
     fun tearDown() {
+        if (!::book.isInitialized) return
         runCatching { runBlocking { gateway.stopEngine() } }
         book.cleanup()
         assertFalse("自检书目录未清理干净", book.exists())

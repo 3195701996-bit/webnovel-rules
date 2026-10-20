@@ -41,9 +41,14 @@ ENDPOINTS = {
     "storageUsage":  ("GET", "/api/storage", ""),
     "backupScope":   ("GET", "/api/backup/scope", ""),
     "manga":         ("GET", "/api/manga/library", "comics"),
+    "mangaLocalMedia": ("GET", "/api/manga/mangadex/local-contract/local-media", ""),
     "sources":       ("GET", "/api/manga/sources", "sources"),
     "bookSources":   ("GET", "/api/sources", "sources"),
     "mangaHistory":  ("GET", "/api/manga/history", ""),
+    "mangaFavorites": ("GET", "/api/manga/favorites", "favorites"),
+    "mangaFavoritesOrNull": ("GET", "/api/manga/favorites", "favorites"),
+    "mangaFavoriteCheckStart": ("POST", "/api/manga/favorites/check-updates", ""),
+    "mangaFavoriteCheckStatus": ("GET", "/api/manga/favorites/check-updates/status", ""),
     "readProgress":  ("GET", "/api/books/{book}/progress", ""),
     "chapter":       ("GET", "/api/books/{book}/chapter/1", ""),
     "verifications": ("GET", "/api/sources/verify/results", "items"),
@@ -70,6 +75,9 @@ ENDPOINTS = {
 COVERED_ELSEWHERE = {
     "engineSummary": "走「原生状态通道核对」一节（/__mobile/status 是移动入口的 WSGI 包装层，"
                      "不经 Flask 路由，test_client 到不了），那一节按它的需求逐条溯源",
+    "httpErrorMessage": "纯错误文案格式化器，不解析服务端字段契约；HTTP 状态映射由 "
+                        "android/app/src/test/.../HttpErrorMessageTest.kt 单元测试覆盖",
+    "canonical": "漫画来源身份归一化的纯字符串 helper（不是 body/JSON 响应解析器）",
 }
 
 SKIPPED_PARSERS = {
@@ -96,6 +104,8 @@ CONDITIONAL = {
         "tasks[].progress.images_done": "只有**漫画**任务的 progress 带图片级进度"
                                         "（下载管理器写的）；小说任务没有",
         "tasks[].progress.images_total": "同上（漫画下载才统计图片总数）",
+        "tasks[].progress.pending_chapters": "仅漫画任务有追加批次；小说没有此字段。"
+            "真实漫画响应另由 test_tasks_exposes_pending_count_separately_from_current_batch 核验",
     },
     "/api/backup/scope": {
         "include[].what": "include/exclude 数组元素键；由 inc/exclude 变量间接读出，工具按元素层核对",
@@ -112,6 +122,9 @@ CONDITIONAL = {
     },
     "/api/manga/sources": {
         "sources[].failed_stage": "仅当最近一次实测**失败**时才有失败阶段",
+    },
+    "/api/manga/favorites": {
+        "recoverable": "仅在收藏或阅读历史文件损坏、服务端拒绝返回收藏列表时为 true；正常响应中省略",
     },
     "/api/manga/search": {
         "results[].id": "仅当 results[] 元素**没有** sources[] 数组时走旧形态兼容分支（客户端源码里那一段），"
@@ -138,8 +151,8 @@ _DEFAULT = r'(?:\s*,\s*[^()]*(?:\([^()]*\)[^()]*)*)?'
 # 一条"链"：base 变量 + 若干段 .optXxx("k") / .optXxx("k", 默认值)
 CHAIN = re.compile(
     r'([A-Za-z_][A-Za-z0-9_]*)\s*\??\.\s*'
-    r'((?:opt(?:' + OPT_TYPES + r')\s*\(\s*' + _ARG + _DEFAULT + r'\s*\)\s*\??\.?\s*)+)')
-SEG = re.compile(r'opt(' + OPT_TYPES + r')\s*\(\s*' + _ARG + _DEFAULT + r'\s*\)')
+    r'((?:opt(?:' + OPT_TYPES + r')?\s*\(\s*' + _ARG + _DEFAULT + r'\s*\)\s*\??\.?\s*)+)')
+SEG = re.compile(r'opt(' + OPT_TYPES + r')?\s*\(\s*' + _ARG + _DEFAULT + r'\s*\)')
 ROOT_VAR = re.compile(r'val\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:runCatching\s*\{[^}]*\})?'
                       r'[^\n]*JSONObject\s*\(\s*body\s*\)')
 
@@ -275,8 +288,12 @@ def parse_requirements(fn_name):
                 # 找一个不存在的数组 → 报"该夹具未构造该状态"（看起来像跳过，其实漏检）。
                 if lv[0] == "object":
                     lv = ("array", f"{lv[1]}.{key}")
-                elif lv[0] == "array" and len(lv) > 2:
-                    lv = ("array", f"{lv[1]}.{lv[2]}.{key}")
+                elif lv[0] == "array":
+                    # 数组元素内部取出的数组本身也是一个字段，既检查该键存在，
+                    # 又把后续元素解析继续放在这个嵌套路径下。
+                    prefix = f"{lv[2]}." if len(lv) > 2 and lv[2] else ""
+                    add_array(lv[1], f"{prefix}{key}")
+                    lv = ("array", f"{lv[1]}.{prefix}{key}")
                 else:
                     lv = ("array", key)
             else:
@@ -458,6 +475,13 @@ def main():
     # 写一条阅读进度：/progress 只有存在记录时才返回 idx/pct/name
     c.post("/api/books/src_deadbeef/progress",
            json={"idx": 2, "pct": 30, "name": "第2章"})
+    # 漫画历史包含完整“曾读章节身份集合”，不是只有当前 idx；确保响应字段契约
+    # 在有真实历史行的状态下检查，而不因默认空数组漏掉 read_chapter_ids。
+    c.post("/api/manga/history", json={
+        "source": "contract-fixture", "comic_id": "read-set-fixture",
+        "idx": 2, "chapter_id": "chapter-3", "chapter_label": "第3话",
+        "pos": "第3话 P4", "title": "契约漫画",
+    })
 
     # 造一条**能用真实源**的小说任务：源 uid 不存在时任务会立刻失败，
     # progress 里就没有 current/total —— 那样核对出来的"缺失"是夹具问题，不是漂移。

@@ -83,6 +83,20 @@ def test_local_cover_served_offline(env):
     assert r2.data == b""
 
 
+@pytest.mark.parametrize("source,stored", [("copymanga", "copymanga_web"),
+                                          ("copymanga_web", "copymanga")])
+@pytest.mark.parametrize("root_name", ["dl", "cache"])
+def test_local_cover_resolves_copy_storage_aliases(env, monkeypatch, source, stored, root_name):
+    directory = env[root_name] / stored / CID
+    directory.mkdir(parents=True)
+    (directory / "cover.jpg").write_bytes(JPEG)
+    def forbidden(*args, **kwargs):
+        pytest.fail("existing alias cover must never use the network")
+    monkeypatch.setattr(env["ma"], "_fetch_cover_to_local", forbidden)
+    response = env["c"].get(_cover_url(source) + "?catalog=local")
+    assert response.status_code == 200 and response.data == JPEG
+
+
 def test_local_cover_in_downloads_dir_preferred(env):
     """已下载漫画的封面放在 downloads 目录，离线同样直出"""
     p = os.path.join(str(env["dl"]), SRC, CID, "cover.webp")
@@ -108,6 +122,38 @@ def test_no_local_no_remote_returns_404(env):
     r = env["c"].get(_cover_url())
     assert r.status_code == 404
     assert r.get_json().get("error")
+
+
+def test_local_catalog_cover_never_fetches_remote(env, monkeypatch):
+    env["set_lib"]([{"source": SRC, "comic_id": CID,
+                     "cover": "https://cdn.invalid.example/cover.jpg"}])
+    def forbidden(*args, **kwargs):
+        pytest.fail("local cover must not fetch remote metadata or images")
+    monkeypatch.setattr(env["ma"], "_library_cover_url", forbidden)
+    monkeypatch.setattr(env["ma"], "_fetch_cover_to_local", forbidden)
+    response = env["c"].get(_cover_url() + "?catalog=local")
+    assert response.status_code == 404
+    (env["dl"] / SRC / CID / "cover.jpg").write_bytes(JPEG)
+    response = env["c"].get(_cover_url() + "?catalog=local")
+    assert response.status_code == 200 and response.data == JPEG
+
+
+def test_favorites_expose_local_cover_without_overwriting_original(env, monkeypatch):
+    fav = env["tmp"] / "favorites.json"
+    history = env["tmp"] / "history.json"
+    remote = "https://cdn.invalid.example/cover.jpg"
+    fav.write_text(json.dumps({f"{SRC}:{CID}": {"title": "test", "cover": remote}}))
+    history.write_text("{}")
+    monkeypatch.setattr(env["ma"], "MANGA_FAV_FILE", str(fav))
+    monkeypatch.setattr(env["ma"], "MANGA_HISTORY_FILE", str(history))
+    monkeypatch.setattr(env["ma"], "_manga_stats_get", lambda *_: {"verified_chapters": 1})
+    before = fav.read_bytes()
+    row = env["c"].get("/api/manga/favorites").get_json()["favorites"][0]
+    assert row["local_cover_view"] == "" and row["cover"] == remote
+    (env["dl"] / SRC / CID / "cover.jpg").write_bytes(JPEG)
+    row = env["c"].get("/api/manga/favorites").get_json()["favorites"][0]
+    assert row["local_cover_view"] == _cover_url() + "?catalog=local"
+    assert row["cover"] == remote and fav.read_bytes() == before
 
 
 def test_remote_fetch_failure_is_explicit_and_no_bad_file(env):
@@ -168,6 +214,8 @@ def test_save_cover_bytes_uses_magic_extension(env):
     os.remove(p)
     p2 = st._save_cover_bytes(SRC, CID, JPEG)
     assert p2 and p2.endswith("cover.jpg"), p2
+    p3 = st._save_cover_bytes(SRC, CID, b"GIF89a" + b"x" * 1200)
+    assert p3 and p3.endswith("cover.gif"), p3
 
 
 # ── 4. 书库响应：cover_view + 原 cover 保留 ──────────────────

@@ -336,40 +336,64 @@ class MobileRuntime:
             if self.state == STATE_STOPPED:
                 return self.status()
             self.state = STATE_DRAINING
+        errors = []
         try:
             if self._runtime is not None:
-                self._runtime.stop("mobile:%s" % reason)   # 先停业务（含工作线程）
+                try:
+                    result = self._runtime.stop("mobile:%s" % reason)   # 先停业务（含工作线程）
+                    if isinstance(result, dict) and result.get("state") not in (None, "stopped"):
+                        errors.append("business runtime did not stop cleanly")
+                except Exception as e:
+                    errors.append("business runtime stop: %s: %s" % (type(e).__name__, e))
             if self._server is not None:
                 # waitress 用 close()；werkzeug 用 shutdown()——两者都要支持
-                if hasattr(self._server, "close"):
-                    self._server.close()
-                elif hasattr(self._server, "shutdown"):
-                    self._server.shutdown()
+                try:
+                    if hasattr(self._server, "close"):
+                        self._server.close()
+                    elif hasattr(self._server, "shutdown"):
+                        self._server.shutdown()
+                except Exception as e:
+                    errors.append("HTTP server close: %s: %s" % (type(e).__name__, e))
             if self._image_server is not None:
                 try:
                     self._image_server.close()
-                except Exception:
-                    pass
+                except Exception as e:
+                    errors.append("image server close: %s: %s" % (type(e).__name__, e))
             if self._image_thread is not None:
                 self._image_thread.join(timeout=3)
             if self._thread is not None:
                 self._thread.join(timeout=5)
+            if self._image_thread is not None and self._image_thread.is_alive():
+                errors.append("image server thread did not exit before timeout")
+            if self._thread is not None and self._thread.is_alive():
+                errors.append("HTTP server thread did not exit before timeout")
         except Exception as e:
-            print("[mobile] 停止异常: %s: %s" % (type(e).__name__, e), flush=True)
-        finally:
-            self._server = None
-            self._thread = None
-            self._image_server = None
-            self._image_thread = None
-            self.image_port = 0
-            self.started_at = 0.0
-            self.state = STATE_STOPPED
-            try:
-                p = os.path.join(self.paths["config"], "session.json")
-                if os.path.exists(p):
-                    os.remove(p)                      # 凭据不驻留
-            except OSError:
-                pass
+            errors.append("stop: %s: %s" % (type(e).__name__, e))
+
+        if errors:
+            # Keep handles and credentials so the host can diagnose/retry; never claim
+            # stopped while a listener or worker may still be touching user data.
+            self.state = STATE_FAILED
+            self.last_error = "; ".join(errors)
+            print("[mobile] 停止未完成: %s" % self.last_error, flush=True)
+            return self.status()
+
+        self._server = None
+        self._thread = None
+        self._image_server = None
+        self._image_thread = None
+        self.image_port = 0
+        self.started_at = 0.0
+        self.state = STATE_STOPPED
+        try:
+            p = os.path.join(self.paths["config"], "session.json")
+            if os.path.exists(p):
+                os.remove(p)                      # 凭据不驻留
+        except OSError as e:
+            self.state = STATE_FAILED
+            self.last_error = "session cleanup: %s" % e
+            print("[mobile] 停止未完成: %s" % self.last_error, flush=True)
+            return self.status()
         print("[mobile] 已停止 (%s)" % reason, flush=True)
         return self.status()
 

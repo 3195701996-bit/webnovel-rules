@@ -109,6 +109,28 @@ class ResumeAndTaskLabelsTest {
     }
 
     @Test
+    fun recoveredQueueIsShownAsResumableStoppedTask() {
+        val body = JSONObject().put("tasks", JSONArray()
+            .put(JSONObject().put("id", "manga_source:queued").put("type", "manga")
+                .put("title", "排队样本").put("status", "queued").put("running", false)
+                .put("resumable", false))
+            .put(JSONObject().put("id", "manga_source:recovered").put("type", "manga")
+                .put("title", "中断样本").put("status", "stopped").put("running", false)
+                .put("resumable", true).put("stop_kind", "process_restart")
+                .put("stop_reason", "任务仍在等待队列，可点继续开始下载")))
+            .toString()
+
+        val parsed = tasks(body)
+        val orphanQueue = parsed.first { it.id.endsWith(":queued") }
+        val recovered = parsed.first { it.id.endsWith(":recovered") }
+        assertFalse("仅有 queued 状态不能代表重启后仍有活队列", orphanQueue.resumable)
+        assertTrue("服务端将孤立队列收敛为 stopped 后，界面必须显示继续入口",
+            recovered.resumable)
+        assertTrue(recovered.showStopReason)
+        assertTrue(recovered.stopReason.contains("等待队列"))
+    }
+
+    @Test
     fun finishedTaskDoesNotShowStopReason() {
         val body = JSONObject().put("tasks", JSONArray().put(
             JSONObject().put("id", "manga_a:b").put("type", "manga").put("title", "书")
@@ -164,6 +186,34 @@ class ResumeAndTaskLabelsTest {
         val t = tasks(body).single()
         assertEquals(4, t.done)
         assertEquals(33, t.percent)
+    }
+
+    @Test
+    fun runningTasksShowSourceProgressUnitsAndUnknownEstimate() {
+        val known = tasks(JSONObject().put("tasks", JSONArray().put(
+            JSONObject().put("id", "manga_a:b").put("type", "manga")
+                .put("status", "running").put("running", true)
+                .put("progress", JSONObject().put("done", 1).put("total", 4)
+                    .put("speed", 2.5).put("eta", 90))
+        )).toString()).single()
+        assertTrue(known.speedLabel.contains("2.5 图/秒"))
+        assertTrue(known.speedLabel.contains("约 90 秒"))
+
+        val unknown = tasks(JSONObject().put("tasks", JSONArray().put(
+            JSONObject().put("id", "manga_a:c").put("type", "manga")
+                .put("status", "running").put("running", true)
+                .put("progress", JSONObject().put("done", 0).put("total", 1))
+        )).toString()).single()
+        assertTrue(unknown.speedLabel.contains("速度估算中"))
+
+        val novel = tasks(JSONObject().put("tasks", JSONArray().put(
+            JSONObject().put("id", "novel-a").put("type", "novel")
+                .put("status", "running").put("running", true)
+                .put("progress", JSONObject().put("completed", 1).put("total", 10)
+                    .put("speed", 1.0).put("eta", JSONObject.NULL))
+        )).toString()).single()
+        assertTrue(novel.speedLabel.contains("1.0 章/秒"))
+        ev("运行中任务展示按媒体类型区分的速度，未知速率明确显示估算中")
     }
 
     @Test

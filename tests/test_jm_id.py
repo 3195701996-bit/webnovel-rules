@@ -6,6 +6,7 @@
 """
 import os
 import sys
+import json
 
 import pytest
 
@@ -94,3 +95,56 @@ def test_history_two_forms_share_one_entry(app_mod, tmp_path, monkeypatch):
     hist = app_mod._read_json(str(hist_file), {})
     assert list(hist) == ["jm:559440"]
     assert hist["jm:559440"]["idx"] == 7      # 后写覆盖，续读位置不丢
+
+
+def test_legacy_prefixed_history_resumes_and_migrates_without_losing_reads(
+        app_mod, tmp_path, monkeypatch):
+    import server.manga_api as MA
+    hist_file = tmp_path / "hist-legacy.json"
+    hist_file.write_text(json.dumps({"jm:JM559440": {
+        "idx": 0, "pos": "第7话 P12", "title": "旧书名", "ts": 1,
+        "chapter_id": "ch7", "chapter_label": "第7话",
+        "read_chapter_ids": ["ch1", "ch7"],
+        "read_chapters": [{"id": "ch1", "label": "第1话"}],
+    }}), encoding="utf-8")
+    monkeypatch.setattr(MA, "MANGA_HISTORY_FILE", str(hist_file))
+
+    resume = MA._resume_payload("jm", "559440", [
+        {"id": "ch1", "name": "第1话"}, {"id": "ch7", "name": "第7话"},
+    ])
+    assert resume["index"] == 1
+    assert resume["page"] == 12
+
+    app_mod.app.config["TESTING"] = True
+    response = app_mod.app.test_client().post("/api/manga/history", json={
+        "source": "jm", "comic_id": "559440", "idx": 1,
+        "pos": "第7话 P13", "chapter_id": "ch7", "chapter_label": "第7话",
+    })
+    assert response.get_json()["ok"] is True
+    saved = json.loads(hist_file.read_text(encoding="utf-8"))
+    assert list(saved) == ["jm:559440"]
+    assert saved["jm:559440"]["read_chapter_ids"] == ["ch1", "ch7"]
+    assert saved["jm:559440"]["chapter_id"] == "ch7"
+
+
+def test_legacy_prefixed_favorites_are_deduplicated_and_deletable(
+        app_mod, tmp_path, monkeypatch):
+    import server.manga_api as MA
+    fav_file = tmp_path / "fav-legacy.json"
+    fav_file.write_text(json.dumps({
+        "jm:JM559440": {"title": "舊記錄", "unread_count": 4, "ts": 1},
+        "jm:559440": {"title": "新記錄", "unread_count": 2, "ts": 2},
+    }), encoding="utf-8")
+    monkeypatch.setattr(MA, "MANGA_FAV_FILE", str(fav_file))
+    monkeypatch.setattr(MA, "_manga_cached_chapters", lambda *_: [])
+    app_mod.app.config["TESTING"] = True
+    client = app_mod.app.test_client()
+
+    rows = client.get("/api/manga/favorites").get_json()["favorites"]
+    assert len(rows) == 1
+    assert rows[0]["comic_id"] == "559440"
+    assert rows[0]["unread_count"] == 2
+
+    deleted = client.delete("/api/manga/favorites/jm/559440")
+    assert deleted.get_json()["ok"] is True
+    assert json.loads(fav_file.read_text(encoding="utf-8")) == {}

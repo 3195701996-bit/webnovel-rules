@@ -25,28 +25,32 @@ def _make_cache_file(tmp, content):
     return p
 
 
-def test_old_bare_list_cache_rejected(tmp_path):
+def test_old_bare_list_cache_rejected(tmp_path, monkeypatch):
     """R70: 旧裸数组缓存(半截列表)不得被 images() 信任"""
-    from engine.manga.copymanga_web import CopyMangaWeb
-
-    ad = CopyMangaWeb()
-    ad.state_dir = str(tmp_path)          # 让 images() 的缓存路径落在 tmp
-    # 缓存路径 = state_dir/../_cache/copymanga/<cid>/<chid>_imgs.json
-    # 注: 直接用 monkeypatch 模拟缓存命中分支更稳, 但 images() 后续会真渲染;
-    # 这里验证的是读取分支的判定逻辑——通过把 state_dir 指到含旧缓存的目录,
-    # 若旧缓存被信任会直接 return(不触网), 被拒绝则落入渲染抛 MangaError。
-    _p = _make_cache_file(tmp_path, ["https://cdn/x/1.webp", "https://cdn/x/2.webp"])
-    # 构造到预期路径
-    import shutil
-    cdir2 = os.path.join(tmp_path, "_cache", "copymanga", "comic_x")
-    # 已创建; 期望路径 state_dir/../_cache = tmp/_cache ✓
+    import engine.manga.copymanga_web as web
     from engine.manga.base import MangaError
-    try:
-        ad.images("comic_x", "ch1")
-        # 若走到了这里说明旧缓存被信任(直接 return)——测试失败
-        raise AssertionError("旧裸数组缓存被信任, R70 失效")
-    except MangaError:
-        pass  # 期望: 旧缓存被拒绝 → 尝试网页渲染 → 离线失败抛 MangaError
+
+    # images() 缓存路径为 state_dir/../_cache；让其准确落在 tmp_path/_cache。
+    state_dir = tmp_path / "data"
+    state_dir.mkdir()
+    _make_cache_file(tmp_path, ["https://cdn/x/1.webp", "https://cdn/x/2.webp"])
+    adapter = web.CopyMangaWeb()
+    adapter.state_dir = str(state_dir)
+
+    calls = []
+
+    def fail_http(*_args):
+        raise MangaError("offline fixture")
+
+    def fail_web(*_args):
+        calls.append("render")
+        raise MangaError("offline fixture")
+
+    monkeypatch.setattr(web, "_http_chapter_images", fail_http)
+    monkeypatch.setattr(web, "_web_chapter_images", fail_web)
+    with pytest.raises(MangaError, match="章节图片获取失败"):
+        adapter.images("comic_x", "ch1")
+    assert calls == ["render"], "旧裸数组缓存必须被拒绝并进入重新提取流程"
 
 
 def test_v2_cache_trusted_shape():

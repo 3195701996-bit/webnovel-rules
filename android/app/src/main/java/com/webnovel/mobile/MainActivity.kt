@@ -24,6 +24,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.pager.HorizontalPager
@@ -42,6 +43,8 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
+import androidx.compose.runtime.saveable.listSaver
+import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -54,6 +57,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import coil.ImageLoader
 import coil.compose.AsyncImage
+import coil.compose.SubcomposeAsyncImage
 import coil.request.ImageRequest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -62,6 +66,8 @@ import kotlinx.coroutines.withContext
 import kotlin.coroutines.resume
 import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
+import java.util.UUID
+import org.json.JSONObject
 
 /**
  * 阅读器主界面（原生 Compose）。
@@ -79,6 +85,11 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // The engine foreground service can outlive this Activity. A user relaunching
+        // the app must still get one fresh favorite-update check even if the Python
+        // engine instance is unchanged. Rotation/restoration carries saved state and
+        // must not clear the per-launch guard or trigger another sweep.
+        if (savedInstanceState == null) MangaFavoriteStartupCheck.beginAppLaunch()
         val gateway = EngineGateway(applicationContext)
         // 前台服务先行：引擎不依赖界面是否成功渲染
         startEngineService()
@@ -252,7 +263,8 @@ private fun EngineError(st: EngineState.Failed, onRetry: () -> Unit,
 internal sealed interface Dest {
     data class Detail(val key: String) : Dest
     data class Novel(val key: String, val index: Int, val pct: Int) : Dest
-    data class MangaDetail(val source: String, val comicId: String) : Dest
+    data class MangaDetail(val source: String, val comicId: String,
+                           val localCatalog: Boolean = false) : Dest
     data class Manga(val source: String, val comicId: String, val index: Int,
                      val page: Int,
                      /**
@@ -269,9 +281,14 @@ internal sealed interface Dest {
                       * 走下载缓存、阅读器走最新详情），只传下标会指到别的一话。
                       */
                      val startChapterId: String = "",
-                     val startLabel: String = "") : Dest
+                     val startLabel: String = "",
+                     val localCatalog: Boolean = false,
+                     /** A fresh identity for each explicit reader launch prevents stale
+                      * SaveableStateHolder state from overriding the selected chapter. */
+                     val sessionId: String = UUID.randomUUID().toString()) : Dest
     data object Explore : Dest
     data object MangaSources : Dest
+    data object MangaDiagnostics : Dest
     data class MangaSource(val key: String, val name: String) : Dest
     data object ReaderPrefs : Dest
     data object History : Dest
@@ -297,10 +314,13 @@ internal sealed interface Dest {
 internal fun destKey(d: Dest): String = when (d) {
     is Dest.Detail -> "Detail:${d.key}"
     is Dest.Novel -> "Novel:${d.key}"
-    is Dest.MangaDetail -> "MangaDetail:${d.source}:${d.comicId}"
-    is Dest.Manga -> "Manga:${d.source}:${d.comicId}"
+    is Dest.MangaDetail -> "MangaDetail:${d.source}:${d.comicId}:${d.localCatalog}"
+    // 每次明确选章都是一个新的导航意图；若共享 reader key，SaveableStateHolder
+    // 会把上次章节恢复回来，覆盖用户刚从目录点选的章节。
+    is Dest.Manga -> "Manga:${d.source}:${d.comicId}:${d.localCatalog}:${d.startChapterId}:${d.index}:${d.sessionId}"
     Dest.Explore -> "Explore"
     Dest.MangaSources -> "MangaSources"
+    Dest.MangaDiagnostics -> "MangaDiagnostics"
     is Dest.MangaSource -> "MangaSource:${d.key}"
     Dest.ReaderPrefs -> "ReaderPrefs"
     Dest.History -> "History"
@@ -314,6 +334,80 @@ internal fun destKey(d: Dest): String = when (d) {
     is Dest.Web -> "Web:${d.path}"
 }
 
+/** Persist the navigation stack through Activity recreation and process restoration. */
+internal fun encodeDest(dest: Dest): String {
+    val value = JSONObject()
+    when (dest) {
+        is Dest.Detail -> value.put("type", "detail").put("key", dest.key)
+        is Dest.Novel -> value.put("type", "novel").put("key", dest.key)
+            .put("index", dest.index).put("pct", dest.pct)
+        is Dest.MangaDetail -> value.put("type", "manga_detail").put("source", dest.source)
+            .put("comic", dest.comicId).put("local", dest.localCatalog)
+        is Dest.Manga -> value.put("type", "manga").put("source", dest.source)
+            .put("comic", dest.comicId).put("index", dest.index).put("page", dest.page)
+            .put("trusted", dest.trusted).put("note", dest.note)
+            .put("chapter_id", dest.startChapterId).put("label", dest.startLabel)
+            .put("local", dest.localCatalog).put("session_id", dest.sessionId)
+        Dest.Explore -> value.put("type", "explore")
+        Dest.MangaSources -> value.put("type", "manga_sources")
+        Dest.MangaDiagnostics -> value.put("type", "manga_diagnostics")
+        is Dest.MangaSource -> value.put("type", "manga_source").put("key", dest.key)
+            .put("name", dest.name)
+        Dest.ReaderPrefs -> value.put("type", "reader_prefs")
+        Dest.History -> value.put("type", "history")
+        Dest.NovelSearch -> value.put("type", "novel_search")
+        is Dest.MangaSearch -> value.put("type", "manga_search").put("source", dest.sourceKey)
+            .put("order", dest.order).put("keyword", dest.presetKeyword)
+        is Dest.OfflineNovel -> value.put("type", "offline_novel").put("key", dest.key)
+            .put("index", dest.index)
+        is Dest.OfflineManga -> value.put("type", "offline_manga").put("source", dest.source)
+            .put("comic", dest.comicId)
+        Dest.Sources -> value.put("type", "sources")
+        Dest.Storage -> value.put("type", "storage")
+        Dest.Backup -> value.put("type", "backup")
+        is Dest.Web -> value.put("type", "web").put("path", dest.path).put("title", dest.title)
+    }
+    return value.toString()
+}
+
+internal fun decodeDest(encoded: String): Dest? = runCatching {
+    val value = JSONObject(encoded)
+    when (value.getString("type")) {
+        "detail" -> Dest.Detail(value.getString("key"))
+        "novel" -> Dest.Novel(value.getString("key"), value.getInt("index"), value.getInt("pct"))
+        "manga_detail" -> Dest.MangaDetail(value.getString("source"), value.getString("comic"),
+            value.optBoolean("local"))
+        "manga" -> Dest.Manga(value.getString("source"), value.getString("comic"),
+            value.getInt("index"), value.getInt("page"), value.optBoolean("trusted", true),
+            value.optString("note"), value.optString("chapter_id"), value.optString("label"),
+            value.optBoolean("local"),
+            value.optString("session_id").ifBlank { UUID.randomUUID().toString() })
+        "explore" -> Dest.Explore
+        "manga_sources" -> Dest.MangaSources
+        "manga_diagnostics" -> Dest.MangaDiagnostics
+        "manga_source" -> Dest.MangaSource(value.getString("key"), value.getString("name"))
+        "reader_prefs" -> Dest.ReaderPrefs
+        "history" -> Dest.History
+        "novel_search" -> Dest.NovelSearch
+        "manga_search" -> Dest.MangaSearch(value.optString("source"), value.optString("order"),
+            value.optString("keyword"))
+        "offline_novel" -> Dest.OfflineNovel(value.getString("key"), value.getInt("index"))
+        "offline_manga" -> Dest.OfflineManga(value.getString("source"), value.getString("comic"))
+        "sources" -> Dest.Sources
+        "storage" -> Dest.Storage
+        "backup" -> Dest.Backup
+        "web" -> Dest.Web(value.getString("path"), value.getString("title"))
+        else -> null
+    }
+}.getOrNull()
+
+private val DestStackSaver = listSaver<SnapshotStateList<Dest>, String>(
+    save = { stack -> stack.map(::encodeDest) },
+    restore = { encoded -> mutableStateListOf<Dest>().apply {
+        encoded.mapNotNullTo(this, ::decodeDest)
+    } },
+)
+
 @Composable
 private fun HomeScaffold(
     gateway: EngineGateway,
@@ -323,12 +417,15 @@ private fun HomeScaffold(
     onRetry: () -> Unit = {},
     onDiag: () -> Unit = {},
 ) {
-    var tab by remember { mutableIntStateOf(0) }
-    val stack = remember { mutableStateListOf<Dest>() }
+    var tab by rememberSaveable { mutableIntStateOf(0) }
+    val stack = rememberSaveable(saver = DestStackSaver) { mutableStateListOf<Dest>() }
     val context = LocalContext.current
     // 离线模式也要有 loader（读本地图片文件，不需要引擎凭据）
     val loader = remember(ep) {
         engineImageLoader(context, ep)
+    }
+    DisposableEffect(loader) {
+        onDispose { releaseEngineImageLoader(loader) }
     }
     val push: (Dest) -> Unit = { d -> stack.add(d) }
     val pop: () -> Unit = { if (stack.isNotEmpty()) stack.removeAt(stack.lastIndex) }
@@ -362,7 +459,7 @@ private fun HomeScaffold(
                         Spacer(Modifier.height(6.dp))
                         Text("先返回并点「重试」；离线时可以在「书架」里读已下载的内容。",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.outline)
+                            color = WnColors.inkDim)
                         Spacer(Modifier.height(8.dp))
                         Button(onClick = pop) { Text("返回") }
                     }
@@ -377,17 +474,20 @@ private fun HomeScaffold(
                         onRead = { idx, page, exact, note, chId, chLabel ->
                             push(Dest.Manga(top.source, top.comicId, idx, page,
                                             trusted = exact, note = note,
-                                            startChapterId = chId, startLabel = chLabel))
+                                            startChapterId = chId, startLabel = chLabel,
+                                            localCatalog = top.localCatalog))
                         },
                         onSearchTag = { kw ->
                             push(Dest.MangaSearch(top.source, presetKeyword = kw))
-                        })
+                        }, localCatalog = top.localCatalog)
                     is Dest.Manga -> MangaReaderScreen(gateway, ready, top.source, top.comicId,
                         top.index, top.page, loader, onBack = pop,
                         startTrusted = top.trusted, resumeNote = top.note,
-                        startChapterId = top.startChapterId, startLabel = top.startLabel)
+                        startChapterId = top.startChapterId, startLabel = top.startLabel,
+                        localCatalog = top.localCatalog)
                     is Dest.Explore -> ExploreScreen(gateway, ready, loader, push, onBack = pop)
                     is Dest.MangaSources -> MangaSourceListScreen(gateway, ready, push, onBack = pop)
+                    Dest.MangaDiagnostics -> MangaDiagnosticsScreen(gateway, ready, push, pop)
                     is Dest.MangaSource -> MangaSourceScreen(gateway, ready, loader, top.key,
                         top.name, push, onBack = pop)
                     is Dest.History -> HistoryScreen(gateway, ready, push, onBack = pop)
@@ -410,6 +510,9 @@ private fun HomeScaffold(
         return
     }
 
+    // The root shelf leaves composition while a detail is open, just like other
+    // destinations. Preserve its tab, scroll and filter state on the way back.
+    stateHolder.SaveableStateProvider("home-root") {
     Scaffold(
         topBar = {
             TopAppBar(
@@ -441,6 +544,7 @@ private fun HomeScaffold(
                 )
                 tabs.forEach { (icon, label, i) ->
                         NavigationBarItem(
+                        modifier = if (i == 2) Modifier.testTag("nav_download") else Modifier,
                         selected = tab == i,
                         onClick = { tab = i },
                         icon = { Icon(icon, contentDescription = label) },
@@ -483,7 +587,7 @@ private fun HomeScaffold(
                                 Spacer(Modifier.height(6.dp))
                                 Text("先点上方「重试」；离线时可以在「书架」里读已下载的内容。",
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.outline)
+                                    color = WnColors.inkDim)
                             }
                         } else {
                             BrowseScreen(gateway, ep, push)
@@ -495,7 +599,7 @@ private fun HomeScaffold(
                                 Spacer(Modifier.height(6.dp))
                                 Text("已下载的内容仍可在「书架」离线阅读。",
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.outline)
+                                    color = WnColors.inkDim)
                             }
                         } else {
                             DownloadsScreen(gateway, ep, push)
@@ -512,6 +616,7 @@ private fun HomeScaffold(
                 }
             }
         }
+    }
     }
 }
 
@@ -562,6 +667,12 @@ private fun imageDiskCache(context: android.content.Context): coil.disk.DiskCach
     }
 
 private val activeImageLoaders = java.util.concurrent.CopyOnWriteArrayList<ImageLoader>()
+
+/** Compose owner leaves/replaces a screen or engine: cancel requests and release registries. */
+internal fun releaseEngineImageLoader(loader: ImageLoader) {
+    activeImageLoaders.remove(loader)
+    runCatching { loader.shutdown() }
+}
 
 /** 当前图片缓存占用（字节；调用方自行切到 IO 线程） */
 internal fun imageCacheSizeBytes(context: android.content.Context): Long {
@@ -635,6 +746,33 @@ private const val SHELF_PREFS = "shelf_prefs"
 private const val SORT_DOWNLOADED = "downloaded"
 private const val SORT_READ = "read"
 
+/** 每个 App 启动会话、每个本机引擎实例只自动触发一次；失败时释放标记以便重试。 */
+internal object MangaFavoriteStartupCheck {
+    private val checkedInstances = mutableSetOf<String>()
+
+    @Synchronized fun beginAppLaunch() {
+        checkedInstances.clear()
+    }
+
+    @Synchronized fun claim(instanceId: String): Boolean =
+        instanceId.isNotBlank() && checkedInstances.add(instanceId)
+
+    @Synchronized fun release(instanceId: String) {
+        checkedInstances.remove(instanceId)
+    }
+
+    fun shouldWatch(start: MangaFavoriteCheckStart): Boolean =
+        start.started > 0 || start.alreadyRunning
+
+    fun statusMessage(status: MangaFavoriteCheckStatus): String? = when {
+        status.running -> "正在检查收藏更新（${status.checked.coerceAtMost(status.total)}" +
+            "/${status.total}）…"
+        status.failed > 0 -> "收藏更新检查完成：${status.succeeded} 部成功，" +
+            "${status.failed} 部失败，可重试"
+        else -> null
+    }
+}
+
 private fun readShelfSort(sp: android.content.SharedPreferences, key: String): String {
     val v = sp.getString(key, SORT_DOWNLOADED) ?: SORT_DOWNLOADED
     return if (v == SORT_READ) SORT_READ else SORT_DOWNLOADED
@@ -652,9 +790,18 @@ private fun ShelfScreen(gateway: EngineGateway, ep: EngineEndpoint, loader: Imag
     // 有新话标记：取自最近一次「检查书库更新」的结果（服务端会保留批次结果）。
     // 没检查过就没有标记——不编造"有更新"。
     var mangaUpdates by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    var favorites by remember { mutableStateOf<List<MangaFavorite>>(emptyList()) }
+    var favoriteQuery by rememberSaveable { mutableStateOf("") }
+    var favoriteUnreadOnly by rememberSaveable { mutableStateOf(false) }
+    val visibleFavorites = remember(favorites, favoriteQuery, favoriteUnreadOnly) {
+        filterMangaFavorites(favorites, favoriteQuery, favoriteUnreadOnly)
+    }
+    var favoriteUpdateMessage by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(true) }
     var refreshing by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    var mangaHistoryError by remember { mutableStateOf<String?>(null) }
+    var favoritesError by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val shelfPrefs = remember {
@@ -662,12 +809,87 @@ private fun ShelfScreen(gateway: EngineGateway, ep: EngineEndpoint, loader: Imag
     }
     var bookSort by remember { mutableStateOf(readShelfSort(shelfPrefs, "book_sort")) }
     var mangaSort by remember { mutableStateOf(readShelfSort(shelfPrefs, "manga_sort")) }
+    suspend fun refreshFavoritesAfterCheck() {
+        // 收藏较多时检查可能超过一分钟；持续接收后台进度直至完成/失败。
+        repeat(600) {
+            kotlinx.coroutines.delay(1000)
+            val status = gateway.httpText(ep.port, "/api/manga/favorites/check-updates/status")
+            if (!status.ok) {
+                favoriteUpdateMessage = "收藏更新检查中断：暂时无法读取检查状态，可重试"
+                MangaFavoriteStartupCheck.release(ep.instanceId)
+                return
+            }
+            val state = EngineData.mangaFavoriteCheckStatus(status.body)
+            if (state == null) {
+                favoriteUpdateMessage = "收藏更新检查中断：状态数据无法解析，可重试"
+                MangaFavoriteStartupCheck.release(ep.instanceId)
+                return
+            }
+            favoriteUpdateMessage = MangaFavoriteStartupCheck.statusMessage(state)
+            if (!state.running) {
+                val latest = gateway.httpText(ep.port, "/api/manga/favorites")
+                val latestFavorites = if (latest.ok)
+                    EngineData.mangaFavoritesOrNull(latest.body) else null
+                if (latestFavorites != null) {
+                    favorites = latestFavorites
+                    favoritesError = null
+                } else {
+                    favoritesError = if (latest.ok) "收藏列表响应格式异常，可重试"
+                        else EngineData.httpErrorMessage(latest.body,
+                            fallback = "HTTP ${latest.code}")
+                    favoriteUpdateMessage = "更新检查已结束，但收藏列表刷新失败，可重试"
+                    MangaFavoriteStartupCheck.release(ep.instanceId)
+                }
+                if (state.failed > 0) MangaFavoriteStartupCheck.release(ep.instanceId)
+                return
+            }
+        }
+        favoriteUpdateMessage = "收藏更新检查等待超时，可重试；后台检查可能仍在继续"
+        MangaFavoriteStartupCheck.release(ep.instanceId)
+    }
 
-    fun refresh() {
+    fun refresh(checkFavoritesAtStartup: Boolean = false) {
         scope.launch {
             if (!loading) refreshing = true
             error = null
+            var shouldWatchFavoriteCheck = false
             try {
+                // 收藏检查仅在本引擎进程首次进入书架时发起，不随手动刷新重复扫源。
+                if (checkFavoritesAtStartup) {
+                    val check = gateway.httpPost(ep.port,
+                        "/api/manga/favorites/check-updates")
+                    val start = if (check.ok)
+                        EngineData.mangaFavoriteCheckStart(check.body) else null
+                    shouldWatchFavoriteCheck = check.ok && start != null &&
+                        MangaFavoriteStartupCheck.shouldWatch(start)
+                    if (!check.ok) {
+                        MangaFavoriteStartupCheck.release(ep.instanceId)
+                        favoriteUpdateMessage = "收藏更新检查未能启动，可重试"
+                    } else if (start == null) {
+                        MangaFavoriteStartupCheck.release(ep.instanceId)
+                        favoriteUpdateMessage = "收藏更新检查响应无法识别，可重试"
+                    } else if (shouldWatchFavoriteCheck) {
+                        favoriteUpdateMessage = "正在检查收藏更新…"
+                    } else {
+                        // The server reports started=0 when there are no favorites;
+                        // do not attach to an unrelated, stale previous status batch.
+                        favoriteUpdateMessage = null
+                    }
+                } else {
+                    // 页面离开期间后台检查仍继续；重新回到书架时接上状态轮询。
+                    val status = gateway.httpText(ep.port,
+                        "/api/manga/favorites/check-updates/status")
+                    val checkState = if (status.ok)
+                        EngineData.mangaFavoriteCheckStatus(status.body) else null
+                    shouldWatchFavoriteCheck = checkState?.running == true
+                    favoriteUpdateMessage = when {
+                        checkState == null && status.ok ->
+                            "收藏更新检查状态无法识别，可重试"
+                        checkState == null -> "暂时无法获取收藏更新检查状态，可重试"
+                        else -> MangaFavoriteStartupCheck.statusMessage(checkState)
+                    }
+                    if (checkState == null) MangaFavoriteStartupCheck.release(ep.instanceId)
+                }
                 // 四个读接口互相独立：并行发出（回环本机引擎，省 3 次串行往返）
                 val nbD = async { gateway.httpText(ep.port, "/api/books") }
                 val mbD = async { gateway.httpText(ep.port, "/api/manga/library") }
@@ -675,27 +897,57 @@ private fun ShelfScreen(gateway: EngineGateway, ep: EngineEndpoint, loader: Imag
                 val upD = async {
                     gateway.httpText(ep.port, "/api/manga/library/check-updates/status")
                 }
+                val favD = async { gateway.httpText(ep.port, "/api/manga/favorites") }
                 val nb = nbD.await()
                 val mb = mbD.await()
                 val hr = hrD.await()
                 val up = upD.await()
+                val fav = favD.await()
                 // 漫画全量阅读历史（含在线读过但未下载的）——最近阅读页的数据源
-                if (hr.ok) mangaHist = EngineData.mangaHistory(hr.body)
+                if (hr.ok) {
+                    mangaHist = EngineData.mangaHistory(hr.body)
+                    mangaHistoryError = null
+                } else {
+                    mangaHistoryError = EngineData.httpErrorMessage(hr.body)
+                        .ifBlank { "HTTP ${hr.code}" }
+                }
                 if (up.ok) {
                     val lib = EngineData.mangaLibraryUpdate(up.body)
                     mangaUpdates = lib.withUpdate.associate { (title, c) -> title to c.label }
                 }
                 novels = EngineData.novels(nb.body)
                 manga = EngineData.manga(mb.body)
-                if (!nb.ok && !mb.ok) error = "读取书架失败：HTTP ${nb.code}/${mb.code}"
+                val parsedFavorites = if (fav.ok)
+                    EngineData.mangaFavoritesOrNull(fav.body) else null
+                if (parsedFavorites != null) {
+                    favorites = parsedFavorites
+                    favoritesError = null
+                } else {
+                    favoritesError = if (fav.ok) "收藏列表响应格式异常，可重试"
+                        else EngineData.httpErrorMessage(fav.body)
+                            .ifBlank { "HTTP ${fav.code}" }
+                    if (checkFavoritesAtStartup) MangaFavoriteStartupCheck.release(ep.instanceId)
+                }
+                val shelfFailures = buildList {
+                    if (!nb.ok) add("小说 HTTP ${nb.code}")
+                    if (!mb.ok) add("漫画 HTTP ${mb.code}")
+                }
+                if (shelfFailures.isNotEmpty()) {
+                    error = "${shelfFailures.joinToString("、")}；数据未删除，请点重试重新读取"
+                }
             } catch (t: Throwable) {
+                if (checkFavoritesAtStartup && !shouldWatchFavoriteCheck)
+                    MangaFavoriteStartupCheck.release(ep.instanceId)
                 error = "${t.javaClass.simpleName}: ${t.message}"
             }
+            if (shouldWatchFavoriteCheck) scope.launch { refreshFavoritesAfterCheck() }
             loading = false
             refreshing = false
         }
     }
-    LaunchedEffect(ep) { refresh() }
+    LaunchedEffect(ep) {
+        refresh(checkFavoritesAtStartup = MangaFavoriteStartupCheck.claim(ep.instanceId))
+    }
 
     // 最近阅读：started 的小说 + 漫画**全量阅读历史**（含在线读过但未下载的），
     // 合并按时间降序，不限条数
@@ -725,9 +977,13 @@ private fun ShelfScreen(gateway: EngineGateway, ep: EngineEndpoint, loader: Imag
             error != null -> Column(Modifier.fillMaxSize().padding(WnSpace.xl), Arrangement.Center) {
                 Text(error!!, color = MaterialTheme.colorScheme.error)
                 Spacer(Modifier.height(WnSpace.md))
-                Button(onClick = { refresh() }) { Text("重试") }
+                Button(onClick = {
+                    refresh(checkFavoritesAtStartup = MangaFavoriteStartupCheck.claim(ep.instanceId))
+                }) { Text("重试") }
             }
-            novels.isEmpty() && manga.isEmpty() -> EmptyShelf(
+            novels.isEmpty() && manga.isEmpty() && favorites.isEmpty() &&
+                mangaHistoryError == null && favoritesError == null &&
+                favoriteUpdateMessage == null -> EmptyShelf(
                 onSearchManga = { onOpen(Dest.MangaSearch()) },
                 onBrowseMangaSources = { onOpen(Dest.MangaSources) },
                 onSearchNovel = { onOpen(Dest.NovelSearch) },
@@ -736,18 +992,18 @@ private fun ShelfScreen(gateway: EngineGateway, ep: EngineEndpoint, loader: Imag
                 // 书架双页：「最近阅读」在前、「已缓存」在后，两个平行且独立的页面；
                 // 分段页签 + 左右滑动切换，页位随状态保存恢复。
                 var page by rememberSaveable { mutableIntStateOf(0) }
-                val pagerState = rememberPagerState(initialPage = page, pageCount = { 2 })
+                val pagerState = rememberPagerState(initialPage = page, pageCount = { 3 })
                 LaunchedEffect(pagerState.currentPage) { page = pagerState.currentPage }
                 Column(Modifier.fillMaxSize()) {
-                    WnSegmentedTabs(
-                        options = listOf("最近阅读", "已缓存"),
+                    ShelfTabStrip(
+                        options = listOf("最近阅读", "已缓存", "收藏"),
                         selected = pagerState.currentPage,
                         onSelect = { scope.launch { pagerState.animateScrollToPage(it) } },
                         modifier = Modifier.padding(horizontal = WnSpace.md,
                             vertical = WnSpace.sm),
                     )
                     HorizontalPager(state = pagerState,
-                                    modifier = Modifier.fillMaxSize()) { p ->
+                                    modifier = Modifier.fillMaxSize().testTag("shelf_pager")) { p ->
                         if (p == 0) {
                             // ── 页一：最近阅读 ──
                             // 所有读过的小说+漫画（不限条数），lastReadTs 降序；
@@ -757,13 +1013,21 @@ private fun ShelfScreen(gateway: EngineGateway, ep: EngineEndpoint, loader: Imag
                                        verticalArrangement = Arrangement.spacedBy(WnSpace.sm)) {
                                 if (history.isEmpty()) {
                                     item {
-                                        Text("还没有阅读记录",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            modifier = Modifier.padding(WnSpace.xl))
+                                        if (mangaHistoryError == null) {
+                                            Text("还没有阅读记录",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                modifier = Modifier.padding(WnSpace.xl))
+                                        }
                                     }
                                 } else {
-                                    items(history) { entry ->
+                                    items(history, key = { entry ->
+                                        when (entry) {
+                                            is ShelfHistoryEntry.NovelEntry -> "novel:${entry.item.key}"
+                                            is ShelfHistoryEntry.MangaHistEntry ->
+                                                "manga:${entry.item.source}:${entry.item.comicId}"
+                                        }
+                                    }) { entry ->
                                         when (entry) {
                                             is ShelfHistoryEntry.NovelEntry -> {
                                                 val n = entry.item
@@ -780,8 +1044,18 @@ private fun ShelfScreen(gateway: EngineGateway, ep: EngineEndpoint, loader: Imag
                                         }
                                     }
                                 }
+                                if (mangaHistoryError != null) {
+                                    item {
+                                        Column(verticalArrangement = Arrangement.spacedBy(WnSpace.xs)) {
+                                            Text("漫画阅读历史读取失败：$mangaHistoryError",
+                                                color = MaterialTheme.colorScheme.error,
+                                                style = MaterialTheme.typography.bodySmall)
+                                            TextButton(onClick = { refresh() }) { Text("重试读取") }
+                                        }
+                                    }
+                                }
                             }
-                        } else {
+                        } else if (p == 1) {
                             // ── 页二：已缓存（小说/漫画两个子区块，各自带排序）──
                             LazyColumn(Modifier.fillMaxSize(),
                                        contentPadding = PaddingValues(WnSpace.md),
@@ -797,7 +1071,7 @@ private fun ShelfScreen(gateway: EngineGateway, ep: EngineEndpoint, loader: Imag
                                                 }
                                             })
                                     }
-                                    items(sortedNovels) { n ->
+                                    items(sortedNovels, key = { it.key }) { n ->
                                         ShelfNovelRow(n) { onOpen(Dest.Detail(n.key)) }
                                     }
                                 }
@@ -812,22 +1086,106 @@ private fun ShelfScreen(gateway: EngineGateway, ep: EngineEndpoint, loader: Imag
                                                 }
                                             })
                                     }
-                                    item {
-                                        LazyVerticalGrid(
-                                            columns = GridCells.Fixed(3),
-                                            modifier = Modifier.height(
-                                                ((sortedManga.size + 2) / 3 * 172).dp),
-                                            horizontalArrangement =
-                                                Arrangement.spacedBy(WnSpace.sm),
-                                            verticalArrangement =
-                                                Arrangement.spacedBy(WnSpace.sm),
-                                        ) {
-                                            items(sortedManga.size) { i ->
+                                    items((sortedManga.size + 2) / 3, key = { row ->
+                                        val first = sortedManga[row * 3]
+                                        "manga-row:${first.source}:${first.comicId}"
+                                    }) { row ->
+                                        val start = row * 3
+                                        val end = (start + 3).coerceAtMost(sortedManga.size)
+                                        Row(Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.spacedBy(WnSpace.sm)) {
+                                            for (i in start until end) {
                                                 val m = sortedManga[i]
-                                                MangaCard(m, ep, loader, mangaUpdates[m.title]) {
-                                                    onOpen(Dest.MangaDetail(m.source, m.comicId))
+                                                MangaCard(m, ep, loader, mangaUpdates[m.title],
+                                                    modifier = Modifier.weight(1f)) {
+                                                    onOpen(Dest.MangaDetail(m.source, m.comicId,
+                                                        localCatalog = true))
                                                 }
                                             }
+                                            repeat(3 - (end - start)) { Spacer(Modifier.weight(1f)) }
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            LazyVerticalGrid(columns = GridCells.Fixed(3),
+                                modifier = Modifier.fillMaxSize().padding(WnSpace.md),
+                                horizontalArrangement = Arrangement.spacedBy(WnSpace.sm),
+                                verticalArrangement = Arrangement.spacedBy(WnSpace.sm)) {
+                                item(span = { GridItemSpan(maxLineSpan) }) {
+                                    Column(verticalArrangement = Arrangement.spacedBy(WnSpace.xs)) {
+                                        OutlinedTextField(value = favoriteQuery,
+                                            onValueChange = { favoriteQuery = it },
+                                            label = { Text("查找收藏（作品名或源）") },
+                                            singleLine = true,
+                                            modifier = Modifier.fillMaxWidth().testTag("favorite_filter_query"))
+                                        Row(horizontalArrangement = Arrangement.spacedBy(WnSpace.sm)) {
+                                            FilterChip(selected = !favoriteUnreadOnly,
+                                                onClick = { favoriteUnreadOnly = false },
+                                                label = { Text("全部 ${favorites.size}") })
+                                            FilterChip(selected = favoriteUnreadOnly,
+                                                onClick = { favoriteUnreadOnly = true },
+                                                label = { Text("有未读 ${favorites.count { it.unreadCount > 0 }}") },
+                                                modifier = Modifier.testTag("favorite_filter_unread"))
+                                        }
+                                        Text("未读数以最近检查和实际阅读记录为准",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                }
+                                if (favoriteUpdateMessage != null) {
+                                    item(span = { GridItemSpan(maxLineSpan) }) {
+                                        Row(Modifier.fillMaxWidth(),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.SpaceBetween) {
+                                            Text(favoriteUpdateMessage!!,
+                                                modifier = Modifier.weight(1f).testTag(
+                                                    "favorite_update_status"),
+                                                color = if (favoriteUpdateMessage!!.contains("失败") ||
+                                                    favoriteUpdateMessage!!.contains("中断") ||
+                                                    favoriteUpdateMessage!!.contains("超时"))
+                                                    MaterialTheme.colorScheme.error
+                                                else MaterialTheme.colorScheme.onSurfaceVariant,
+                                                style = MaterialTheme.typography.bodySmall)
+                                            if (!favoriteUpdateMessage!!.startsWith("正在检查")) {
+                                                TextButton(onClick = {
+                                                    MangaFavoriteStartupCheck.release(ep.instanceId)
+                                                    refresh(checkFavoritesAtStartup =
+                                                        MangaFavoriteStartupCheck.claim(ep.instanceId))
+                                                }, modifier = Modifier.testTag(
+                                                    "favorite_update_retry")) { Text("重试检查") }
+                                            }
+                                        }
+                                    }
+                                }
+                                items(visibleFavorites.size, key = { i ->
+                                    "${visibleFavorites[i].source}:${visibleFavorites[i].comicId}"
+                                }) { i ->
+                                    val f = visibleFavorites[i]
+                                    FavoriteCard(f, ep, loader) {
+                                        onOpen(Dest.MangaDetail(f.source, f.comicId))
+                                    }
+                                }
+                                if (favoritesError != null) {
+                                    item {
+                                        Column(verticalArrangement = Arrangement.spacedBy(WnSpace.xs)) {
+                                            Text("收藏读取失败：$favoritesError",
+                                                color = MaterialTheme.colorScheme.error,
+                                                style = MaterialTheme.typography.bodySmall)
+                                            TextButton(onClick = { refresh() }) { Text("重试读取") }
+                                        }
+                                    }
+                                } else if (favorites.isEmpty()) {
+                                    item { Text("暂无收藏漫画", color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.padding(WnSpace.lg)) }
+                                } else if (visibleFavorites.isEmpty()) {
+                                    item(span = { GridItemSpan(maxLineSpan) }) {
+                                        Column(Modifier.padding(WnSpace.md)) {
+                                            Text("没有符合当前筛选的收藏")
+                                            TextButton(onClick = {
+                                                favoriteQuery = ""
+                                                favoriteUnreadOnly = false
+                                            }) { Text("清除筛选") }
                                         }
                                     }
                                 }
@@ -884,7 +1242,7 @@ private fun shelfTimeLabel(ts: Double): String {
 }
 
 /**
- * 书架小说行（对齐 web 端书库卡片）：封面占位 + 状态徽标（完结/失败/下载中）+
+ * 书架小说行（对齐 web 端书库卡片）：封面占位 + 实际下载状态徽标 +
  * 作者·章数 + 进度文案 + 阅读/下载双进度条。小说无封面数据源 → 灰底「暂无封面」。
  */
 @Composable
@@ -904,11 +1262,12 @@ private fun ShelfNovelRow(n: NovelItem, onClick: () -> Unit) {
                         fontWeight = FontWeight.SemiBold, maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f, fill = false))
-                    // 状态徽标（与 web 端同口径）：完结 ≥100% / 有失败章 / 下载中
-                    val (badge, badgeColor) = when {
-                        n.percent >= 100 -> "完结" to WnColors.ok
-                        n.failed > 0 -> "${n.failed} 章失败" to WnColors.danger
-                        else -> "下载中" to WnColors.accent
+                    // 下载齐全不代表作品完结，也不能从部分下载推断任务正在运行。
+                    val badge = n.downloadBadge
+                    val badgeColor = when {
+                        n.downloadComplete -> WnColors.ok
+                        n.failed > 0 -> WnColors.danger
+                        else -> WnColors.accent
                     }
                     Text(badge, style = MaterialTheme.typography.labelSmall,
                         color = badgeColor,
@@ -971,10 +1330,12 @@ private fun EmptyShelf(onSearchManga: () -> Unit, onBrowseMangaSources: () -> Un
 
 @Composable
 private fun MangaCard(m: MangaItem, ep: EngineEndpoint, loader: ImageLoader,
-                       updateLabel: String? = null, onClick: () -> Unit) {
+                       updateLabel: String? = null, modifier: Modifier = Modifier,
+                       onClick: () -> Unit) {
     val shape = RoundedCornerShape(10.dp)
-    Column(Modifier.clip(shape).border(1.dp, WnColors.line, shape)
-               .clickable { onClick() }) {
+    Column(modifier.clip(shape).border(1.dp, WnColors.line, shape)
+               .clickable { onClick() }
+               .testTag("manga_cached:${m.source}:${m.comicId}")) {
         val url = if (m.coverPath.startsWith("/")) ep.imageOrigin + m.coverPath else m.coverPath
         if (url.isNotEmpty()) {
             AsyncImage(
@@ -1010,6 +1371,34 @@ private fun MangaCard(m: MangaItem, ep: EngineEndpoint, loader: ImageLoader,
     }
 }
 
+internal fun mangaFavoriteUnreadBadgeLabel(unreadCount: Int): String? =
+    unreadCount.takeIf { it > 0 }?.let { "未读 $it" }
+
+@Composable
+private fun FavoriteCard(f: MangaFavorite, ep: EngineEndpoint,
+                         loader: ImageLoader, onClick: () -> Unit) {
+    Column(Modifier.clickable { onClick() }) {
+        Box(Modifier.clip(RoundedCornerShape(6.dp))) {
+            if (f.cover.isBlank()) {
+                WnNoCover(Modifier.fillMaxWidth().aspectRatio(0.75f))
+            } else {
+                SubcomposeAsyncImage(model = f.cover, contentDescription = f.title,
+                    imageLoader = loader, modifier = Modifier.fillMaxWidth().aspectRatio(0.75f),
+                    contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                    error = { WnNoCover(Modifier.fillMaxSize()) })
+            }
+            mangaFavoriteUnreadBadgeLabel(f.unreadCount)?.let { unreadLabel ->
+                Text(unreadLabel, color = WnColors.onAccent,
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.align(Alignment.TopStart)
+                        .background(WnColors.accent).padding(3.dp, 1.dp))
+            }
+        }
+        Text(f.title, style = MaterialTheme.typography.bodySmall, maxLines = 2,
+            overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(vertical = WnSpace.sm))
+    }
+}
+
 @Composable
 private fun SectionTitle(t: String) = WnSectionHeader(t)
 
@@ -1029,8 +1418,8 @@ private fun ListRow(title: String, subtitle: String, modifier: Modifier = Modifi
 // ── 浏览 / 下载 / 设置 ───────────────────────────────────────
 
 @Composable
-private fun BrowseScreen(gateway: EngineGateway, ep: EngineEndpoint,
-                         onOpen: (Dest) -> Unit) {
+internal fun BrowseScreen(gateway: EngineGateway, ep: EngineEndpoint,
+                         onOpen: (Dest) -> Unit, diagnosticsOnly: Boolean = false) {
     var sources by remember { mutableStateOf<List<MangaSource>>(emptyList()) }
     var msg by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
@@ -1040,31 +1429,34 @@ private fun BrowseScreen(gateway: EngineGateway, ep: EngineEndpoint,
         val r = withContext(Dispatchers.IO) { gateway.httpText(ep.port, "/api/manga/sources") }
         sources = EngineData.sources(r.body)
     }
-    LaunchedEffect(ep) { reload() }
+    LaunchedEffect(ep, diagnosticsOnly) { if (diagnosticsOnly) reload() }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(12.dp),
                verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        item { SectionTitle("漫画（优先）") }
+        if (!diagnosticsOnly) {
+        item { SectionTitle("发现漫画") }
         item {
-            ListRow("搜漫画", "跨源搜索 → 点结果进原生详情页与阅读器") {
+            ListRow("搜漫画", "按作品名或作者查找，选择喜欢的来源") {
                 onOpen(Dest.MangaSearch())
             }
         }
         item {
-            ListRow("内置漫画源", "${sources.size} 个源：能力、分类与实测结论逐源可查") {
+            ListRow("内置漫画源", "选择来源，浏览分类与作品") {
                 onOpen(Dest.MangaSources)
             }
         }
         item {
-            ListRow("探索（漫画分类 / 小说榜单）", "只列真有榜单或分类的源；无数据不做假榜单") {
+            ListRow("探索（漫画分类 / 小说榜单）", "按题材、地区与热度发现作品") {
                 onOpen(Dest.Explore)
             }
         }
         item { SectionTitle("小说") }
         item {
-            ListRow("搜小说", "跨源搜索 → 一键加入书架（进度在下载页）") {
+            ListRow("搜小说", "查找作品，加入书架后随时阅读") {
                 onOpen(Dest.NovelSearch)
             }
         }
+        }
+        if (diagnosticsOnly) {
         item {
             SectionTitle("漫画源能力（依赖判定与实测结论分开呈现，不假装全部可用）")
             Row(verticalAlignment = Alignment.CenterVertically,
@@ -1074,23 +1466,41 @@ private fun BrowseScreen(gateway: EngineGateway, ep: EngineEndpoint,
                         scope.launch {
                             busy = true
                             msg = "正在启动漫画源验证…"
+                            try {
                             val start = gateway.httpPost(ep.port, "/api/manga/sources/verify",
                                 org.json.JSONObject().put("limit", 4).toString())
-                            val already = runCatching {
-                                org.json.JSONObject(start.body).optBoolean("already_running")
-                            }.getOrDefault(false)
+                            val startBody = runCatching { org.json.JSONObject(start.body) }.getOrNull()
+                            if (start.code != 202 && start.code != 200) {
+                                msg = "启动失败：HTTP ${start.code}，可重试"
+                                return@launch
+                            }
+                            val already = startBody?.opt("already_running") == true
+                            if (startBody?.opt("started") != true && !already) {
+                                msg = "启动响应无效，未确认验证已启动，可重试"
+                                return@launch
+                            }
                             if (already) {
                                 msg = "已有一轮验证在跑，跟随它的进度"
-                            } else if (start.code != 202 && start.code != 200) {
-                                msg = "启动失败：HTTP ${start.code} ${start.body.take(80)}"
                             }
                             var done = false
                             for (i in 0 until 150) {
                                 kotlinx.coroutines.delay(2000)
                                 val st = gateway.httpText(ep.port, "/api/manga/sources/verify/status")
+                                if (st.code !in 200..299) {
+                                    msg = "读取验证进度失败：HTTP ${st.code}；后台可能仍在运行，可重试查看"
+                                    return@launch
+                                }
                                 val o = runCatching {
                                     org.json.JSONObject(st.body)
-                                }.getOrNull() ?: continue
+                                }.getOrNull()
+                                val validCounts = o?.opt("done") is Number && o.opt("total") is Number &&
+                                    o.optInt("done", -1) >= 0 && o.optInt("total", -1) >= o.optInt("done")
+                                if (o == null || o.optString("status") !in listOf("running", "error", "done") ||
+                                    (o.optString("status") != "error" && !validCounts) ||
+                                    (o.optString("status") == "done" && o.optInt("done") != o.optInt("total"))) {
+                                    msg = "验证进度响应无效，未确认完成；可重试查看"
+                                    return@launch
+                                }
                                 val s2 = o.optString("status")
                                 if (s2 == "running") {
                                     msg = "验证中 ${o.optInt("done")}/${o.optInt("total")}：" +
@@ -1099,16 +1509,21 @@ private fun BrowseScreen(gateway: EngineGateway, ep: EngineEndpoint,
                                 }
                                 if (s2 == "error") {
                                     msg = "验证异常：${o.optString("error")}"
-                                    done = true
-                                    break
+                                    return@launch
                                 }
                                 done = true
                                 break
                             }
                             if (!done) msg = "验证仍在后台进行（可稍后刷新）"
-                            busy = false
                             reload()
-                            if (done) msg = (msg ?: "") + " · 结果已更新"
+                            if (done) msg = "本轮验证已完成，结果已更新；各源是否可用请查看实测结论"
+                            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                                throw cancelled
+                            } catch (_: Exception) {
+                                msg = "验证连接中断，未确认完成；可重试查看"
+                            } finally {
+                                busy = false
+                            }
                         }
                     },
                     enabled = !busy,
@@ -1117,7 +1532,7 @@ private fun BrowseScreen(gateway: EngineGateway, ep: EngineEndpoint,
                     "已实测通过 ${sources.count { it.verifyStatus == "verified" }} / " +
                         "共 ${sources.size}",
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.outline,
+                    color = WnColors.inkDim,
                 )
             }
             msg?.let {
@@ -1143,9 +1558,22 @@ private fun BrowseScreen(gateway: EngineGateway, ep: EngineEndpoint,
                     "没有实测过的源显示「未实测」，不代表不可用、也不代表可用。" +
                     "点上面的按钮即可在本机跑下一批实测，不需要打开网页。",
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.outline,
+                color = WnColors.inkDim,
             )
         }
+        }
+    }
+}
+
+@Composable
+internal fun MangaDiagnosticsScreen(gateway: EngineGateway, ep: EngineEndpoint,
+                                    onOpen: (Dest) -> Unit, onBack: () -> Unit) {
+    Scaffold(topBar = {
+        TopAppBar(title = { Text("漫画源诊断") }, navigationIcon = {
+            TextButton(onClick = onBack, modifier = Modifier.testTag("manga_diagnostics_back")) { Text("返回") }
+        })
+    }) { padding ->
+        Box(Modifier.padding(padding)) { BrowseScreen(gateway, ep, onOpen, diagnosticsOnly = true) }
     }
 }
 
@@ -1181,7 +1609,7 @@ private fun SettingsScreen(gateway: EngineGateway, ep: EngineEndpoint,
         Text("Python：3.13（内嵌）", style = MaterialTheme.typography.bodySmall)
         // 产物基线（P0-A）：版本 + 源码 revision + 构建时间，用户截图可直接核对
         Text(BuildInfo.summary, style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.outline,
+            color = WnColors.inkDim,
             modifier = Modifier.testTag("build_info"))
         if (!s?.third.isNullOrEmpty()) {
             Spacer(Modifier.height(6.dp))
@@ -1190,7 +1618,7 @@ private fun SettingsScreen(gateway: EngineGateway, ep: EngineEndpoint,
                 color = MaterialTheme.colorScheme.error)
             Text("受影响的源已标注为「部分可用/不可用」；小说搜索与已下载内容不受影响。",
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.outline)
+                color = WnColors.inkDim)
         }
         Spacer(Modifier.height(8.dp))
         // 导出脱敏诊断（方向基线 §7.1）：用户在手机上导一次，就能定位故障分层
@@ -1278,7 +1706,7 @@ private fun SettingsScreen(gateway: EngineGateway, ep: EngineEndpoint,
         diagMsg?.let {
             Spacer(Modifier.height(4.dp))
             Text(it, style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.outline)
+                color = WnColors.inkDim)
         }
         Spacer(Modifier.height(8.dp))
         OutlinedButton(
@@ -1304,7 +1732,7 @@ private fun SettingsScreen(gateway: EngineGateway, ep: EngineEndpoint,
         speedMsg?.let {
             Spacer(Modifier.height(4.dp))
             Text(it, style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.outline)
+                color = WnColors.inkDim)
         }
         Spacer(Modifier.height(12.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1343,7 +1771,7 @@ private fun SettingsScreen(gateway: EngineGateway, ep: EngineEndpoint,
         Text(
             "引擎重启会把中断的任务收敛为「已停止」并保留记录，不会自动续跑——" +
                 "是否继续由你决定，避免在不知情的情况下消耗流量。",
-            style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline,
+            style = MaterialTheme.typography.labelSmall, color = WnColors.inkDim,
         )
         Spacer(Modifier.height(6.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1393,7 +1821,7 @@ private fun SettingsScreen(gateway: EngineGateway, ep: EngineEndpoint,
             onOpen(Dest.ReaderPrefs)
         }
         Text("设置立刻生效并保存在本机，引擎重启或失败都不会丢。",
-            style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
+            style = MaterialTheme.typography.labelSmall, color = WnColors.inkDim)
 
         Spacer(Modifier.height(12.dp))
         SectionTitle("书源与数据")
@@ -1403,15 +1831,19 @@ private fun SettingsScreen(gateway: EngineGateway, ep: EngineEndpoint,
         ListRow("存储管理", "按源/作品/章节看占用；选择性清理错误缓存") {
             onOpen(Dest.Storage)
         }
-        ListRow("备份与恢复", "书源配置 + 阅读进度（不含正文与图片）") {
+        ListRow("备份与恢复", "书源、阅读进度、漫画收藏（不含正文与图片）") {
             onOpen(Dest.Backup)
         }
 
         Spacer(Modifier.height(12.dp))
-        SectionTitle("高级（网页诊断）")
+        SectionTitle("高级与诊断")
+        ListRow("漫画源诊断", "查看依赖、实测结果，手动运行书源检查",
+            modifier = Modifier.testTag("manga_diagnostics_entry")) {
+            onOpen(Dest.MangaDiagnostics)
+        }
         Text("下面这个网页只是诊断与兜底入口（书源规则编辑、任务原始列表），" +
             "不是日常使用界面：搜索、详情、阅读、下载、浏览都走原生页面，不需要网页。",
-            style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
+            style = MaterialTheme.typography.labelSmall, color = WnColors.inkDim)
         Spacer(Modifier.height(6.dp))
         ListRow("打开网页诊断页", "带 ?mobile=1：不加载桌面局域网地址提示") {
             onOpen(Dest.Web("/?mobile=1", "网页诊断"))

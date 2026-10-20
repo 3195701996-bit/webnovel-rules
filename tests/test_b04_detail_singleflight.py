@@ -258,18 +258,31 @@ def test_route_cold_start_single_build(monkeypatch):
     assert all(len(b.get("chapters") or []) == 3 for b in bodies)
 
 
-def test_route_quick_path_single_refresh(monkeypatch):
-    """本地快速路径（downloads/_info.json 存在但缺完整详情缓存）：
-    立即返回本地数据，且并发访问只提交一个后台刷新"""
+def test_route_quick_path_single_refresh(monkeypatch, tmp_path):
+    """本地目录快速返回且不启动线上详情刷新；完整目录仍可独立预热。"""
     import app as app_mod
     import server.manga_api as A
-    from engine.config import MANGA_DOWNLOADS_DIR
+    from server import state as S
 
     ad = _SlowAdapter()
+    downloads = tmp_path / "downloads"
+    monkeypatch.setattr(A, "MANGA_DOWNLOADS_DIR", str(downloads), raising=False)
+    monkeypatch.setattr(A, "MANGA_DIR", str(tmp_path), raising=False)
+    monkeypatch.setattr(A, "MANGA_CACHE_DIR", str(tmp_path / "cache"), raising=False)
+    monkeypatch.setattr(S, "MANGA_DOWNLOADS_DIR", str(downloads), raising=False)
+    monkeypatch.setattr(S, "MANGA_CACHE_DIR", str(tmp_path / "cache"), raising=False)
+    monkeypatch.setattr(A, "_integrity_summary", lambda *args, **kwargs: None)
+    def refresh(*args, **kwargs):
+        ad.comic_info(args[1])
+        return {"chapters": [{"id": "1", "name": "第1话"}]}
+    monkeypatch.setattr(A, "_refresh_detail_cache", refresh)
+    with S._detail_flight_guard:
+        S._detail_flights.pop(("t1", "comic2"), None)
+        S._detail_swr_fail_ts.pop(("t1", "comic2"), None)
     monkeypatch.setattr(A, "_load_manga_adapters", lambda: None)
     monkeypatch.setattr(A, "_manga_adapter", lambda k: ad)
 
-    d = os.path.join(MANGA_DOWNLOADS_DIR, "t1", "comic2")
+    d = os.path.join(str(downloads), "t1", "comic2")
     os.makedirs(d, exist_ok=True)
     import json as _json
     with open(os.path.join(d, "_info.json"), "w", encoding="utf-8") as f:
@@ -277,12 +290,18 @@ def test_route_quick_path_single_refresh(monkeypatch):
                     "chapters": [{"id": "1", "name": "第1话", "group": ""},
                                  {"id": "2", "name": "第2话", "group": ""},
                                  {"id": "3", "name": "第3话", "group": ""}]}, f)
+    # 现在“已下载”必须有可验证图片证据；仅有 _info.json 不再触发本地快路径。
+    page_dir = os.path.join(d, "1")
+    os.makedirs(page_dir, exist_ok=True)
+    with open(os.path.join(page_dir, "0000.jpg"), "wb") as f:
+        f.write(b"\xff\xd8\xff" + b"fixture-page")
 
     resps = [None] * 6
 
     def _w(i):
         c = app_mod.app.test_client()
-        resps[i] = c.get("/api/manga/t1/comic2")
+        # 书架/本地阅读必须显式选择本地目录；默认详情保留完整源站目录。
+        resps[i] = c.get("/api/manga/t1/comic2?catalog=local")
 
     ts = [threading.Thread(target=_w, args=(i,)) for i in range(6)]
     for t in ts:
@@ -292,9 +311,5 @@ def test_route_quick_path_single_refresh(monkeypatch):
     assert all(r is not None and r.status_code == 200 for r in resps)
     bodies = [r.get_json() for r in resps]
     assert all(b.get("quick") for b in bodies)  # 秒回本地数据
-    # 后台刷新（含 0.2s 延迟 + 0.4s 慢构建）合并为一次
-    deadline = time.time() + 5
-    while time.time() < deadline and ad.calls < 1:
-        time.sleep(0.05)
-    time.sleep(0.8)  # 等刷新完成
-    assert ad.calls == 1, f"后台刷新回源 {ad.calls} 次（应为 1）"
+    # 本地请求不应提交刷新任务，故无须等待异步线程；适配器一旦被调用即为越界。
+    assert ad.calls == 0, f"本地目录触发了在线回源 {ad.calls} 次（应为 0）"

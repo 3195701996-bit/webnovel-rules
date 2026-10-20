@@ -152,7 +152,86 @@ def test_scan_books_done_follows_disk(client, stale_book):
 
 
 # ── 3) 任务自愈：缓存丢了的章节要重新下载 ────────────────────────────
-def test_crawl_prunes_completed_without_cache(monkeypatch):
+@pytest.mark.parametrize("total", [4999, 5000, 5035])
+def test_large_book_download_count_matches_detail(client, total):
+    key = f"stale_large_{total}"
+    _mk_book(key=key, completed_n=total, cache_n=2, total=total)
+    detail = client.get(f"/api/books/{key}").get_json()
+    books = client.get("/api/books").get_json()["books"]
+    summary = next(book for book in books if book["key"] == key)
+    assert summary["done"] == detail["done"] == 2
+    assert detail["stale_completed"] == total - 2
+
+
+@pytest.mark.parametrize("cache_kind", ["empty", "directory", "whitespace", "bad_utf8"])
+def test_invalid_cache_is_not_downloaded(client, cache_kind):
+    from engine.app_utils import cache_key_of
+    key = f"stale_invalid_{cache_kind}"
+    d, chapters = _mk_book(key=key, completed_n=3, cache_n=2)
+    path = os.path.join(d, cache_key_of(chapters[2]["url"]) + ".cache")
+    if cache_kind == "directory":
+        os.mkdir(path)
+    elif cache_kind == "bad_utf8":
+        with open(path, "wb") as f:
+            f.write(b"valid prefix\xff\xfe")
+    elif cache_kind == "whitespace":
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(" \n\t\u3000")
+    else:
+        with open(path, "w", encoding="utf-8"):
+            pass
+    detail = client.get(f"/api/books/{key}").get_json()
+    books = client.get("/api/books").get_json()["books"]
+    assert next(b for b in books if b["key"] == key)["done"] == 2
+    assert detail["done"] == 2
+    assert detail["percent"] == 66.7
+    assert detail["chapters"][2]["downloaded"] is False
+    assert client.get(f"/api/books/{key}/chapter/3").get_json()["downloaded"] is False
+    stat = os.stat(path)
+    conditional = client.get(f"/api/books/{key}/chapter/3", headers={
+        "If-None-Match": f'"3:{stat.st_mtime_ns}:{stat.st_size}"'})
+    assert conditional.status_code == 200
+    assert conditional.get_json()["downloaded"] is False
+
+
+@pytest.mark.parametrize("offline", [False, True])
+def test_check_update_detects_missing_cache_without_opening_reader(monkeypatch, offline):
+    import server.state as st
+    key = f"stale_check_{offline}"
+    d, chapters = _mk_book(key=key, completed_n=3, cache_n=2)
+    state_path = os.path.join(d, "_state.json")
+    with open(state_path, encoding="utf-8") as f:
+        state = json.load(f)
+    state["completed"] = [c["url"] for c in chapters]
+    state["failed"] = {chapters[0]["url"]: "stale failure"}
+    with open(state_path, "w", encoding="utf-8") as f:
+        json.dump(state, f)
+    _invalidate(d)
+
+    class Crawler:
+        def __init__(self, source):
+            pass
+
+        def get_book(self, url):
+            if offline:
+                raise OSError("offline")
+            return object()
+
+        def get_toc(self, book, **kwargs):
+            return chapters
+
+    monkeypatch.setattr(st, "get_by_uid", lambda uid: {"uid": uid})
+    monkeypatch.setattr(st, "SourceCrawler", Crawler)
+    st._run_check_update(key)
+    assert st._check_jobs[key]["status"] == "done"
+    assert st._check_jobs[key]["missing_count"] == 1
+    assert st._check_jobs[key]["retry_failed"] == 0
+    assert st._check_missing[key]["chapters"] == chapters[2:]
+
+
+@pytest.mark.parametrize("cache_kind", ["missing", "empty", "directory", "bad_utf8", "whitespace"])
+@pytest.mark.parametrize("stale_failure", [False, True])
+def test_crawl_prunes_completed_without_cache(monkeypatch, cache_kind, stale_failure):
     """开爬前 completed 与磁盘对齐：丢缓存的章节重新进入待下载队列"""
     from engine.crawler import CrawlTask
     from engine.app_utils import cache_key_of
@@ -160,12 +239,30 @@ def test_crawl_prunes_completed_without_cache(monkeypatch):
     d, chapters = _mk_book(key="stale_src_crawl1", completed_n=3, cache_n=2)
     # 第 3 章缓存丢失（completed 里仍在）→ 必须被剔除并重抓
     assert not os.path.exists(os.path.join(d, cache_key_of(chapters[2]["url"]) + ".cache"))
+    invalid_path = os.path.join(d, cache_key_of(chapters[2]["url"]) + ".cache")
+    if cache_kind == "empty":
+        with open(invalid_path, "w", encoding="utf-8"):
+            pass
+    elif cache_kind == "directory":
+        os.mkdir(invalid_path)
+    elif cache_kind == "bad_utf8":
+        with open(invalid_path, "wb") as f:
+            f.write(b"\xff\xfe")
+    elif cache_kind == "whitespace":
+        with open(invalid_path, "w", encoding="utf-8") as f:
+            f.write(" \n\t")
 
     src = {"uid": "stale_src", "bookSourceName": "假源",
            "bookSourceUrl": "http://stale.example.com"}
     task = CrawlTask(src, BOOK_URL, d, resume=True)
+    assert task._has_cache(chapters[2]["url"]) is False
+    if cache_kind == "directory":
+        os.rmdir(invalid_path)  # Assert detection without obstructing atomic repair.
     assert task._load_state() is True
     assert len(task.completed) == 3
+    if stale_failure:
+        task.failed[chapters[0]["url"]] = "old failure after successful cache write"
+        task._save_state()  # crawl(resume=True) reloads state; exercise persisted failure.
 
     fetched = []
 
@@ -186,6 +283,9 @@ def test_crawl_prunes_completed_without_cache(monkeypatch):
     from engine.app_utils import cache_key_of as _ck
     assert os.path.exists(os.path.join(d, _ck(chapters[2]["url"]) + ".cache"))
     assert len(task.completed) == 3 and task._done_count() == 3
+    assert task.failed == {}
+    with open(os.path.join(d, "_state.json"), encoding="utf-8") as f:
+        assert json.load(f)["failed"] == {}
 
     shutil.rmtree(d, ignore_errors=True)
 

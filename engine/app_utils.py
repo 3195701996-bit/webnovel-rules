@@ -4,12 +4,15 @@
 """
 from contextlib import suppress as _suppress
 from datetime import datetime
+from functools import lru_cache
 import hashlib
 import json
 import os
 import re
+import shutil
 import tempfile
 import threading
+import time
 
 try:
     from opencc import OpenCC
@@ -183,7 +186,21 @@ def load_json(path, default=None):
         return default
 
 
+_text_write_locks = tuple(threading.RLock() for _ in range(64))
+
+
+def text_write_lock(path):
+    """固定条带可重入锁；章节下载/重爬/清洗/恢复使用同一写入边界。"""
+    key = os.path.normcase(os.path.realpath(os.path.abspath(path)))
+    return _text_write_locks[int(hashlib.sha256(key.encode()).hexdigest(), 16) % len(_text_write_locks)]
+
+
 def atomic_write_text(path, text):
+    with text_write_lock(path):
+        _atomic_write_text_unlocked(path, text)
+
+
+def _atomic_write_text_unlocked(path, text):
     """tmp + os.replace 原子写文本（章节缓存/txt 导出共用，语义同 atomic_write）"""
     d = os.path.dirname(path) or "."
     os.makedirs(d, exist_ok=True)
@@ -206,6 +223,53 @@ def cache_key_of(url):
     """章节 URL → 缓存文件名键。app.py / crawler.py / 历史 fallback 共用——
     此前三处各自实现同一替换规则，任何一处漂移都会造成缓存失联。"""
     return re.sub(r"[^\w\u4e00-\u9fff-]", "_", url)[-60:]
+
+
+@lru_cache(maxsize=8192)
+def _valid_chapter_text(path, fingerprint):
+    """Stream UTF-8 validation; cache only the boolean, not chapter contents."""
+    nonblank = False
+    try:
+        with open(path, encoding="utf-8") as stream:
+            while True:
+                chunk = stream.read(65536)
+                if not chunk:
+                    break
+                nonblank = nonblank or bool(chunk.strip())
+        return nonblank
+    except (OSError, UnicodeError):
+        return False
+
+
+def chapter_cache_valid(path):
+    """Readable UTF-8 body, invalidated on replacement or in-place modification."""
+    import stat
+    try:
+        st = os.stat(path)
+        if not stat.S_ISREG(st.st_mode) or st.st_size == 0:
+            return False
+        fingerprint = (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+        return _valid_chapter_text(os.fspath(path), fingerprint)
+    except OSError:
+        return False
+
+
+def chapter_cache_keys(book_dir):
+    """Inventory readable chapter files; never trust completion history."""
+    keys = set()
+    try:
+        with os.scandir(book_dir) as entries:
+            for entry in entries:
+                if not entry.name.endswith(".cache"):
+                    continue
+                try:
+                    if chapter_cache_valid(entry.path):
+                        keys.add(entry.name[:-6])
+                except OSError:
+                    continue  # Concurrent deletion is an unavailable cache.
+    except OSError:
+        pass
+    return keys
 
 
 
@@ -259,7 +323,18 @@ def update_json(p, mutator, default=None):
                 with open(p, encoding="utf-8") as f:
                     data = json.load(f)
             except Exception:
-                pass
+                # JSON 更新器服务于收藏、阅读历史、书架与任务周边状态。
+                # 损坏文件不能静默当空数据后被新写入覆盖，否则一次收藏/进度
+                # 保存就会把唯一的旧字节永久抹掉。先留证；无法留存时拒绝更新。
+                corrupt_copy = p + ".corrupt"
+                if os.path.exists(corrupt_copy):
+                    corrupt_copy += "." + str(time.time_ns())
+                try:
+                    shutil.copy2(p, corrupt_copy)
+                except OSError:
+                    raise OSError("损坏 JSON 原件无法安全留存，已取消覆盖")
+                print(f"[json] 损坏文件已保留，使用默认值重建: {corrupt_copy}",
+                      flush=True)
         new_data = mutator(data)
         atomic_write(p, new_data)
         return new_data

@@ -76,5 +76,8 @@ def adapter_meta(key):
 
 
 def list_adapters():
+    from engine.config import IS_MOBILE
     with _LOCK:
-        return [{"key": k, "name": v.name, "version": v.version} for k, v in _REGISTRY.items()]
+        return [{"key": k, "name": v.name, "version": v.version}
+                for k, v in _REGISTRY.items()
+                if not (IS_MOBILE and k == "copymanga_web")]

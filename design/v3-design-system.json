@@ -1,0 +1,93 @@
+{
+  "status": "shared_color_foundation_implemented_full_layout_and_release_pending_not_user_approved",
+  "target_version": "3.0.0",
+  "purpose": "Consumer reading app and responsive Web; not a diagnostics dashboard",
+  "tokens": {
+    "background": "#FFFFFF",
+    "surface": "#FFFFFF",
+    "surface_variant": "#F4F7F9",
+    "ink": "#202A30",
+    "secondary_text": "#65737C",
+    "accent": "#31546B",
+    "on_accent": "#FFFFFF",
+    "divider": "#E6EBEE",
+    "spacing_logical_px": [4, 8, 12, 16, 24, 32],
+    "control_min_height_logical_px": 44,
+    "chapter_row_height_logical_px": 48,
+    "cover_radius_logical_px": 6,
+    "typography": "Platform Chinese sans-serif; explicit heading/body/label/control scales",
+    "icons": "Consistent outline navigation/actions; selected state uses accent",
+    "prohibited": ["beige reinterpretation", "orange accent", "decorative gradients", "nested card stacks", "fake metrics"]
+  },
+  "concepts": {
+    "desktop_detail": {
+      "file": "concepts/v3-desktop-detail.png",
+      "status": "generated_reference_inspected_not_implemented_or_user_approved",
+      "native_size_px": [1536, 1024],
+      "background": "#FFFFFF",
+      "layout": "Quiet full-width topbar; centered open content; cover left and metadata/actions right; full-width catalog below divider",
+      "families": ["outline icon action", "filled reading button", "outline download-management button", "plain utility action", "group band", "divider-separated chapter row"],
+      "typography_logical_px": {"title": 28, "section_heading": 24, "body": 16, "control": 16, "caption": 14},
+      "responsive": "Below 768px use the mobile-detail composition; preserve whole-page scrolling and no inner catalog scroll trap",
+      "copy_lock": ["漫画详情", "继续阅读", "下载管理", "检查更新", "导出 ZIP", "更多", "展开", "章节目录", "查找章节", "正序", "整卷", "单话"],
+      "data_exceptions": "Title, author, description, source, counts, resume and chapter labels/status must come from real data; pictured cover and counts are fictional samples, never seeded product data",
+      "implementation_inventory": {
+        "continue_reading": "Reuse continueRead and explicit identity routing; do not override chapter selection with history",
+        "start_reading": "Retain startRead as a secondary accessible option, not a second competing filled CTA",
+        "download_management": "Reveal existing local manager when local content exists; retain online exact-ID download selection and update preview; never turn a local entry into silent online reading",
+        "check_updates": "Reuse mountMangaUpdatePreview; keep ID warnings and confirmed missing-list submission",
+        "export_zip": "Wire existing /api/manga/<source>/<comic_id>/zip only when downloaded content exists; show actionable failures, do not silently navigate on error",
+        "overflow": "Replace numeric prompt with accessible named actions; preserve copy title, copy link and metadata-only chapter report; destructive actions retain confirmations",
+        "favorites": "Existing toggleFav/loadFavState with pending/error/disabled states; bookmark selected state must reflect server result",
+        "metadata": "Unbox author/tags/date; preserve optional fields and local cover privacy; description expand is a native disclosure",
+        "catalog": "Preserve existing volume-first identity/index mapping, bounded rendering and chapter finder; visual row style must not change original route indices"
+      },
+      "known_reference_adjustments_before_code": [
+        "Generated image shows both topbar overflow and inline More; consolidate to one semantic action menu in implementation to avoid duplicate controls",
+        "Generated chapter-row icons are redundant with group headings; use existing consistent outline family and omit decorative duplicates if needed for mobile density",
+        "Concept combines illustrative 60-unit total with shortened visible groups; actual counts must be computed from actual catalog and never copied from image"
+      ],
+      "fidelity_review_points": ["white/slate palette", "open layout without nested cards", "single reading CTA hierarchy", "cover aspect and no tint", "explicit control typography", "volume-before-chapter list and quiet dividers", "scrolling and responsive continuation"],
+      "remaining": "No rendered implementation yet; browser interaction, responsive screenshot comparison and real-device parity are required before claiming redesign completion"
+    },
+    "mobile_detail": {
+      "file": "concepts/v3-mobile-detail.png",
+      "implementation_status": "primary_read_manage_row_and_wrapping_utility_actions_implemented_full_detail_pending",
+      "primary_actions": {"layout": "reading 1.5fr / local download management 1fr", "minimum_height_dp": 48, "corner_radius_dp": 8},
+      "utility_actions": "FlowRow: check updates, export ZIP, More; top-up only when current catalog has missing units",
+      "intentional_incremental_differences": ["No new icon assets in this action-only increment", "Book header, favorite placement, metadata and catalog heading still require the remaining redesign", "Generated cover/counts remain concept-only; test screenshot uses no-cover fixture", "AVD capture 1080x2400 differs from 1024x1536 concept; no pixel-perfect full-page claim"],
+      "primary_action": "继续阅读",
+      "secondary_action": "下载管理",
+      "utilities": ["检查更新", "导出 ZIP", "更多"],
+      "overflow_must_preserve": ["取消收藏", "从书库移除", "管理已下载", "诊断与章节核对"],
+      "catalog_order": "整卷优先，单话在后；真实身份与读取入口规则不变",
+      "chapter_search": "查找章节",
+      "scroll": "Entire content scrolls; tool area must not trap chapter viewport"
+    },
+    "mobile_favorites": {
+      "file": "concepts/v3-mobile-favorites.png",
+      "tabs": ["最近阅读", "已缓存", "收藏"],
+      "navigation": ["书架", "浏览", "下载", "设置"],
+      "search": "查找收藏（作品名或源）",
+      "filters": ["全部", "有未读"],
+      "depicted_filter_state": "全部",
+      "unread_source": "Actual server read-set-based unread count, never highest chapter or resume position",
+      "grid": "Three equal cover columns on target mobile width; responsive adaptation must retain legibility"
+    }
+  },
+  "asset_constraints": [
+    "Generated covers are fictional concept illustrations, not real source covers or downloadable reading content",
+    "Never crop the concept into shipped interactive UI",
+    "Implementation must keep actual covers, real metadata and real application state",
+    "Code-native controls, text, focus, accessibility and destructive-action confirmations are mandatory"
+  ],
+  "pending_design_surfaces": ["browse and categories", "search", "downloads and recovery", "reader controls", "settings", "novel detail", "desktop Web adaptations"],
+  "verification_before_completion": [
+    "Extract final component typography and layout dimensions before implementation",
+    "Render actual app and Web with representative data",
+    "Inspect concept and implementation screenshots together",
+    "Check copy, hierarchy, colors, typography, spacing, icons and responsive behavior",
+    "Revalidate local/online catalogs, volume order, favorites, download status, explicit chapter selection and progress",
+    "No claim of complete redesign or 3.0.0 release until all main surfaces and real-device flows pass"
+  ]
+}

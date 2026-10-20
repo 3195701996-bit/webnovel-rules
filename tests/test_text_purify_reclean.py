@@ -188,9 +188,191 @@ def test_reclean_is_idempotent(client, book):
     assert r2["removed_lines"] == 0 and r2["removed_chars"] == 0
 
 
+def test_reclean_rebuilds_export_without_source_or_network(client, book, monkeypatch):
+    key, d, _, _ = book
+    def forbidden(*args, **kwargs):
+        raise AssertionError("本地重新净化不应依赖书源")
+    monkeypatch.setattr("server.novel_api.get_by_uid", forbidden)
+    (d / "book.txt").write_text("过期全文", encoding="utf-8")
+    result = client.post(f"/api/books/{key}/reclean", json={"dry_run": False}).get_json()
+    assert result["txt_rebuilt"] and not result["failed"]
+    text = (d / "book.txt").read_text(encoding="utf-8")
+    assert "正文第一段" in text and "过期全文" not in text and "huanyuanap" not in text
+
+
+def test_reclean_reports_export_failure_and_keeps_old_export(client, book, monkeypatch):
+    key, d, _, _ = book
+    monkeypatch.setattr("server.novel_api._merge_book_txt", lambda *args: None)
+    (d / "book.txt").write_text("原有全文", encoding="utf-8")
+    result = client.post(f"/api/books/{key}/reclean", json={"dry_run": False}).get_json()
+    assert not result["txt_rebuilt"]
+    assert any(item["index"] == 0 and "全文" in item["reason"] for item in result["failed"])
+    assert (d / "book.txt").read_text(encoding="utf-8") == "原有全文"
+
+
 def test_reclean_missing_book_is_404(client, book):
     r = client.post("/api/books/no_such_book_zzz/reclean")
     assert r.status_code == 404
+
+
+def test_reader_txt_preview_and_download_never_change_local_files(client, book):
+    key, d, _, _ = book
+    (d / 'book.txt').write_text('原始导出保留', encoding='utf-8')
+    before = {path.name: path.read_bytes() for path in d.iterdir() if path.is_file()}
+    preview = client.get(f'/api/books/{key}/txt/preview?clean=1&omit_promotions=0')
+    assert preview.status_code == 200
+    report = preview.get_json()
+    assert report['exported_count'] == 3 and report['missing_count'] == 0
+    response = client.get(f'/api/books/{key}/txt?layout=reader&clean=1&revision={report["revision"]}')
+    assert response.status_code == 200
+    text = response.get_data().decode('utf-8')
+    assert '小书亭app' not in text and '正文第一段' in text
+    assert response.headers['X-Export-Revision'] == report['revision']
+    response.close()
+    assert before == {path.name: path.read_bytes() for path in d.iterdir() if path.is_file()}
+
+
+def test_reader_txt_stale_preview_or_changed_options_are_rejected(client, book):
+    from engine.app_utils import cache_key_of
+    key, d, chapters, _ = book
+    report = client.get(f'/api/books/{key}/txt/preview').get_json()
+    revision = report['revision']
+    assert client.get(f'/api/books/{key}/txt?layout=reader&clean=0&revision={revision}').status_code == 409
+    path = d / (cache_key_of(chapters[0]['url']) + '.cache')
+    path.write_text(path.read_text() + '\n新正文。', encoding='utf-8')
+    assert client.get(f'/api/books/{key}/txt?layout=reader&revision={revision}').status_code == 409
+    assert client.get(f'/api/books/{key}/txt?layout=reader').status_code == 400
+    assert client.get(f'/api/books/{key}/txt/preview?omit_promotions=maybe').status_code == 400
+
+
+def test_reclean_original_recovery_preview_and_explicit_restore(client, book):
+    from engine.app_utils import cache_key_of
+    key, d, chapters, bodies = book
+    path = d / (cache_key_of(chapters[1]["url"]) + ".cache")
+    client.post(f"/api/books/{key}/reclean", json={"dry_run": False})
+    cleaned = path.read_bytes()
+    listing = client.get(f"/api/books/{key}/reclean/recovery").get_json()
+    assert listing["count"] == 1 and listing["items"][0]["restorable"]
+    assert all("original" not in item for item in listing["items"])
+    identity = listing["items"][0]["id"]
+    preview = client.post(f"/api/books/{key}/reclean/restore", json={"ids": [identity]}).get_json()
+    assert preview["dry_run"] and preview["restored"] == 0 and path.read_bytes() == cleaned
+    result = client.post(f"/api/books/{key}/reclean/restore",
+                         json={"ids": [identity], "dry_run": False}).get_json()
+    assert result["restored"] == 1 and result["txt_rebuilt"] and not result["export_error"]
+    assert path.read_text(encoding="utf-8") == bodies[2]
+    assert client.get(f"/api/books/{key}/reclean/recovery").get_json()["items"][0]["already_original"]
+
+
+def test_reclean_recovery_refuses_new_content_and_invalid_boolean(client, book):
+    from engine.app_utils import cache_key_of
+    key, d, chapters, _ = book
+    client.post(f"/api/books/{key}/reclean", json={"dry_run": False})
+    identity = client.get(f"/api/books/{key}/reclean/recovery").get_json()["items"][0]["id"]
+    path = d / (cache_key_of(chapters[1]["url"]) + ".cache")
+    path.write_text("用户后续下载的新内容", encoding="utf-8")
+    result = client.post(f"/api/books/{key}/reclean/restore",
+                         json={"ids": [identity], "dry_run": False}).get_json()
+    assert not result["items"][0]["ok"] and result["restored"] == 0
+    assert path.read_text() == "用户后续下载的新内容"
+    assert client.post(f"/api/books/{key}/reclean/restore",
+                       json={"ids": [identity], "dry_run": "false"}).status_code == 400
+
+
+@pytest.mark.parametrize("already_original", [False, True])
+def test_recovery_listing_uses_catalog_order_and_keeps_unmapped_archives_last(client, book, already_original):
+    from engine.app_utils import cache_key_of
+    from engine.text_recovery import save_cleaned_cache, restore_cleaned_cache
+    import server.state as st
+
+    key, directory, _, _ = book
+    records = []
+    for index in range(4):
+        chapter = {"name": "第一章（跨卷重置）", "url": f"https://t.example.com/order/{index}"}
+        filename = cache_key_of(chapter["url"]) + ".cache"
+        original = f"章节{index}\n原文与广告。"
+        (directory / filename).write_text(original, encoding="utf-8")
+        identity = save_cleaned_cache(str(directory), filename, original, f"章节{index}\n原文。")
+        records.append((identity, chapter))
+    # Deliberately oppose hash order so this cannot pass by coincidence or by
+    # sorting repeated chapter titles rather than the real directory positions.
+    records.sort(reverse=True, key=lambda record: record[0])
+    first, second, third, historical = records
+    if already_original:
+        restore_cleaned_cache(str(directory), first[0], dry_run=False)
+    invalid_id = "0" * 64
+    (directory / ".reclean-originals" / (invalid_id + ".json")).write_text("{}", encoding="utf-8")
+    state_path = directory / "_state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["chapters"] = [first[1], second[1], first[1], third[1]]
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    st.invalidate_book_state(str(state_path))
+
+    def snapshot():
+        return {str(path.relative_to(directory)): (path.read_bytes(), path.stat().st_mtime_ns)
+                for path in directory.rglob("*") if path.is_file()}
+
+    before = snapshot()
+    response = client.get(f"/api/books/{key}/reclean/recovery")
+    assert response.status_code == 200
+    listing = response.get_json()
+    ids = [item["id"] for item in listing["items"]]
+    assert listing["count"] == 5
+    assert ids[:3] == [first[0], second[0], third[0]]
+    assert ids[3:] == sorted([historical[0], invalid_id])
+    item = listing["items"][0]
+    assert item["already_original"] is already_original
+    assert item["label"] == "第1项 · 第一章（跨卷重置） / 第3项 · 第一章（跨卷重置）"
+    assert next(item for item in listing["items"] if item["id"] == historical[0])["label"] == "历史章节（目录已变化）"
+    assert next(item for item in listing["items"] if item["id"] == invalid_id)["conflict"]
+    assert snapshot() == before
+    assert client.get(f"/api/books/{key}/reclean/recovery").get_json() == listing
+
+    state["chapters"] = [third[1], first[1], second[1]]
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    st.invalidate_book_state(str(state_path))
+    before = snapshot()
+    reordered = client.get(f"/api/books/{key}/reclean/recovery").get_json()
+    assert [item["id"] for item in reordered["items"]][:3] == [third[0], first[0], second[0]]
+    assert [item["id"] for item in reordered["items"]][3:] == ids[3:]
+    assert snapshot() == before
+
+
+def test_reclean_preview_reports_promotions_after_400_changes_without_writes(client, book):
+    """预览必须扫完整本，不能把前400章的抽样冒充全书结论。"""
+    from engine.app_utils import cache_key_of
+    import server.state as st
+
+    key, d, _, _ = book
+    state_path = d / "_state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    chapters = []
+    before = {}
+    for i in range(502):
+        promo = i >= 401
+        name = "推书《测试作品》" if promo else f"第{i + 1}章 测试"
+        url = f"https://t.example.com/audit/{i}"
+        chapters.append({"name": name, "url": url})
+        body = ("《测试作品》\n求帮忙追读！" if promo else "正常剧情。")
+        raw = name + "\n\n" + body + "\n小书亭app"
+        path = d / (cache_key_of(url) + ".cache")
+        path.write_text(raw, encoding="utf-8")
+        before[path] = path.read_bytes()
+    state["chapters"] = chapters
+    state_path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+    before[state_path] = state_path.read_bytes()
+    st.invalidate_book_state(str(state_path))
+
+    response = client.post(f"/api/books/{key}/reclean?dry_run=1")
+    assert response.status_code == 200
+    result = response.get_json()
+    assert result["scanned"] == 502 and result["changed"] == 502
+    assert result["review_count"] == 101
+    assert len(result["review_items"]) == 100 and result["review_truncated"]
+    assert result["review_items"][0]["index"] == 402
+    assert all(item["review_only"] for item in result["review_items"])
+    assert not result["txt_rebuilt"]
+    assert all(path.read_bytes() == raw for path, raw in before.items())
 
 
 def test_reclean_reports_truthful_totals(client, book):

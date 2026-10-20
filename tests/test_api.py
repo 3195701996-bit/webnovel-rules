@@ -709,6 +709,22 @@ def test_search_toc_count_does_not_pollute_full_toc(client):
             _toc_cache.pop(book_url, None)
 
 
+@pytest.mark.parametrize("payload", [
+    [1, 2], "bad", {"idx": "not-a-number"}, {"idx": []},
+    {"idx": 1.5}, {"idx": True}, {"idx": False},
+    {"idx": 1, "pct": {}}, {"idx": 1, "pct": False},
+    {"idx": 1, "pct": "nan"}, {"idx": 1, "pct": "Infinity"},
+])
+def test_book_progress_invalid_input_preserves_position(client, payload):
+    path = "/api/books/testsrc_validation/progress"
+    assert client.post(path, json={"idx": 12, "pct": 37}).status_code == 200
+    before = client.get(path).get_json()
+    response = client.post(path, json=payload)
+    assert response.status_code == 400
+    assert response.get_json()["ok"] is False
+    assert client.get(path).get_json() == before
+
+
 def test_book_progress_api_roundtrip(client):
     """阅读进度 API 回归：POST 保存 → GET 读回 → _scan_books 携带 last_read_ts。
     历史 bug：BOOK_PROGRESS_FILE 未定义导致 GET/POST 均 500（跨设备进度同步

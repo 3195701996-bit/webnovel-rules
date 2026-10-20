@@ -22,11 +22,18 @@ data class NovelItem(
     val failed: Int = 0,
 ) {
     val started: Boolean get() = readIdx > 0 || lastReadTs > 0
+    val downloadComplete: Boolean get() = total > 0 && done >= total
+    val downloadBadge: String get() = when {
+        downloadComplete -> "已下载全部"
+        failed > 0 -> "$failed 章失败"
+        done > 0 -> "部分下载"
+        else -> "未下载"
+    }
     val progressLabel: String
         get() = if (started) {
             val where = readName.ifBlank { "第 $readIdx 章" }
             "读到 $where" + if (readPct > 0) " · 本章 $readPct%" else ""
-        } else if (percent >= 100) "已下载 · $done/$total 章" else "已下载 $done/$total 章"
+        } else if (downloadComplete) "已下载 · $done/$total 章" else "已下载 $done/$total 章"
 }
 
 /** 漫画条目（/api/manga/library）：含阅读进度与封面展示地址 */
@@ -74,6 +81,31 @@ data class MangaItem(
             else -> "未读"
         }
 }
+
+data class MangaFavorite(
+    val source: String, val comicId: String, val title: String, val cover: String,
+    val ts: Double, val unreadCount: Int, val latestLabel: String,
+    val updateTime: String = "",
+    val identitySource: String = source,
+)
+
+fun sameMangaIdentitySource(first: String, second: String): Boolean {
+    fun canonical(value: String) = when (value) {
+        "copymanga", "copymanga_web" -> "copymanga"
+        else -> value
+    }
+    return canonical(first) == canonical(second)
+}
+
+data class MangaFavoriteCheckStatus(
+    val running: Boolean,
+    val total: Int,
+    val checked: Int,
+    val succeeded: Int,
+    val failed: Int,
+)
+
+data class MangaFavoriteCheckStart(val started: Int, val alreadyRunning: Boolean)
 
 /**
  * 小说书源（GET /api/sources）：Legado 格式的源配置。
@@ -183,12 +215,15 @@ data class MangaUpdateCheck(
     val latest: String,
     val error: String,
     val missingIds: List<String>,
+    val missingNames: List<String> = emptyList(),
+    val catalogSummary: String = "",
+    val catalogWarning: String = "",
 ) {
     val label: String
         get() = when {
             !ok -> "检查失败：" + error.ifBlank { "原因未知" }
             hasUpdate || missingCount > 0 ->
-                "发现 " + (if (missingCount > 0) missingCount else missingIds.size) + " 个新话" +
+                "有 " + (if (missingCount > 0) missingCount else missingIds.size) + " 个章节未下载" +
                     (if (latest.isNotBlank()) "（最新：$latest）" else "")
             else -> "已是最新" + (if (latest.isNotBlank()) "（最新：$latest）" else "")
         }
@@ -245,8 +280,9 @@ data class MangaLibraryUpdate(
         get() = if (running) "检查中 $done/$total"
                else when {
                    items.isEmpty() -> "尚未检查"
+                   items.any { !it.second.ok } -> "${withUpdate.size} 部有待下载内容，${items.count { !it.second.ok }} 部检查失败（检查 ${items.size} 部）"
                    withUpdate.isEmpty() -> "全部已是最新（检查 ${items.size} 部）"
-                   else -> "${withUpdate.size} 部有新话（检查 ${items.size} 部）"
+                   else -> "${withUpdate.size} 部有待下载内容（检查 ${items.size} 部）"
                }
 }
 
@@ -501,6 +537,23 @@ data class MangaChapter(val id: String, val name: String, val group: String) {
     val label: String get() = name.ifBlank { id }
 }
 
+internal fun mangaChapterStatusLabel(
+    isReading: Boolean,
+    inDownloadTask: Boolean,
+    taskRunning: Boolean,
+    isCurrentDownloadChapter: Boolean,
+    downloaded: Boolean,
+    partiallyDownloaded: Boolean,
+): String = when {
+    isReading -> "在读"
+    inDownloadTask && taskRunning && isCurrentDownloadChapter && partiallyDownloaded -> "补齐中"
+    inDownloadTask && taskRunning && isCurrentDownloadChapter -> "下载中"
+    inDownloadTask -> "排队中"
+    downloaded -> "已下载"
+    partiallyDownloaded -> "部分下载 · 可补齐"
+    else -> "未下载"
+}
+
 /**
  * 漫画详情。`downloaded` 是服务端扫描出的**已下载章节 id 集合**
  * （判据是目录内确有图片文件），不是"点过就算"。
@@ -508,6 +561,7 @@ data class MangaChapter(val id: String, val name: String, val group: String) {
 data class MangaDetail(
     val source: String,
     val comicId: String,
+    val identitySource: String,
     val title: String,
     val cover: String,
     val author: String,
@@ -517,11 +571,21 @@ data class MangaDetail(
     /** 整卷条目（copymanga 系详情返回 volumes；可下载单元，详情页排在话列表前面） */
     val volumes: List<MangaChapter> = emptyList(),
     val downloaded: Set<String>,
+    /** Chapters with readable local pages but a provable gap/incomplete manifest. */
+    val partialDownloaded: Set<String> = emptySet(),
     val sourceName: String,
     /** 续读信息（服务端解析；没有阅读记录时为 null） */
     val resume: MangaResume? = null,
+    /** Strict shelf catalog; online details may mix local pages with remote chapters. */
+    val localOnly: Boolean = false,
 ) {
-    val downloadedCount: Int get() = (volumes + chapters).count { downloaded.contains(it.id) }
+    /** 阅读目录：卷漫画没有普通 chapters，卷本身就是可下载/可阅读单元。 */
+    val readingChapters: List<MangaChapter> by lazy(LazyThreadSafetyMode.NONE) {
+        volumes + chapters
+    }
+    val downloadedCount: Int by lazy(LazyThreadSafetyMode.NONE) {
+        readingChapters.count { downloaded.contains(it.id) }
+    }
     /** 上次读到的章名（记录里的原话），用于向用户解释"要打开的是哪一话" */
     val resumeRecordLabel: String get() = resume?.recordLabel.orEmpty()
 
@@ -535,18 +599,19 @@ data class MangaDetail(
      * 最近话号 逐级定位，客户端只做兜底。
      */
     fun resumeIndex(readIdx: Int): Int {
-        if (chapters.isEmpty()) return -1
+        val reading = readingChapters
+        if (reading.isEmpty()) return -1
         val r = resume
         if (r != null) {
             // 身份优先（章节 id / 章名 / 话号），服务端下标只作兜底：详情页与阅读器
             // 可能拿到**两份不同的列表**，下标不能跨屏传递。
             val byIdentity = MangaResumeResolver.resolve(
-                chapters, r.matchedId.ifBlank { r.recordId }, r.recordLabel, -1)
+                reading, r.matchedId.ifBlank { r.recordId }, r.recordLabel, -1)
             if (byIdentity >= 0) return byIdentity
-            if (r.index in chapters.indices) return r.index
+            if (r.index in reading.indices) return r.index
         }
-        if (readIdx in chapters.indices) return readIdx
-        return chapters.indexOfFirst { downloaded.contains(it.id) }.takeIf { it >= 0 } ?: 0
+        if (readIdx in reading.indices) return readIdx
+        return reading.indexOfFirst { downloaded.contains(it.id) }.takeIf { it >= 0 } ?: 0
     }
 }
 
@@ -700,6 +765,21 @@ data class StorageUsage(
 
 object EngineData {
 
+    /** 从错误响应中提取可读原因，避免把带 Unicode 转义的原始 JSON 直接展示给用户。 */
+    fun httpErrorMessage(body: String, fallback: String = "请求未成功",
+                         maxLength: Int = 180): String {
+        val raw = body.trim()
+        if (raw.isEmpty()) return fallback
+        val obj = runCatching { JSONObject(raw) }.getOrNull()
+        val message = obj?.let { json ->
+            listOf("error", "message", "detail", "reason")
+                .asSequence()
+                .mapNotNull { key -> json.opt(key)?.takeIf { it is String } as? String }
+                .firstOrNull { it.isNotBlank() }
+        } ?: if (obj == null) raw else fallback
+        return message.replace(Regex("\\s+"), " ").trim().take(maxLength)
+    }
+
     /** GET /api/books/<key>/check-status → NovelUpdateCheck（解析失败按失败态，不猜成"已是最新"） */
     fun novelUpdateCheck(body: String): NovelUpdateCheck {
         val o = runCatching { JSONObject(body) }.getOrNull()
@@ -769,6 +849,66 @@ object EngineData {
                 downloadedAt = o.optString("downloaded_at"),
             )
         }
+    }
+
+    fun mangaFavorites(body: String): List<MangaFavorite> {
+        return mangaFavoritesOrNull(body) ?: emptyList()
+    }
+
+    /** Null means the API envelope is malformed/recoverable, not a valid empty shelf. */
+    fun mangaFavoritesOrNull(body: String): List<MangaFavorite>? {
+        val o = runCatching { JSONObject(body) }.getOrNull() ?: return null
+        if (o.optBoolean("recoverable")) return null
+        val a = o.optJSONArray("favorites") ?: return null
+        val parsed = ArrayList<MangaFavorite>(a.length())
+        for (i in 0 until a.length()) {
+            val x = a.optJSONObject(i) ?: return null
+            val source = x.optString("source")
+            val comicId = x.optString("comic_id")
+            if (source.isBlank() || comicId.isBlank()) return null
+            parsed += MangaFavorite(source, comicId,
+                x.optString("title"), x.optString("cover"), x.optDouble("ts"),
+                x.optInt("unread_count"), x.optString("latest_chapter_label"),
+                x.optString("update_time"),
+                x.optString("identity_source").ifBlank { source })
+        }
+        return parsed
+    }
+
+    private fun checkCount(value: Any?): Int? {
+        val count = when (value) {
+            is Int -> value.toLong()
+            is Long -> value
+            else -> return null
+        }
+        return count.takeIf { it in 0..Int.MAX_VALUE.toLong() }?.toInt()
+    }
+
+    fun mangaFavoriteCheckStatus(body: String): MangaFavoriteCheckStatus? {
+        val o = runCatching { JSONObject(body) }.getOrNull() ?: return null
+        if (o.opt("ok") == false) return null
+        val running = o.opt("running") as? Boolean ?: return null
+        val total = checkCount(o.opt("total")) ?: return null
+        val checked = checkCount(o.opt("checked")) ?: return null
+        val succeeded = checkCount(o.opt("succeeded")) ?: return null
+        val failed = checkCount(o.opt("failed")) ?: return null
+        val finished = succeeded.toLong() + failed
+        if (checked > total || finished > total ||
+            (!running && (checked != total || finished != checked.toLong()))) return null
+        return MangaFavoriteCheckStatus(
+            running = running, total = total, checked = checked,
+            succeeded = succeeded, failed = failed,
+        )
+    }
+
+    fun mangaFavoriteCheckStart(body: String): MangaFavoriteCheckStart? {
+        val o = runCatching { JSONObject(body) }.getOrNull() ?: return null
+        if (o.opt("ok") == false || (o.has("already_running") && o.opt("already_running") !is Boolean)) return null
+        val started = checkCount(o.opt("started")) ?: return null
+        return MangaFavoriteCheckStart(
+            started = started,
+            alreadyRunning = o.optBoolean("already_running"),
+        )
     }
 
     /** 小说书源列表（GET /api/sources） */
@@ -886,6 +1026,29 @@ object EngineData {
         return c.ifBlank { null }
     }
 
+    /** Strict management-only payload: malformed data must not become a delete selection. */
+    fun mangaLocalMedia(body: String): LocalMediaInventory? {
+        val o = runCatching { JSONObject(body) }.getOrNull() ?: return null
+        if (o.opt("ok") != true || o.opt("local_only") != true) return null
+        val source = o.opt("source") as? String ?: return null
+        val comicId = o.opt("comic_id") as? String ?: return null
+        if (source.isBlank() || comicId.isBlank()) return null
+        val arr = o.optJSONArray("media") ?: return null
+        if (o.optInt("count", -1) != arr.length()) return null
+        val ids = mutableSetOf<String>()
+        val rows = mutableListOf<LocalMediaEntry>()
+        for (i in 0 until arr.length()) {
+            val row = arr.optJSONObject(i) ?: return null
+            val id = row.opt("id") as? String ?: return null
+            val name = row.opt("name") as? String ?: return null
+            val complete = row.opt("downloaded") as? Boolean ?: return null
+            val partial = row.opt("partial") as? Boolean ?: return null
+            if (id.isBlank() || !ids.add(id) || complete == partial) return null
+            rows += LocalMediaEntry(id, name.ifBlank { id }, partial)
+        }
+        return LocalMediaInventory(source, comicId, rows)
+    }
+
     /** 漫画详情（/api/manga/<source>/<comic_id>）：chapters + 已下载章节集合 */
     fun mangaDetail(body: String): MangaDetail? {
         val o = runCatching { JSONObject(body) }.getOrNull() ?: return null
@@ -901,6 +1064,9 @@ object EngineData {
         }
         val dl = o.optJSONArray("downloaded")
         val downloaded = (0 until (dl?.length() ?: 0)).mapNotNull { dl?.optString(it) }.toSet()
+        val partialArr = o.optJSONArray("partial_downloaded")
+        val partialDownloaded = (0 until (partialArr?.length() ?: 0))
+            .mapNotNull { partialArr?.optString(it) }.toSet() - downloaded
         val tagsArr = o.optJSONArray("tags")
         val tags = (0 until (tagsArr?.length() ?: 0)).mapNotNull { tagsArr?.optString(it) }
         // 整卷条目（copymanga 系）：与话同构的 id/name/group
@@ -921,6 +1087,7 @@ object EngineData {
             // comic_id 并不总是同一个值（如 copymanga 的 id 是 UUID、请求用路径 slug），
             // 于是"保存进度用的键"与"书库/历史查找用的键"不是同一个 → 续读找不到记录。
             comicId = o.optString("comic_id").ifBlank { o.optString("id") },
+            identitySource = o.optString("identity_source").ifBlank { o.optString("source") },
             title = o.optString("title"),
             cover = o.optString("cover"),
             author = o.optString("author"),
@@ -929,7 +1096,9 @@ object EngineData {
             chapters = chapters,
             volumes = volumes,
             downloaded = downloaded,
+            partialDownloaded = partialDownloaded,
             sourceName = o.optString("source_name"),
+            localOnly = o.optBoolean("local_only", false),
             resume = o.optJSONObject("resume")?.let { r ->
                 MangaResume(
                     index = r.optInt("index", -1),
@@ -993,7 +1162,9 @@ object EngineData {
 
     /** 漫画历史条目（GET /api/manga/history → history[]） */
     data class MangaHistory(val source: String, val comicId: String, val idx: Int,
-                            val pos: String, val title: String, val ts: Double)
+                            val pos: String, val title: String, val ts: Double,
+                            val readChapterIds: Set<String> = emptySet(),
+                            val identitySource: String = source)
 
     /** 漫画阅读历史：与网页端共用 _history.json，因此两端可以互相续读 */
     fun mangaHistory(body: String): List<MangaHistory> {
@@ -1008,6 +1179,12 @@ object EngineData {
                 pos = o.optString("pos"),
                 title = o.optString("title"),
                 ts = o.optDouble("ts", 0.0),
+                identitySource = o.optString("identity_source").ifBlank { o.optString("source") },
+                readChapterIds = o.optJSONArray("read_chapter_ids")?.let { ids ->
+                    (0 until ids.length()).mapNotNull { index ->
+                        ids.optString(index).takeIf { it.isNotBlank() }
+                    }.toSet()
+                } ?: emptySet(),
             )
         }
     }
@@ -1032,6 +1209,7 @@ object EngineData {
         val stopReason: String,
         val chapterIds: Set<String>,
         val failedIds: Set<String>,
+        val currentChapterId: String = "",
     ) {
         /** 进行中（排队或下载中） */
         val active: Boolean get() = status == "queued" || status == "running"
@@ -1047,10 +1225,12 @@ object EngineData {
                 val ch = if (total > 0) "$done/$total 话" else "准备中"
                 val img = if (imagesTotal > 0) " · $imagesDone/$imagesTotal 图" else ""
                 val fail = if (failedIds.isNotEmpty()) " · 失败 ${failedIds.size} 话" else ""
-                val spd = if (status == "running" && speed > 0)
-                    " · ${String.format(java.util.Locale.US, "%.1f", speed)} 图/秒" +
-                        if (eta > 0) " · 约 ${eta.toInt()} 秒" else ""
-                else ""
+                val spd = if (status == "running") {
+                    val rate = if (speed > 0)
+                        "${String.format(java.util.Locale.US, "%.1f", speed)} 图/秒"
+                    else "速度估算中"
+                    " · $rate" + if (eta > 0) " · 约 ${eta.toInt()} 秒" else ""
+                } else ""
                 return ch + img + fail + spd
             }
     }
@@ -1079,6 +1259,7 @@ object EngineData {
             stopReason = o.optString("stop_reason"),
             chapterIds = ids,
             failedIds = failed,
+            currentChapterId = o.optString("current_chapter_id"),
         )
     }
 
@@ -1118,6 +1299,7 @@ object EngineData {
         /** 图片级进度（漫画任务）：服务端 images_done/images_total */
         val imagesDone: Int = 0,
         val imagesTotal: Int = 0,
+        val pendingChapters: Int = 0,
     ) {
         val isManga: Boolean get() = type == "manga"
         val pausable: Boolean get() = running || status == "paused"
@@ -1151,14 +1333,17 @@ object EngineData {
                 "paused" -> "已暂停 $done/$total"
                 "stopped" -> "已停止 $done/$total"
                 "done" -> "已完成 $total"
-                "cancel" -> "已取消 $done/$total"
+                "cancel" -> "停止中 $done/$total"
                 "error" -> "失败：${error.ifBlank { "原因未知" }}"
                 else -> status.ifBlank { "未知状态" }
             }
         val speedLabel: String
-            get() = if (running && speed > 0) {
-                " · ${String.format(java.util.Locale.US, "%.1f", speed)} 项/秒" +
-                    if (eta > 0) " · 约 ${eta.toInt()} 秒" else ""
+            get() = if (running) {
+                val rate = if (speed > 0) {
+                    "${String.format(java.util.Locale.US, "%.1f", speed)} " +
+                        (if (isManga) "图/秒" else "章/秒")
+                } else "速度估算中"
+                " · $rate" + if (eta > 0) " · 约 ${eta.toInt()} 秒" else ""
             } else ""
         /** 漫画任务用 "source:comic_id" 拆出源与 id，供暂停/继续接口使用 */
         val mangaSource: String get() = mangaKey.substringBefore(":", "")
@@ -1197,6 +1382,7 @@ object EngineData {
                 checkpointFailed = o.optJSONObject("checkpoint")?.optInt("failed") ?: 0,
                 imagesDone = p.optInt("images_done"),
                 imagesTotal = p.optInt("images_total"),
+                pendingChapters = p.optInt("pending_chapters").coerceAtLeast(0),
             )
         }
     }
@@ -1464,6 +1650,15 @@ object EngineData {
             if (it is JSONObject) (it.optString("id").ifBlank { it.optString("chapter_id") })
             else it as? String
         }.filter { it.isNotBlank() }
+        val diff = o.optJSONObject("catalog_diff")
+        val summary = if (diff?.optBoolean("baseline_available") == true)
+            "目录新增 ${diff.optInt("added_missing_count")} 项，原目录待补 ${diff.optInt("existing_missing_count")} 项"
+            else ""
+        val warnings = mutableListOf<String>()
+        o.optString("catalog_warning").takeIf { it.isNotBlank() }?.let { warnings += it }
+        diff?.optInt("renamed_count")?.takeIf { it > 0 }?.let { warnings += "$it 项章节名称变更" }
+        diff?.optInt("same_name_new_id_count")?.takeIf { it > 0 }?.let { warnings += "$it 项同名新身份" }
+        diff?.optInt("duplicate_name_count")?.takeIf { it > 0 }?.let { warnings += "$it 组同名章节" }
         return MangaUpdateCheck(
             ok = ok,
             hasUpdate = o.optBoolean("has_update"),
@@ -1471,6 +1666,12 @@ object EngineData {
             latest = o.optString("latest"),
             error = err,
             missingIds = ids,
+            missingNames = (0 until (arr?.length() ?: 0)).mapNotNull { i ->
+                arr?.optJSONObject(i)?.optString("name")?.takeIf { it.isNotBlank() }
+            },
+            catalogSummary = summary,
+            catalogWarning = if (warnings.isEmpty()) "" else
+                warnings.joinToString("；") + "。请核对清单，不会自动合并或删除本地内容。",
         )
     }
 
@@ -1523,7 +1724,8 @@ object EngineData {
                 },
             )
         }
-        return out to (o.optInt("total_sources") to o.optInt("with_explore"))
+        return out.filter { it.uid.isNotBlank() }.distinctBy { it.uid } to
+            (o.optInt("total_sources") to o.optInt("with_explore"))
     }
 
     /** 探索书单（GET /api/explore?source=&url=&page=） */

@@ -15,6 +15,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
+import java.util.UUID
 
 /**
  * P1-A 漫画闭环验收（真机、真实源站）：
@@ -39,7 +40,7 @@ class MangaClosedLoopTest {
     val rule = createAndroidComposeRule<MainActivity>()
 
     private lateinit var gateway: EngineGateway
-    private val source = "mangadex"
+    private var source = "mangadex"
     private var comicId: String = ""
     private var chapterId: String = ""
     private var created = false
@@ -68,9 +69,17 @@ class MangaClosedLoopTest {
                     ep = (st as? EngineState.Ready)?.endpoint
                 }
                 if (created && ep != null && comicId.isNotBlank()) {
+                    gateway.httpDelete(ep.port, "/api/manga/favorites/$source/$comicId")
                     val r = gateway.httpDelete(ep.port,
-                        "/api/manga/library/$source/$comicId?files=1")
+                        "/api/manga/$source/$comicId/downloads")
                     ev("清理：移除书库条目并删除下载文件 HTTP ${r.code}")
+                    gateway.httpDelete(ep.port, "/api/manga/library/$source/$comicId")
+                }
+                if (comicId.startsWith("__manga_loop_")) {
+                    File(OfflineStore.runtimeDir(ctx), "manga/downloads/$source/$comicId")
+                        .deleteRecursively()
+                    File(OfflineStore.runtimeDir(ctx), "manga/_cache/$source/$comicId")
+                        .deleteRecursively()
                 }
                 gateway.stopEngine()
             }
@@ -149,11 +158,14 @@ class MangaClosedLoopTest {
         // 上面的流式搜索断言保留：它验的是"搜索能出结果且够快"，与选谁下载是两件事。
         assertTrue("流式搜索必须至少返回一条结果（实际 ${hits.size}）", hits.isNotEmpty())
         val fx = MangaFixture.pick(gateway, ep.port, source) { ev(it) }
-        comicId = fx.comicId
+        source = fx.source
+        org.junit.Assume.assumeTrue("闭环真实源测试当前仅支持 MangaDex", source == "mangadex")
+        val realComicId = fx.comicId
+        comicId = "__manga_loop_${UUID.randomUUID()}__"
         ev("选中的作品（夹具）：${fx.source} / ${fx.comicId}")
 
         // 2) 详情（原生接口）
-        val dr = gateway.httpText(ep.port, "/api/manga/${fx.source}/$comicId")
+        val dr = gateway.httpText(ep.port, "/api/manga/${fx.source}/$realComicId")
         assertTrue("详情应 200：HTTP ${dr.code}", dr.ok)
         val detail = EngineData.mangaDetail(dr.body)
             ?: throw AssertionError("详情解析失败")
@@ -162,6 +174,20 @@ class MangaClosedLoopTest {
             ?: detail.chapters.last()             // 取最后一话：页数通常最少，下载快
         chapterId = chapter.id
         ev("详情：共 ${detail.chapters.size} 话，本次下载「${chapter.name.take(20)}」")
+
+        val localComicDir = File(OfflineStore.runtimeDir(ctx),
+            "manga/downloads/${fx.source}/$comicId")
+        check(!localComicDir.exists()) { "测试随机目录意外已存在：$localComicDir" }
+        check(localComicDir.mkdirs()) { "无法创建隔离测试目录：$localComicDir" }
+        File(localComicDir, "_info.json").writeText(
+            JSONObject()
+                .put("title", detail.title)
+                .put("cover", detail.cover)
+                .put("chapters", JSONArray().put(JSONObject()
+                    .put("id", chapter.id)
+                    .put("name", chapter.name)
+                    .put("group", chapter.group)))
+                .toString())
 
         // 3) 下载这一话（原生下载接口，与详情页按钮同一条）
         val body = JSONObject().put("title", detail.title)
@@ -314,8 +340,16 @@ class MangaClosedLoopTest {
         val sizeBefore = comicDir.walkTopDown().filter { it.isFile }
             .sumOf { it.length() }
         val rm = gateway.httpDelete(ep2!!.port,
-            "/api/manga/library/${fx.source}/$comicId?files=1")
+            "/api/manga/${fx.source}/$comicId/downloads")
         assertTrue("移除并删文件应 200：HTTP ${rm.code}", rm.ok)
+        val favoriteCleanup = gateway.httpDelete(ep2.port,
+            "/api/manga/favorites/${fx.source}/$comicId")
+        assertTrue("隔离收藏应清理：HTTP ${favoriteCleanup.code}", favoriteCleanup.ok)
+        val shelfCleanup = gateway.httpDelete(ep2.port,
+            "/api/manga/library/${fx.source}/$comicId")
+        assertTrue("隔离书架条目应清理：HTTP ${shelfCleanup.code}", shelfCleanup.ok)
+        File(OfflineStore.runtimeDir(ctx), "manga/_cache/${fx.source}/$comicId")
+            .deleteRecursively()
         val freed = runCatching { JSONObject(rm.body).optLong("freed_bytes") }.getOrDefault(0L)
         assertTrue("已下载目录必须被真正删除（释放 ${freed} 字节）", !comicDir.exists())
         assertTrue("释放字节数应与删除前一致（删前 ${sizeBefore}）", freed >= sizeBefore)

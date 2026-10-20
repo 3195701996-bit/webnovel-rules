@@ -15,7 +15,7 @@ from .base import Comic, ComicDetails, Chapter, MangaAdapter, MangaError
 # R49f: 2026copy.com 域名失效(ERR_CONNECTION_CLOSED, 2026-09) →
 # 官方 web 域多域池(copy4000.com 优先——用户实测随时稳定可用;
 # mangacopy.com 曾出现连接重置; 自动探测可用域并缓存选定结果, 渲染失败自动换域)
-_WEB_DOMAINS = ["https://www.copy4000.com", "https://www.mangacopy.com"]
+_WEB_DOMAINS = ["https://www.copy4000.com", "https://2026copy.com", "https://www.mangacopy.com"]
 WEB = _WEB_DOMAINS[0]          # 兼容旧引用(动态域经 _web_base() 获取)
 _web_pick = {"base": "", "ts": 0.0}
 _web_lock = threading.Lock()
@@ -518,6 +518,23 @@ class CopyMangaWeb(MangaAdapter):
     name = "拷贝漫画(网页版)"
     version = "1.0.0"
     concurrent = 1  # 网页版慢，单并发
+
+    def browse(self, category="ordering=-datetime_updated", page=1):
+        from . import copy_web
+        from urllib.parse import parse_qs, urlencode
+        params = parse_qs(category)
+        query = {key: value[0] for key, value in params.items()
+                 if key in ("theme", "ordering", "region", "status")}
+        query.update(limit=30, offset=(max(1, int(page)) - 1) * 30)
+        def _work():
+            pg = _get_page()
+            try:
+                _web_goto(pg, "/comics?" + urlencode(query), timeout=45000,
+                          wait_until="domcontentloaded")
+                return copy_web.parse_browse_html(pg.content())
+            finally:
+                pg.close()
+        return _run_pw(_work)
 
     # ── 搜索：页面上下文 fetch searchcl API ──
     def search(self, keyword, page=1):

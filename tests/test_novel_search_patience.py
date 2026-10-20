@@ -18,6 +18,7 @@ import os
 import socket
 import sys
 import time
+import threading
 
 import pytest
 
@@ -26,6 +27,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import server.novel_api as api  # noqa: E402
 import engine.search_service as ss  # noqa: E402
 from server import state as st  # noqa: E402
+
+
+def _wait_like_hung_source(started, release):
+    """用调用测试私有的门闩模拟慢源，避免跨测试后台线程互相释放。"""
+    started.set()
+    release.wait(30)
 
 
 @pytest.fixture(scope="module")
@@ -58,18 +65,33 @@ def _book(name, uid):
 
 
 @pytest.fixture(autouse=True)
-def _clean_cache():
+def _clean_cache(monkeypatch):
+    # 被耐心上限放弃的 worker 可在 fixture 释放门闩后才记入慢源台账。
+    # 清空共享 dict 不能隔离这种迟到写入：下一用例的同名 hang 会被跳过。
+    # 每个用例持有独立 tracker/worker，旧线程只能写它自己的台账。
+    tracker = ss.SlowSourceTracker()
+    monkeypatch.setattr(api, "_slow_tracker", tracker)
+    monkeypatch.setattr(api, "_slow_sources", tracker._slow)
+    monkeypatch.setattr(api, "_search_worker", ss.SearchWorker(tracker))
     with st._toc_lock:
         st._search_cache.clear()
-    st._slow_tracker._slow.clear()
     yield
     with st._toc_lock:
         st._search_cache.clear()
-    st._slow_tracker._slow.clear()
 
 
-def test_stream_ends_early_when_a_source_hangs(monkeypatch, client):
+@pytest.fixture()
+def hanging_source_gate():
+    """每个测试单独持有 started/release，绝不让旧 worker 污染后续用例。"""
+    started = threading.Event()
+    release = threading.Event()
+    yield started, release
+    release.set()
+
+
+def test_stream_ends_early_when_a_source_hangs(monkeypatch, client, hanging_source_gate):
     """一个卡死源不得把流挂到单源时限：已有结果 + 耐心到 → 立刻收尾"""
+    started, release = hanging_source_gate
     class _Crawler:
         adapter = None
 
@@ -78,7 +100,7 @@ def test_stream_ends_early_when_a_source_hangs(monkeypatch, client):
 
         def search(self, keyword):
             if self.source.get("uid") == "hang":
-                time.sleep(30)          # 卡到远远超过耐心上限
+                _wait_like_hung_source(started, release)  # 卡到远远超过耐心上限
                 return []
             return [_book("耐心上限测试书", "fast")]
 
@@ -126,7 +148,8 @@ def test_all_fast_sources_are_unaffected(monkeypatch, client):
     assert not (evts[-1].get("errors") or {})
 
 
-def test_no_results_is_not_cut_short_by_patience(monkeypatch, client):
+def test_no_results_is_not_cut_short_by_patience(monkeypatch, client, hanging_source_gate):
+    started, release = hanging_source_gate
     """一个结果都没有时不适用耐心上限：必须等单源时限，并如实写"超时\""""
     class _Crawler:
         adapter = None
@@ -136,7 +159,7 @@ def test_no_results_is_not_cut_short_by_patience(monkeypatch, client):
 
         def search(self, keyword):
             if self.source.get("uid") == "hang":
-                time.sleep(30)
+                _wait_like_hung_source(started, release)
             return []                    # 另一个源也没结果
 
     monkeypatch.setattr(ss, "SourceCrawler", _Crawler)
@@ -156,8 +179,10 @@ def test_no_results_is_not_cut_short_by_patience(monkeypatch, client):
     assert any(("超时" in v) for v in errs.values()) or errs == {}, errs
 
 
-def test_partial_results_are_cached_only_briefly(monkeypatch, client):
+def test_partial_results_are_cached_only_briefly(
+        monkeypatch, client, hanging_source_gate):
     """部分结果只短暂缓存：过后重跑，慢源才有机会补上"""
+    started, release = hanging_source_gate
     class _Crawler:
         adapter = None
 
@@ -166,7 +191,7 @@ def test_partial_results_are_cached_only_briefly(monkeypatch, client):
 
         def search(self, keyword):
             if self.source.get("uid") == "hang":
-                time.sleep(30)
+                _wait_like_hung_source(started, release)
                 return []
             return [_book("部分缓存测试书", "fast")]
 
@@ -178,6 +203,12 @@ def test_partial_results_are_cached_only_briefly(monkeypatch, client):
     # 必须**消费响应体**，否则 Flask 测试客户端的生成器根本不执行（也就不会写缓存）
     evts = _events(client.get("/api/search/stream?q=部分缓存测试书"))
     assert evts and evts[-1].get("finished") is True
+    # 不依赖 CI 调度器在固定 1 秒内启动慢源 worker；最终事件明确把该源
+    # 标为仍在查询，才是“本轮存在未完成源、结果属于部分结果”的产品契约。
+    errors = evts[-1].get("errors") or {}
+    assert any("仍在查询" in reason for reason in errors.values()), errors
+    assert any(name == "源hang" for name in errors), errors
+    assert not release.is_set(), "慢源阻塞门闩不能在本测试断言前释放"
     with st._toc_lock:
         entry = st._search_cache.get(("部分缓存测试书", "", "default", "normal"))
     if entry is None:      # 缓存键形态可能随参数变化：按唯一键兜底取

@@ -197,6 +197,69 @@ def test_merge_writes_meta_and_skips_when_fresh(tmp_path):
     assert CR.export_is_fresh(d, _named(CHS), out) is True
 
 
+def test_export_preserves_distinct_chapters_with_identical_middle(tmp_path):
+    """共同回忆/引用不能让另一章从全文目录消失。"""
+    d = str(tmp_path / "book")
+    common = "共同引用的内容。" * 150
+    texts = {url: f"开头{i}。{common}结尾{i}。"
+             for i, (_, url) in enumerate(CHS)}
+    _mk_book(d, CHS, texts)
+    out = _merge(d, CHS)
+    with open(out, encoding="utf-8") as f:
+        exported = f.read()
+    for i, (name, _) in enumerate(CHS):
+        assert name in exported
+        assert f"开头{i}。" in exported and f"结尾{i}。" in exported
+
+
+def test_export_preserves_distinct_ids_even_with_identical_body(tmp_path):
+    d = str(tmp_path / "book")
+    _mk_book(d, CHS, {url: "同样的正文。" * 40 for _, url in CHS})
+    out = _merge(d, CHS)
+    with open(out, encoding="utf-8") as f:
+        exported = f.read()
+    assert all(name in exported for name, _ in CHS)
+
+
+def test_export_algorithm_change_invalidates_unchanged_cache(tmp_path, monkeypatch):
+    d = str(tmp_path / "book")
+    _mk_book(d, CHS, TXT)
+    out = _merge(d, CHS)
+    assert CR.export_is_fresh(d, _named(CHS), out)
+    monkeypatch.setattr(CR, "EXPORT_FORMAT_VERSION", CR.EXPORT_FORMAT_VERSION + 1)
+    assert not CR.export_is_fresh(d, _named(CHS), out)
+    assert _merge(d, CHS) == out
+    assert CR.export_is_fresh(d, _named(CHS), out)
+
+
+def test_export_title_prefix_cannot_consume_story_line(tmp_path):
+    d = str(tmp_path / "book")
+    name = "第1章 这是一个超过十五个字符的长标题"
+    url = "https://x.test/long-title"
+    story = name + "，他在笔记上写下这句话，然后转身离开。"
+    _mk_book(d, [(name, url)], {url: story + "\n真正的第二段。"})
+    out = _merge(d, [(name, url)])
+    with open(out, encoding="utf-8") as f:
+        text = f.read()
+    assert story in text and "真正的第二段。" in text
+
+
+def test_export_heading_occupies_one_line_without_changing_catalog(tmp_path):
+    d = str(tmp_path / "book")
+    name = "第1章\n\n标题\t续名\u2028末尾"
+    url = "https://x.test/wrapped-title"
+    state = _mk_book(d, [(name, url)], {url: "正文应该完整保留。"})
+    # 使用纯正文缓存，模拟常规下载而非带标题的重爬缓存。
+    with open(os.path.join(d, CR._cache_key_of(url) + ".cache"), "w", encoding="utf-8") as f:
+        f.write("正文应该完整保留。")
+    out = _merge(d, [(name, url)])
+    with open(out, encoding="utf-8") as f:
+        text = f.read()
+    assert text.splitlines() == ["第1章 标题 续名 末尾", "正文应该完整保留。"]
+    with open(os.path.join(d, "_state.json"), encoding="utf-8") as f:
+        assert json.load(f) == state
+
+
 def test_export_fresh_detects_txt_tampering(tmp_path):
     d = str(tmp_path / "book")
     _mk_book(d, CHS, TXT)

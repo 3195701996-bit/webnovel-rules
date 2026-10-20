@@ -1,0 +1,8 @@
+[
+  {"total": 10, "done": 10, "percent": 100, "failed": 0, "complete": true, "label": "已下载全部"},
+  {"total": 5035, "done": 5034, "percent": 100, "failed": 0, "complete": false, "label": "部分下载"},
+  {"total": 5035, "done": 5034, "percent": 100, "failed": 1, "complete": false, "label": "1 章失败"},
+  {"total": 10, "done": 3, "percent": 30, "failed": 0, "complete": false, "label": "部分下载"},
+  {"total": 10, "done": 0, "percent": 0, "failed": 0, "complete": false, "label": "未下载"},
+  {"total": 0, "done": 0, "percent": 100, "failed": 0, "complete": false, "label": "未下载"}
+]

@@ -16,7 +16,7 @@ from urllib.parse import urljoin
 from .fetcher import Fetcher, DeadlineExceeded
 from .cleaner import clean_text as _clean_text, html_to_text as _html_to_text
 from .app_utils import atomic_write as _atomic_write, \
-    atomic_write_text as _atomic_write_text, cache_key_of as _cache_key_of
+    atomic_write_text as _atomic_write_text, cache_key_of as _cache_key_of, chapter_cache_valid
 from .config import (CONTENT_DEADLINE, CONTENT_MAX_PAGES, TOC_PAGE_CAP,
                      CRAWL_DEFAULT_CONCURRENCY, CRAWL_MAX_CONCURRENCY,
                      CRAWL_RETRY_MAX, CRAWL_RETRY_DELAY, TOC_PAGE_SLEEP)
@@ -34,6 +34,8 @@ def now_iso():
 #   rev = md5(每章 "序位:mtime_ns:size" 序列 + 总数)
 # 直接反映"当前磁盘上可导出的内容"，跨进程/重启有效，无需在各写点埋钩子。
 EXPORT_META_NAME = "_export.json"
+# 合并算法变化必须使旧全文失效，即使章节缓存的mtime/size未变化。
+EXPORT_FORMAT_VERSION = 3
 
 
 def content_revision(book_dir, chapters):
@@ -67,7 +69,7 @@ def content_revision(book_dir, chapters):
         records.append([idx, str(url), name, st.st_mtime_ns, st.st_size])
     if not records:
         return ""
-    blob = json.dumps(records, separators=(",", ":")).encode()
+    blob = json.dumps([EXPORT_FORMAT_VERSION, records], separators=(",", ":")).encode()
     return hashlib.md5(blob).hexdigest()[:16]
 
 
@@ -185,7 +187,6 @@ def merge_book_txt(book_dir, chapters, force=False):
         if not force and rev and export_is_fresh(book_dir, chapters, out):
             return out
         texts = []
-        seen_sig = set()   # 内容指纹去重：防止分页爬虫把后续章节内容拼入本章导致重复
         for idx, c in enumerate(chapters, 1):
             url = (c or {}).get('url') if isinstance(c, dict) else None
             if not url:
@@ -207,14 +208,17 @@ def merge_book_txt(book_dir, chapters, force=False):
             if not t.strip():
                 return None        # 非空文件却无有效正文 → 未完整读取
             # 章节名标题（无名称时用"第N章"兜底）
-            name = (c.get('name') or '').strip() or f"第{idx}章"
+            # 标题必须独占一行；只规范导出副本，不改变权威目录。
+            name = re.sub(r'\s+', ' ', (c.get('name') or '').strip()) or f"第{idx}章"
             body = t.strip()
             # 正文开头与章节名重复（源站正文首段=章节名，部分源缓存为
             # "标题\n\n标题\n\n正文" 双标题模式）→ 全部去掉，
             # 避免导出 txt 出现"标题+正文首行同章节名"的视觉重复
             _lines = body.split("\n")
             if _lines and name:
-                _norm = lambda s: re.sub(r"[\s\W]", "", s)[:15]
+                # 只允许完整标题相等。前15字相同不是重复标题的证据，
+                # 否则剧情首句引用长标题时会把整段正文一起吞掉。
+                _norm = lambda s: re.sub(r"\s+", "", s)
                 # 跳过前导空行后检查首行
                 _k = 0
                 while _k < len(_lines) and not _lines[_k].strip():
@@ -232,12 +236,8 @@ def merge_book_txt(book_dir, chapters, force=False):
                             continue
                         break
                     body = "\n".join(_lines[_j:]).strip() or body
-            # 指纹 = 正文中部 300 字（跨页拼接重复时中段最稳定）
-            _mid = body[len(body) // 2: len(body) // 2 + 300]
-            _sig = hashlib.md5(_mid.encode()).hexdigest()[:16]
-            if _sig in seen_sig:
-                continue  # 与前面章节内容重叠 → 跳过（防重复）
-            seen_sig.add(_sig)
+            # 每条权威目录都保留。内容相似不是章节身份相同的证据；
+            # 分页内去重在cleaner处理，不得在全文合并时静默删除整章。
             texts.append(f"{name}\n{body}")
         if not texts:
             return None
@@ -423,6 +423,19 @@ class SourceCrawler:
                     break
         toc = self.engine.get_string(rbi.get('tocUrl', ''), doc, base_url=self.base)
         b.toc_url = normalize_url(toc, book_url) if toc else book_url
+        # Missing legacy source rules need not turn a named book into a URL.
+        # Read only explicit page metadata, never infer names from story text.
+        if doc is not None and (not b.name or not b.author):
+            metadata = {}
+            for tag in doc.xpath('//meta'):
+                key = (tag.get('property') or tag.get('name') or '').strip().lower()
+                value = re.sub(r'\s+', ' ', tag.get('content') or '').strip()
+                if key and value:
+                    metadata.setdefault(key, value)
+            if not b.name:
+                b.name = metadata.get('og:novel:book_name') or metadata.get('og:title') or ''
+            if not b.author:
+                b.author = metadata.get('og:novel:author') or metadata.get('author') or ''
         if not b.name:
             b.name = book_url
         # 详情页自动提取总章节数（"共X章"等，无需爬目录）
@@ -907,6 +920,11 @@ class CrawlTask:
     def _save_state(self):
         bd = self.book.to_dict() if self.book else {}
         bd['source_uid'] = self.source.get('uid', '')
+        from .novel_metadata import overlay_metadata
+        bd = overlay_metadata(self.state_file, {'book': bd})['book']
+        if self.book:
+            self.book.name = bd.get('name', self.book.name)
+            self.book.author = bd.get('author', self.book.author)
         state = {
             'book': bd,
             'chapters': [{'name': c['name'], 'url': c['url']} for c in (self.book.chapters if self.book else [])],
@@ -923,6 +941,8 @@ class CrawlTask:
         try:
             with open(self.state_file, encoding='utf-8') as f:
                 st = json.load(f)
+            from .novel_metadata import overlay_metadata
+            st = overlay_metadata(self.state_file, st)
             self.book = Book(self.source, st['book'].get('book_url', self.book_url))
             for k, v in st.get('book', {}).items():
                 setattr(self.book, k, v)
@@ -997,7 +1017,7 @@ class CrawlTask:
 
     def _save_cache(self, url, text):
         # R29(技术评审5.1): 缓存原子写——先写临时文件，内容非空才替换，
-        # 防崩溃留下半写缓存（_has_cache 只查存在，半写会被当成完成内容）
+        # 原子替换防止崩溃留下非空但只写了一半的正文。
         # R47: 实现收敛到 app_utils.atomic_write_text
         if not text:
             return
@@ -1007,7 +1027,7 @@ class CrawlTask:
             self._cache_set.add(url)
 
     def _has_cache(self, url):
-        return os.path.exists(self._cache_path(url))
+        return chapter_cache_valid(self._cache_path(url))
 
     def _mark_completed(self, url):
         """B06: completed 列表与运行时 set 镜像同步写入（O(1) 成员判断）"""
@@ -1077,7 +1097,15 @@ class CrawlTask:
         chapters = self.book.chapters
         # B06: completed 成员判断走运行时 set 镜像（O(1)），不再扫列表
         is_done = lambda c: c['url'] in self._completed_set or self._has_cache(c['url'])
-        pending = [c for c in chapters if c['url'] in self.failed]
+        recovered = [c['url'] for c in chapters
+                     if c['url'] in self.failed and is_done(c)]
+        for url in recovered:
+            self.failed.pop(url, None)
+        if recovered:
+            self._save_state()
+        # 旧失败记录可能晚于正文落盘；不要仅凭 failed 强制覆盖可读缓存。
+        pending = [c for c in chapters
+                   if c['url'] in self.failed and not is_done(c)]
         pending_urls = {c['url'] for c in pending}
         for c in chapters:
             if not is_done(c) and c['url'] not in pending_urls:

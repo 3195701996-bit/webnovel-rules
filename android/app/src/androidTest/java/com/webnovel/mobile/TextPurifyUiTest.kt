@@ -5,6 +5,14 @@ import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsOn
+import androidx.compose.ui.test.assertIsOff
+import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.isDialog
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
+import androidx.compose.ui.test.performScrollToIndex
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.LargeTest
 import androidx.test.platform.app.InstrumentationRegistry
@@ -20,6 +28,7 @@ import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.junit.rules.TestName
 import java.io.File
 
 /**
@@ -42,10 +51,18 @@ class TextPurifyUiTest {
 
     @get:Rule
     val rule = createAndroidComposeRule<MainActivity>()
+    @get:Rule val testName = TestName()
 
     private val ctx get() = InstrumentationRegistry.getInstrumentation().targetContext
     private lateinit var gateway: EngineGateway
     private lateinit var bookDir: File
+    private var metadataFixture: com.chaquo.python.PyObject? = null
+
+    private fun metadataExec(code: String) {
+        val builtins = com.chaquo.python.Python.getInstance().getModule("builtins")
+        if (metadataFixture == null) metadataFixture = builtins.callAttr("dict")
+        builtins.callAttr("exec", code, metadataFixture)
+    }
 
     private val key = "自检_purify"
 
@@ -55,15 +72,68 @@ class TextPurifyUiTest {
     private fun texts(t: String, substring: Boolean = false) =
         rule.onAllNodesWithText(t, substring = substring).fetchSemanticsNodes().size
 
+    private fun expandNovelTools() {
+        rule.waitUntil(60_000) { nodes("novel_tools_toggle") > 0 }
+        if (texts("更多工具") > 0) {
+            rule.onAllNodesWithTag("novel_tools_toggle")[0].performScrollTo().performClick()
+        }
+    }
+
+    private fun landscape() {
+        rule.activityRule.scenario.onActivity {
+            it.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+        }
+        rule.waitUntil(15_000) {
+            rule.activity.resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+        }
+    }
+
+    private fun rotateOpenDialog() {
+        val landscape = rule.activity.resources.configuration.orientation ==
+            android.content.res.Configuration.ORIENTATION_LANDSCAPE
+        val expected = if (landscape) android.content.res.Configuration.ORIENTATION_PORTRAIT
+            else android.content.res.Configuration.ORIENTATION_LANDSCAPE
+        rule.activityRule.scenario.onActivity {
+            it.requestedOrientation = if (landscape)
+                android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            else android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+        }
+        rule.waitUntil(15_000) { rule.activity.resources.configuration.orientation == expected }
+    }
+
+    private fun recoveryScreenshot(name: String) {
+        rule.waitForIdle()
+        // Compose semantics can settle before the system's rotation animation.
+        // Require a quiet accessibility window before capturing rendered pixels.
+        InstrumentationRegistry.getInstrumentation().uiAutomation.waitForIdle(1_000, 5_000)
+        rule.waitForIdle()
+        val screenshot = InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()
+            ?: error("无法获取恢复页截图")
+        try {
+            val file = File(requireNotNull(ctx.externalCacheDir), "selftest-recovery-$name.png")
+            file.outputStream().use { output ->
+                assertTrue(screenshot.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, output))
+            }
+            ev("recovery screenshot=${file.absolutePath}")
+        } finally { screenshot.recycle() }
+    }
+
     private val adLine = "【新章节更新迟缓的问题，在能换源的app上终于有了解决之道，" +
         "这里下载huanyuanap】"
 
     @Before
     fun setUp() {
+        val descriptor = InstrumentationRegistry.getInstrumentation().uiAutomation
+            .executeShellCommand("getprop ro.kernel.qemu")
+        val qemu = android.os.ParcelFileDescriptor.AutoCloseInputStream(descriptor)
+            .bufferedReader().use { it.readText().trim() }
+        assertTrue("合成净化测试只能运行于专用模拟器", qemu == "1")
         val booksDir = File(ctx.filesDir, "runtime/books")
         bookDir = File(booksDir, key)
         bookDir.deleteRecursively()
         require(bookDir.mkdirs()) { "无法创建合成书目录：$bookDir" }
+        val promotionFixture = testName.methodName in setOf("ui_promotionReviewCanBeCancelledWithoutWriting",
+            "ui_readerEditionPreviewInvalidatesOptionsAndStreamsWithoutCacheWrites")
         File(bookDir, "_state.json").writeText(
             JSONObject().apply {
                 put("book", JSONObject().apply {
@@ -73,7 +143,8 @@ class TextPurifyUiTest {
                 })
                 put("chapters", JSONArray().apply {
                     put(JSONObject().put("name", "第一章 干净").put("url", URL1))
-                    put(JSONObject().put("name", "第二章 有广告").put("url", URL2))
+                    put(JSONObject().put("name", if (promotionFixture) "推书《测试作品》" else "第二章 有广告")
+                        .put("url", URL2))
                 })
                 put("completed", JSONArray().put(URL1).put(URL2))
                 put("failed", JSONObject())
@@ -88,6 +159,24 @@ class TextPurifyUiTest {
                     "─".repeat(30) + "\n" + adLine + "\n小书亭app\n" +
                     "全都给我去下国家反诈APP！！！\n他打开了那个app看了看。\n",
                 Charsets.UTF_8)
+        if (promotionFixture) {
+            File(bookDir, cacheKeyOf(URL2) + ".cache")
+                .writeText("推书《测试作品》\n\n《测试作品》\n求帮忙追读！", Charsets.UTF_8)
+        }
+        if (testName.methodName in setOf("ui_longRecoverySelectionPreviewCancelPreservesFiles",
+                "ui_recoverySurvivesRotationAndRepeatedOpenWithoutWriting")) {
+            val state = JSONObject(File(bookDir, "_state.json").readText())
+            val chapters = JSONArray()
+            val completed = JSONArray()
+            for (index in 1..100) {
+                val url = "https://selftest.invalid/purify/long/$index"
+                chapters.put(JSONObject().put("name", "第${index}章 长目录测试").put("url", url))
+                completed.put(url)
+                File(bookDir, cacheKeyOf(url) + ".cache").writeText("第${index}章 长目录测试\n\n剧情正文${index}。\n$adLine\n")
+            }
+            state.put("chapters", chapters).put("completed", completed)
+            File(bookDir, "_state.json").writeText(state.toString())
+        }
 
         gateway = EngineGateway(ctx)
         val st = runBlocking { gateway.connect() }
@@ -96,6 +185,11 @@ class TextPurifyUiTest {
 
     @After
     fun tearDown() {
+        if (metadataFixture != null) {
+            metadataExec("api.get_by_uid = original_source\napi.SourceCrawler = original_crawler")
+            metadataFixture = null
+        }
+        if (!::bookDir.isInitialized) return
         bookDir.deleteRecursively()
         File(ctx.filesDir, "runtime/trash").listFiles()
             ?.filter { it.name.startsWith(key) }?.forEach { it.deleteRecursively() }
@@ -147,11 +241,272 @@ class TextPurifyUiTest {
     }
 
     @Test
+    fun ui_readerEditionPreviewInvalidatesOptionsAndStreamsWithoutCacheWrites() {
+        val cache = File(bookDir, cacheKeyOf(URL2) + ".cache")
+        val before = cache.readBytes()
+        rule.openCachedShelf()
+        rule.waitUntil(60_000) { texts(BOOK_NAME) > 0 }
+        rule.onAllNodesWithText(BOOK_NAME)[0].performScrollTo().performClick()
+        expandNovelTools()
+        rule.waitUntil(60_000) { nodes("reader_edition_button") > 0 }
+        landscape()
+        rule.waitUntil(60_000) { nodes("reader_edition_button") > 0 }
+        rule.onAllNodesWithTag("reader_edition_button")[0].performScrollTo().performClick()
+        rule.onAllNodesWithTag("reader_edition_confirm")[0].assertIsDisplayed()
+        rule.onAllNodesWithTag("reader_edition_cancel")[0].assertIsDisplayed()
+        rule.onAllNodesWithTag("reader_edition_confirm")[0].performClick()
+        rule.waitUntil(20_000) { texts("将导出 2 章", substring = true) > 0 }
+        rule.onAllNodesWithTag("reader_edition_omit")[0].performScrollTo().performClick()
+        rule.waitUntil(5_000) { texts("选项已变更", substring = true) > 0 }
+        assertEquals(0, texts("保存阅读版"))
+        rule.onAllNodesWithTag("reader_edition_confirm")[0].performClick()
+        rule.waitUntil(20_000) { texts("将导出 1 章 · 排除 1 项", substring = true) > 0 }
+        rule.onAllNodesWithTag("reader_edition_clean")[0].performScrollTo().performClick()
+        rule.waitUntil(5_000) { texts("选项已变更", substring = true) > 0 }
+        rule.onAllNodesWithTag("reader_edition_confirm")[0].performClick()
+        rule.waitUntil(20_000) { texts("将导出 1 章 · 排除 1 项", substring = true) > 0 }
+        rotateOpenDialog()
+        rule.waitUntil(20_000) { nodes("reader_edition_confirm") > 0 }
+        rule.onAllNodesWithTag("reader_edition_omit")[0].performScrollTo().assertIsOn()
+        rule.onAllNodesWithTag("reader_edition_clean")[0].performScrollTo().assertIsOff()
+        assertEquals("旋转后必须重新校验导出预览", 0, texts("保存阅读版"))
+        rule.onAllNodesWithTag("reader_edition_confirm")[0].performClick()
+        rule.waitUntil(20_000) { texts("将导出 1 章 · 排除 1 项", substring = true) > 0 }
+        assertTrue(before.contentEquals(cache.readBytes()))
+        val ep = gateway.currentEndpoint()!!
+        val preview = runBlocking { gateway.httpText(ep.port, "/api/books/$key/txt/preview?clean=1&omit_promotions=1") }
+        val revision = JSONObject(preview.body).getString("revision")
+        val path = "/api/books/$key/txt?layout=reader&clean=1&omit_promotions=1&revision=$revision"
+        val output = File(ctx.cacheDir, "reader_edition_selftest.txt")
+        try {
+            val uri = android.net.Uri.fromFile(output)
+            runBlocking { Export.streamToUri(ctx, ep.port, ep.token, path, uri) }
+            val exported = output.readBytes()
+            assertTrue(output.readText().startsWith("第1章 干净"))
+            assertFalse(output.readText().contains("推书"))
+            assertTrue(before.contentEquals(cache.readBytes()))
+            cache.appendText("\n后续修改。")
+            val stale = runCatching { runBlocking { Export.streamToUri(ctx, ep.port, ep.token, path, uri) } }
+            assertTrue("旧预览必须拒绝", stale.isFailure)
+            assertTrue("HTTP409不能截断目标文件", exported.contentEquals(output.readBytes()))
+        } finally { output.delete() }
+    }
+
+    @Test
+    fun ui_metadataPreviewCancelStaleAndConfirmPreserveCatalog() {
+        metadataExec("""
+import server.novel_api as api
+from types import SimpleNamespace
+original_source = api.get_by_uid
+original_crawler = api.SourceCrawler
+def fixture_source(uid):
+    return {'uid': 'selftest', 'bookSourceUrl': 'https://selftest.invalid'} if uid == 'selftest' else original_source(uid)
+def fixture_crawler(source):
+    if source.get('uid') == 'selftest':
+        return SimpleNamespace(get_book=lambda *a, **k: SimpleNamespace(name='已确认测试书名', author='已确认作者'))
+    return original_crawler(source)
+api.get_by_uid = fixture_source
+api.SourceCrawler = fixture_crawler
+""".trimIndent())
+        val original = bookDir.listFiles()!!.filter { it.isFile }.associate { it.name to it.readBytes().toList() }
+        rule.openCachedShelf()
+        rule.waitUntil(60_000) { texts(BOOK_NAME) > 0 }
+        rule.onAllNodesWithText(BOOK_NAME)[0].performScrollTo().performClick()
+        expandNovelTools()
+        rule.waitUntil(60_000) { nodes("novel_metadata_button") > 0 }
+        fun openAndPreview() {
+            rule.onAllNodesWithTag("novel_metadata_button")[0].performScrollTo().performClick()
+            rule.onAllNodesWithTag("novel_metadata_confirm")[0].performClick()
+            rule.waitUntil(20_000) { texts("确认修改") > 0 }
+        }
+        openAndPreview()
+        rotateOpenDialog()
+        rule.waitUntil(20_000) { nodes("novel_metadata_confirm") > 0 }
+        assertEquals("旋转不能保留旧书名修改授权", 0, texts("确认修改"))
+        assertFalse("旋转不得自动提交元数据", File(bookDir, "_metadata.json").exists())
+        rule.onAllNodesWithTag("novel_metadata_confirm")[0].performClick()
+        rule.waitUntil(20_000) { texts("确认修改") > 0 }
+        rule.onAllNodesWithTag("novel_metadata_cancel")[0].performClick()
+        assertEquals(original, bookDir.listFiles()!!.filter { it.isFile }.associate { it.name to it.readBytes().toList() })
+        openAndPreview()
+        File(bookDir, "_state.json").appendText(" ")
+        rule.onAllNodesWithTag("novel_metadata_confirm")[0].performClick()
+        rule.waitUntil(20_000) { texts("HTTP 409", substring = true) > 0 }
+        assertFalse(File(bookDir, "_metadata.json").exists())
+        val afterChange = bookDir.listFiles()!!.filter { it.isFile }.associate { it.name to it.readBytes().toList() }
+        rule.onAllNodesWithTag("novel_metadata_confirm")[0].performClick()
+        rule.waitUntil(20_000) { texts("确认修改") > 0 }
+        rule.onAllNodesWithTag("novel_metadata_confirm")[0].performClick()
+        rule.waitUntil(20_000) { nodes("novel_metadata_cancel") == 0 && texts("已确认测试书名") > 0 }
+        assertEquals(afterChange, bookDir.listFiles()!!.filter { it.isFile && it.name != "_metadata.json" }.associate { it.name to it.readBytes().toList() })
+        assertEquals("已确认测试书名", JSONObject(File(bookDir, "_metadata.json").readText()).getJSONObject("metadata").getString("name"))
+        assertEquals("已确认测试书名", OfflineStore.novelsFrom(OfflineStore.runtimeDir(ctx)).first { it.key == key }.name)
+    }
+
+    @Test
+    fun ui_recoverySurvivesRotationAndRepeatedOpenWithoutWriting() {
+        val ep = gateway.currentEndpoint()!!
+        val cleaned = runBlocking {
+            gateway.httpPost(ep.port, "/api/books/$key/reclean", "{\"dry_run\":false}")
+        }
+        assertTrue(cleaned.ok)
+        val before = bookDir.walkTopDown().filter { it.isFile }
+            .associate { it.relativeTo(bookDir).path to it.readBytes() }
+        rule.openCachedShelf()
+        rule.waitUntil(60_000) { texts(BOOK_NAME) > 0 }
+        rule.onAllNodesWithText(BOOK_NAME)[0].performScrollTo().performClick()
+        expandNovelTools()
+        rule.activityRule.scenario.onActivity {
+            it.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        }
+        rule.waitUntil(15_000) {
+            rule.activity.resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_PORTRAIT
+        }
+        rule.waitUntil(20_000) { nodes("novel_recovery_button") > 0 }
+        repeat(6) { cycle ->
+            ev("recovery rotation cycle=$cycle opening")
+            val opener = rule.onAllNodesWithTag("novel_recovery_button")[0].performScrollTo().assertIsDisplayed()
+            val openerTop = opener.getUnclippedBoundsInRoot().top.value
+            opener.performClick()
+            // Rotate immediately after opening, not only after the async listing is idle.
+            rule.activityRule.scenario.onActivity {
+                it.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+            }
+            rule.waitUntil(15_000) {
+                rule.activity.resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+            }
+            rule.waitUntil(20_000) { texts("请选择需要恢复的存档。") > 0 }
+            rule.onNodeWithTag("novel_recovery_screen").assertIsDisplayed()
+            rule.onAllNodes(isDialog()).assertCountEquals(0)
+            rule.onAllNodesWithTag("book_detail_list").assertCountEquals(0)
+            rule.onAllNodesWithTag("novel_recovery_select_all")[0].performScrollTo().performClick()
+            rule.waitUntil(5_000) { texts("预览恢复（100）") > 0 }
+            rule.onAllNodesWithTag("novel_recovery_confirm")[0].assertIsDisplayed().performClick()
+            rule.waitUntil(20_000) { texts("确认恢复") > 0 }
+            if (cycle == 0) recoveryScreenshot("landscape")
+            // Selection survives a second recreation, but a write must still need
+            // a fresh dry-run. This test never confirms restoration of any archive.
+            rule.activityRule.scenario.onActivity {
+                it.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            }
+            rule.waitUntil(15_000) {
+                rule.activity.resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_PORTRAIT
+            }
+            rule.waitUntil(20_000) { texts("请选择需要恢复的存档。") > 0 }
+            rule.waitUntil(5_000) { texts("预览恢复（100）") > 0 }
+            assertEquals("旋转不能恢复旧预览的写入授权", 0, texts("确认恢复"))
+            if (cycle == 0) recoveryScreenshot("portrait")
+            rule.onAllNodesWithTag("novel_recovery_list")[0].performScrollToIndex(100)
+            rule.onAllNodesWithTag("novel_recovery_confirm")[0].assertIsDisplayed()
+            if (cycle == 5) {
+                rule.activityRule.scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
+            } else rule.onAllNodesWithTag("novel_recovery_close")[0].assertIsDisplayed().performClick()
+            rule.waitUntil(5_000) { nodes("novel_recovery_close") == 0 }
+            rule.onNodeWithTag("book_detail_list").assertIsDisplayed()
+            val returnedOpener = rule.onAllNodesWithTag("novel_recovery_button")[0].assertIsDisplayed()
+            assertTrue("关闭管理页应保留详情滚动位置", kotlin.math.abs(
+                returnedOpener.getUnclippedBoundsInRoot().top.value - openerTop) < 2f)
+            ev("recovery rotation cycle=$cycle closed")
+        }
+        val after = bookDir.walkTopDown().filter { it.isFile }
+            .associate { it.relativeTo(bookDir).path to it.readBytes() }
+        assertEquals(before.keys, after.keys)
+        before.forEach { (name, bytes) ->
+            assertTrue("旋转与取消不得改写$name", bytes.contentEquals(after.getValue(name)))
+        }
+    }
+
+    @Test
+    fun ui_longRecoverySelectionPreviewCancelPreservesFiles() {
+        val ep = gateway.currentEndpoint()!!
+        val cleaned = runBlocking { gateway.httpPost(ep.port, "/api/books/$key/reclean", "{\"dry_run\":false}") }
+        assertTrue(cleaned.ok)
+        val listing = JSONObject(runBlocking { gateway.httpText(ep.port, "/api/books/$key/reclean/recovery") }.body)
+        assertEquals(100, listing.getInt("count"))
+        val lastId = listing.getJSONArray("items").getJSONObject(99).getString("id")
+        val before = bookDir.walkTopDown().filter { it.isFile }.associate { it.relativeTo(bookDir).path to it.readBytes() }
+        rule.openCachedShelf()
+        rule.waitUntil(60_000) { texts(BOOK_NAME) > 0 }
+        rule.onAllNodesWithText(BOOK_NAME)[0].performScrollTo().performClick()
+        expandNovelTools()
+        rule.waitUntil(60_000) { nodes("novel_recovery_button") > 0 }
+        landscape()
+        rule.waitUntil(60_000) { nodes("novel_recovery_button") > 0 }
+        rule.onAllNodesWithTag("novel_recovery_button")[0].performScrollTo().performClick()
+        rule.waitUntil(20_000) { nodes("novel_recovery_select_all") > 0 }
+        // The control is composed while the HTTP listing is still loading and disabled.
+        // Wait for successful data readiness, not merely the presence of the button.
+        rule.waitUntil(20_000) { texts("请选择需要恢复的存档。") > 0 }
+        rule.onAllNodesWithTag("novel_recovery_select_all")[0].performScrollTo().performClick()
+        rule.waitUntil(5_000) { texts("预览恢复（100）") > 0 }
+        rule.onAllNodesWithTag("novel_recovery_list")[0].performScrollToIndex(100)
+        rule.onAllNodesWithTag("novel_recovery_pick_$lastId")[0].assertIsDisplayed()
+        rule.onAllNodesWithTag("novel_recovery_confirm")[0].assertIsDisplayed().performClick()
+        rule.waitUntil(20_000) { texts("确认恢复") > 0 }
+        rule.onAllNodesWithTag("novel_recovery_close")[0].assertIsDisplayed().performClick()
+        rule.waitUntil(5_000) { nodes("novel_recovery_close") == 0 }
+        val after = bookDir.walkTopDown().filter { it.isFile }.associate { it.relativeTo(bookDir).path to it.readBytes() }
+        assertEquals(before.keys, after.keys)
+        before.forEach { (name, bytes) -> assertTrue("取消预览不得改写$name", bytes.contentEquals(after.getValue(name))) }
+    }
+
+    @Test
+    fun ui_cleanThenRestoreOriginalWithExplicitPreview() {
+        val cache = File(bookDir, cacheKeyOf(URL2) + ".cache")
+        val original = cache.readBytes()
+        val ep = gateway.currentEndpoint()!!
+        runBlocking { gateway.httpPost(ep.port, "/api/books/$key/reclean", "{\"dry_run\":false}") }
+        val cleaned = cache.readBytes()
+        assertFalse(original.contentEquals(cleaned))
+        val listing = runBlocking { gateway.httpText(ep.port, "/api/books/$key/reclean/recovery") }
+        val identity = JSONObject(listing.body).getJSONArray("items").getJSONObject(0).getString("id")
+        rule.openCachedShelf()
+        rule.waitUntil(60_000) { texts(BOOK_NAME) > 0 }
+        rule.onAllNodesWithText(BOOK_NAME)[0].performScrollTo().performClick()
+        expandNovelTools()
+        rule.waitUntil(60_000) { nodes("novel_recovery_button") > 0 }
+        landscape()
+        rule.waitUntil(60_000) { nodes("novel_recovery_button") > 0 }
+        rule.onAllNodesWithTag("novel_recovery_button")[0].performScrollTo().performClick()
+        rule.waitUntil(20_000) { nodes("novel_recovery_pick_$identity") > 0 }
+        rule.onAllNodesWithTag("novel_recovery_confirm")[0].assertIsDisplayed()
+        rule.onAllNodesWithTag("novel_recovery_close")[0].assertIsDisplayed()
+        rule.onAllNodesWithTag("novel_recovery_pick_$identity")[0].performScrollTo().performClick()
+        rule.onAllNodesWithTag("novel_recovery_confirm")[0].performClick()
+        rule.waitUntil(20_000) { texts("预览通过", substring = true) > 0 }
+        assertTrue("恢复预览不应改文件", cleaned.contentEquals(cache.readBytes()))
+        rule.onAllNodesWithTag("novel_recovery_confirm")[0].performClick()
+        rule.waitUntil(20_000) { texts("已恢复 1 项", substring = true) > 0 }
+        assertTrue("确认恢复必须逐字节还原原文", original.contentEquals(cache.readBytes()))
+        assertTrue(File(bookDir, "book.txt").readText().contains("huanyuanap"))
+    }
+
+    @Test
+    fun ui_promotionReviewCanBeCancelledWithoutWriting() {
+        val cache = File(bookDir, cacheKeyOf(URL2) + ".cache")
+        val before = cache.readBytes()
+        rule.openCachedShelf()
+        rule.waitUntil(60_000) { texts(BOOK_NAME) > 0 }
+        rule.onAllNodesWithText(BOOK_NAME)[0].performScrollTo().performClick()
+        rule.waitUntil(60_000) { nodes("reclean_button") > 0 }
+        rule.onAllNodesWithTag("reclean_button")[0].performScrollTo().performClick()
+        rule.waitUntil(60_000) { texts("发现 1 个疑似推广章节", substring = true) > 0 }
+        rule.onAllNodesWithText("· 目录第2项：推书《测试作品》")[0].performScrollTo()
+        assertTrue(texts("不会自动删除", substring = true) > 0)
+        rule.onAllNodesWithText("取消")[0].performClick()
+        rule.waitUntil(10_000) { nodes("reclean_preview_content") == 0 }
+        assertTrue("取消预览不能修改缓存", before.contentEquals(cache.readBytes()))
+        assertFalse("预览不能生成全文", File(bookDir, "book.txt").exists())
+    }
+
+    @Test
     fun ui_offersPurifyWithPreviewAndConfirm() {
         gateway = EngineGateway(ctx)
         runBlocking { gateway.connect() }
-        // 书架 → 合成书 → 详情
-        rule.waitUntil(150_000) { texts(BOOK_NAME) > 0 }
+        // 仪器测试之间会保留 MainActivity 当前 tab；显式回到缓存书架，
+        // 不依赖前一用例恰好停在默认页。
+        rule.openCachedShelf()
+        rule.waitUntil(60_000) { texts(BOOK_NAME) > 0 }
         rule.onAllNodesWithText(BOOK_NAME)[0].performScrollTo().performClick()
         rule.waitUntil(60_000) { nodes("reclean_button") > 0 }
         ev("详情页有「净化正文」入口")

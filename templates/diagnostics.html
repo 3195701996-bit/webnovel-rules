@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>运行诊断 · webnovel_rules</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/static/css/style.css">
+<style>
+.diagnostics-page .container { max-width:960px; }
+.diagnostics-actions { display:flex; gap:10px; flex-wrap:wrap; margin:16px 0; }
+.diagnostics-page .btn { min-height:44px; }
+.diagnostics-status { color:var(--text-dim); overflow-wrap:anywhere; margin:10px 0; }
+.diagnostics-status[data-error="true"] { color:var(--red); }
+.diagnostics-page pre { white-space:pre-wrap; overflow-wrap:anywhere; font:inherit; font-size:.85rem; }
+.diagnostics-page textarea { width:100%; min-height:300px; box-sizing:border-box; resize:vertical;
+  color:var(--text); background:var(--bg); padding:14px; border:1px solid var(--border); border-radius:10px; }
+.diagnostics-page summary { cursor:pointer; padding:10px 0; }
+.diagnostics-page .btn:focus-visible { outline:3px solid var(--accent-2); outline-offset:3px; }
+</style>
+</head>
+<body class="diagnostics-page">
+<header class="topbar">
+  <span class="logo">📚 webnovel_rules<small>发现 · 收藏 · 阅读</small></span>
+  <nav aria-label="主导航">
+    <a href="/">🔍 发现</a><a href="/sources">来源管理</a><a href="/library">📖 书架</a>
+    <a href="/tasks_page">⬇ 下载</a><a href="/manga">🎨 漫画</a>
+    <a href="/diagnostics" class="active" aria-current="page">诊断</a>
+  </nav>
+</header>
+<main class="container">
+  <h1 class="page-title">运行诊断</h1>
+  <p class="page-sub">查看引擎状态，保留故障线索。此页只读取诊断信息，不修改书库、代理或下载任务，也不自动请求源站测速。</p>
+  <section class="form-card" aria-labelledby="engine-heading">
+    <h2 id="engine-heading">引擎与最近错误</h2>
+    <button class="btn" id="diagnostics-refresh" type="button">刷新状态</button>
+    <p id="engine-status" class="diagnostics-status" role="status">正在读取引擎状态…</p>
+    <pre id="engine-summary"></pre>
+    <details>
+      <summary>最近失败请求与异常</summary>
+      <p class="page-sub">仅保留当前进程的有限记录；没有记录不代表所有来源都可用。</p>
+      <p id="events-status" class="diagnostics-status" role="status">正在读取…</p>
+      <pre id="events-summary"></pre>
+    </details>
+  </section>
+  <section class="form-card" aria-labelledby="report-heading">
+    <h2 id="report-heading">导出诊断报告</h2>
+    <p>报告按服务端脱敏规则生成。请先预览，确认内容后再分享；生成报告不会自动进行实时源站测速。</p>
+    <div class="diagnostics-actions">
+      <button class="btn primary" id="report-generate" type="button">生成报告</button>
+      <button class="btn" id="report-download" type="button" disabled>下载已预览报告</button>
+    </div>
+    <p id="report-status" class="diagnostics-status" role="status">尚未生成报告。</p>
+    <details id="report-preview" hidden>
+      <summary>报告预览</summary>
+      <label for="report-text">诊断报告内容（只读）</label>
+      <textarea id="report-text" readonly spellcheck="false"></textarea>
+    </details>
+  </section>
+</main>
+<script src="/static/js/common.js"></script>
+<script src="/static/js/diagnostics.js"></script>
+</body>
+</html>

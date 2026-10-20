@@ -46,6 +46,7 @@ from .base import Chapter, Comic, ComicDetails, MangaError, decode_html, html_fr
 # HTTP 返回"格式正确、内容为空"的空壳，会伪装成"搜索无结果/章节为空"。
 WEB_DOMAINS = [
     "https://www.copy4000.com",
+    "https://2026copy.com",
     "https://www.mangacopy.com",
 ]
 
@@ -112,6 +113,7 @@ class _Budget(object):
         return (conn, read)
 _KEYS = {}               # path_word -> {"ccz":.., "dnt":.., "ts":..}
 _DETAILS = {}            # path_word -> {"html":.., "ts":..}
+_BROWSE_CATEGORIES = {"ts": 0.0, "items": []}
 _local = threading.local()
 
 
@@ -359,13 +361,27 @@ def _get_path(path, headers=None, dnt="", json_api=False, timeout=TIMEOUT,
             break                                # 预算用尽：不再换域，如实报超时
         try:
             base = _web_base(force=(i > 0), skip=skip, budget=_budget)
+        except WebUnreachable as e:
+            # Discovery has already exhausted the remaining domain pool.
+            last = e
+            break
+        except WebBlocked:
+            raise
+        except Exception as e:
+            last = e
+            _rotate_base()
+            continue
+        try:
             return _web_get(base + path, headers=headers or _headers(dnt, json_api),
                             timeout=timeout, budget=_budget)
         except WebBlocked:
             raise
-        except WebUnreachable as e:              # 域池整体不可达：立刻停（不换域硬撞）
+        except WebUnreachable as e:
+            # A failed cached host is not proof that all other hosts are down.
+            # Keep the existing shared budget and never retry this host again.
             last = e
-            break
+            skip = (skip or set()) | {base}
+            _rotate_base()
         except Exception as e:
             last = e
             skip = (skip or set()) | {(_BASE.get("base") or "")}
@@ -417,6 +433,7 @@ def clear_cache():
         _NEG["ts"] = 0.0
         _KEYS.clear()
         _DETAILS.clear()
+        _BROWSE_CATEGORIES.update(ts=0.0, items=[])
 
 
 # ── AES 解密 ─────────────────────────────────────────────────────────────
@@ -655,6 +672,104 @@ def _parse_search(data):
     return out, total
 
 
+def web_categories(refresh=False):
+    """Official filter IDs verified 2026-10-10; discovery never waits on network."""
+    ordering = [{"key": "ordering=-datetime_updated", "name": "最近更新", "group": "排序"},
+                {"key": "ordering=-popular", "name": "热门漫画", "group": "排序"}]
+    # The source list must remain usable offline. Refreshing is explicit, while
+    # browsing always requests the selected filter's actual catalog from the site.
+    themes = {
+        "aiqing": "愛情", "huanlexiang": "歡樂向", "maoxian": "冒險", "qihuan": "奇幻",
+        "baihe": "百合", "xiaoyuan": "校园", "kehuan": "科幻", "dongfang": "東方",
+        "danmei": "耽美", "gedou": "格鬥", "teenslove": "TL", "shenghuo": "生活",
+        "qingxiaoshuo": "轻小说", "qita": "其他", "xuanyi": "悬疑", "mengxi": "萌系",
+        "shengui": "神鬼", "zhichang": "职场", "zhiyu": "治愈", "jiecao": "节操",
+        "sige": "四格", "gaoxiao": "搞笑", "changtiao": "長條", "jingji": "竞技",
+        "mohuan": "魔幻", "jianniang": "舰娘", "weiniang": "伪娘", "rexue": "热血",
+        "jingsong": "惊悚", "meishi": "美食", "xingzhuanhuan": "性转换", "lizhi": "励志",
+        "yinyuewudao": "音乐舞蹈", "hougong": "後宮", "zhentan": "侦探", "COLOR": "彩色",
+        "aa": "AA", "yishijie": "异世界", "lishi": "历史", "chuanyue": "穿越",
+        "jizhan": "机战", "zhanzheng": "战争", "dushi": "都市", "chongsheng": "重生",
+        "comiket102": "C102", "kongbu": "恐怖", "shengcun": "生存", "comiket103": "C103",
+        "comiket104": "C104", "comiket100": "C100", "wuxia": "武侠", "comiket101": "C101",
+        "comiket99": "C99", "comiket97": "C97", "comiket105": "C105", "zhaixi": "宅系",
+        "comiket96": "C96", "comiket106": "C106", "comiket107": "C107", "C98": "C98",
+        "comiket95": "C95", "zhuansheng": "转生", "comiket108": "C108", "fate": "FATE",
+        "Uncensored": "無修正", "xianxia": "仙侠", "loveLive": "LoveLive",
+        "zazhifuzengxiezhenji": "雜誌附贈寫真集",
+    }
+    with _LOCK:
+        if _BROWSE_CATEGORIES["items"] and time.time() - _BROWSE_CATEGORIES["ts"] < 3600:
+            return list(_BROWSE_CATEGORIES["items"])
+    if not refresh:
+        return ordering + [{"key": urllib.parse.urlencode({"theme": key, "ordering": "-datetime_updated"}),
+                            "name": name, "group": "题材"} for key, name in themes.items()]
+    from lxml import html as lhtml
+    root = html_fromstring_safe(lhtml, _get_path("/comics", budget=_Budget()).text)
+    items = ordering
+    seen = set()
+    for link in root.xpath('//a[contains(@href, "theme=")]'):
+        params = urllib.parse.parse_qs(urllib.parse.urlsplit(link.get("href", "")).query)
+        theme = (params.get("theme") or [""])[0]
+        label = link.text_content().strip()
+        if not theme or not label or theme in seen:
+            continue
+        seen.add(theme)
+        items.append({"key": urllib.parse.urlencode({"theme": theme, "ordering": "-datetime_updated"}),
+                      "name": label, "group": "题材"})
+    if not seen:
+        raise WebError("分类页面未返回题材筛选，页面结构可能已变更")
+    with _LOCK:
+        _BROWSE_CATEGORIES.update(ts=time.time(), items=items)
+    return list(items)
+
+
+def web_browse(category, page=1):
+    params = urllib.parse.parse_qs(category)
+    query = {key: value[0] for key, value in params.items() if key in ("theme", "ordering", "region", "status")}
+    query.update(limit=30, offset=(max(1, int(page)) - 1) * 30)
+    return parse_browse_html(_get_path("/comics?" + urllib.parse.urlencode(query), budget=_Budget()).text)
+
+
+class BrowsePage(list):
+    """List-compatible page with the catalog's authoritative total."""
+    def __init__(self, items, total):
+        super().__init__(items)
+        self.total = total
+
+
+def parse_browse_html(body):
+    """Use the same real catalog parser for HTTP and desktop browser transport."""
+    import ast
+    from html.parser import HTMLParser
+
+    class CatalogParser(HTMLParser):
+        catalog = None
+
+        def handle_starttag(self, tag, attrs):
+            attrs = dict(attrs)
+            if self.catalog is None and "exemptComic-box" in attrs.get("class", "").split() and "list" in attrs:
+                self.catalog = attrs
+
+    parser = CatalogParser(convert_charrefs=True)
+    parser.feed(body)
+    section = parser.catalog
+    if section is None:
+        raise WebError("分类页面缺少漫画列表，页面结构可能已变更")
+    raw = section.get("list", "")
+    try:
+        try:
+            comics = json.loads(raw)
+        except ValueError:
+            comics = ast.literal_eval(raw)
+        total = int(section.get("total", "0"))
+    except (ValueError, SyntaxError, TypeError) as e:
+        raise WebError("分类数据格式已变更") from e
+    if not isinstance(comics, list) or not all(isinstance(c, dict) for c in comics):
+        raise WebError("分类数据不是漫画列表")
+    return BrowsePage(_parse_search({"code": 200, "results": {"list": comics, "total": total}})[0], total)
+
+
 def web_search(kw, limit=30, offset=0, source_key="copymanga"):
     """网页搜索 → (List[Comic], total)。
 
@@ -720,11 +835,16 @@ def _parse_chapters(plain, path_word):
             continue
     base = _BASE.get("base") or _domain_pool()[0]
     out = []
+    seen_ids = set()
     for gname, ginfo in groups.items():
         for ch in ((ginfo or {}).get("chapters") or []):
             cid = (ch or {}).get("id") or ""
             if not cid:
                 continue
+            cid = str(cid)
+            if cid in seen_ids:
+                continue
+            seen_ids.add(cid)
             ctype = ch.get("type")
             try:
                 ctype = int(ctype)

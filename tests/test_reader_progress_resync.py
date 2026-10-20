@@ -92,6 +92,17 @@ def test_manga_save_progress_gated():
         "saveProgress 必须在读到历史后才写服务器"
 
 
+def test_manga_history_save_errors_are_visible_and_writes_are_ordered():
+    assert "let _histPostChain = Promise.resolve()" in MANGA_READER, \
+        "连续进度写入必须串行，避免旧位置晚到覆盖新位置"
+    assert "if (!r.ok || !d || d.ok !== true)" in MANGA_READER, \
+        "必须识别 HTTP 错误以及业务层 ok:false"
+    assert "showHistorySaveError" in MANGA_READER and "重试同步" in MANGA_READER, \
+        "保存失败必须告知用户并提供手动重试"
+    assert "if (_histUnsynced && _histUnsynced !== tag) return;" in MANGA_READER, \
+        "较早失败的请求不得将待重试位置回退"
+
+
 def test_manga_restore_sets_ready_only_on_success():
     m = re.search(r"async function restoreProgress\(attempt = 0\) \{.*?\n\}",
                   MANGA_READER, re.S)
@@ -107,9 +118,9 @@ def test_manga_restore_sets_ready_only_on_success():
 
 
 def test_manga_explicit_chapter_restores_page():
-    """显式点章进入时，同话要恢复章内页码（否则每次都从 P1 开始并写回 P1）"""
-    assert re.search(r"else if \(rec\.idx === chIdx0 && _pg > 1\) \{\s*\n\s*pg0 = _pg;",
-                     MANGA_READER), "显式章节未恢复同话页码"
+    """Legacy ch-only entries resume; explicit page choices must win over history."""
+    assert re.search(r"else if \(!params\.has\('pg'\) && rec\.idx === chIdx0 && _pg > 1\) \{\s*\n\s*pg0 = _pg;",
+                     MANGA_READER), "旧链接应恢复同话页码，但不能覆盖明确的页码选择"
     assert re.search(r"addEventListener\('online'", MANGA_READER), "缺少 online 补读"
 
 

@@ -6,6 +6,8 @@ import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.LargeTest
 import androidx.test.platform.app.InstrumentationRegistry
@@ -14,6 +16,7 @@ import org.json.JSONObject
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
@@ -43,6 +46,13 @@ class BackupScopeUiTest {
 
     private val ctx get() = InstrumentationRegistry.getInstrumentation().targetContext
     private lateinit var gateway: EngineGateway
+
+    @Before
+    fun requireEmulator() {
+        val qemu = ProcessBuilder("getprop", "ro.kernel.qemu").start()
+            .inputStream.bufferedReader().use { it.readText().trim() }
+        assertTrue("备份合成测试不得在用户手机运行", qemu == "1")
+    }
 
     private fun ev(line: String) = println("BACKUP_SCOPE_EVIDENCE $line")
 
@@ -119,11 +129,15 @@ class BackupScopeUiTest {
         val scope = m.optJSONObject("scope") ?: throw AssertionError("清单缺少 scope（范围不明确）")
         val inc = scope.optJSONArray("includes")!!
         val exc = scope.optJSONArray("excludes")!!
-        assertTrue("includes 应说明包含书源与进度", inc.length() >= 3)
+        assertTrue("includes 应说明包含书源、进度与收藏", inc.length() >= 4)
+        val incText = (0 until inc.length()).joinToString(" ") { inc.optString(it) }
+        assertTrue("备份范围应明确包含漫画收藏：$incText", incText.contains("收藏"))
         assertTrue("excludes 必须明确列出不含的内容", exc.length() >= 3)
         val excText = (0 until exc.length()).joinToString(" ") { exc.optString(it) }
         assertTrue("必须明确'不含正文'：$excText", excText.contains("正文"))
         assertTrue("必须明确'不含漫画图片'：$excText", excText.contains("漫画"))
+        assertTrue("清洗原文存档明确不在配置备份内", excText.contains("清洗前原文存档"))
+        assertTrue("元数据修复记录明确不在配置备份内", excText.contains("书名作者修复记录"))
         assertTrue("scope 必须带说明（不是离线全文副本）",
             scope.optString("note").contains("不是") || scope.optString("note").isNotBlank())
         ev("清单范围：包含 ${inc.length()} 项 / 明确不含 ${exc.length()} 项")
@@ -165,9 +179,28 @@ class BackupScopeUiTest {
         ev("备份页范围：$summary")
         assertTrue("范围摘要要说清'包含…合计…不含…'：$summary",
             summary.contains("包含") && summary.contains("不含") && summary.contains("合计"))
-        assertTrue("必须显示不含部分的真实体积（KB/MB/GB）：$summary",
-            summary.contains("MB") || summary.contains("KB") || summary.contains("GB"))
+        // 空测试设备可能确实没有被排除的数据；零值应如实显示为“0 字节”，
+        // 非零值才要求使用人类可读单位，不能为了通过测试虚报容量。
+        val reportsMeasuredZero = summary.contains("0 字节")
+        assertTrue("必须显示不含部分的实测体积（零值可显示 0 字节）：$summary",
+            reportsMeasuredZero || summary.contains("MB") ||
+                summary.contains("KB") || summary.contains("GB"))
         assertFalse("范围摘要不能是空壳", summary.isBlank())
+        // 长范围说明不能将关键操作挤出不可滚动区域。
+        for (tag in listOf("backup_create", "backup_restore", "backup_scope_note")) {
+            rule.onNodeWithTag(tag).performScrollTo().assertIsDisplayed()
+        }
+        rule.activityRule.scenario.onActivity {
+            it.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+        }
+        rule.waitUntil(15_000) {
+            rule.activity.resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+        }
+        rule.waitUntil(60_000) { nodes("backup_create") > 0 }
+        for (tag in listOf("backup_create", "backup_restore", "backup_scope_note")) {
+            rule.onNodeWithTag(tag).performScrollTo().assertIsDisplayed()
+        }
+        ev("纵横屏备份/恢复入口与范围说明均可滚动到达；未打开系统选择器或写入恢复")
         waitWhileIdle()
     }
 }

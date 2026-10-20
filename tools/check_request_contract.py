@@ -38,6 +38,8 @@ SERVER_DIR = os.path.join(ROOT, "server")
 # ── 服务端"读了但客户端按设计不发"的键：每条必须写明**为什么**────────────────
 # 键格式： "<规范化路径> <键>"；"*" 表示该段是变量
 REQUEST_OPTIONAL = {
+    "/api/manga/*/*/chapters/delete identity_mode": "可选删除身份模式：旧目录入口省略以保留名称兼容映射；"
+        "独立本地缓存管理入口显式传disk，不应更改旧入口默认值",
     "/api/tasks source": "服务端兼容别名：老网页端发 source，客户端统一发 source_uid（服务端先读 source_uid）",
     "/api/tasks url": "服务端兼容别名：老网页端发 url，客户端发 book_url",
     "/api/sources/bulk-enabled uids": "网页端按 uid 列表批量操作；安卓端只用 enabled+filter（按筛选条件批量）",
@@ -262,6 +264,10 @@ def _norm(path):
     p = re.sub(r'\$\{[^}]*\}', "*", p)
     p = p.split("?")[0]
     return "/".join("*" if seg in ("*", "") and seg == "*" else seg for seg in p.split("/"))
+
+
+# 纯触发型 POST：协议约定不带 body，因此不进入 REQUEST_OPTIONAL 的键审计。
+EMPTY_BODY_ENDPOINTS = {"/api/manga/favorites/check-updates"}
 
 
 # ── 客户端 ─────────────────────────────────────────────────────────────
@@ -531,13 +537,19 @@ def compare(routes, calls, optional=None):
     sent_by_path = {}
     for fn, line, method, path, raw, keys, ok, body in calls:
         if not ok:
+            if (path == "/api/manga/favorites/check-updates" and
+                    body.strip() in {"", '"{}"'} and
+                    path in EMPTY_BODY_ENDPOINTS):
+                sent_by_path.setdefault(path, set())
+                continue
             unresolved.append(f"{fn}:{line} {method} {raw[:60]} → body 解析不了：{body[:60]}")
             continue
         sent_by_path.setdefault(path, set()).update(keys)
 
     # ① 客户端发了、服务端不读
     for fn, line, method, path, raw, keys, ok, body in calls:
-        if not ok:
+        if not ok or (path in EMPTY_BODY_ENDPOINTS and
+                      body.strip() in {"", '"{}"'}):
             continue
         targets = DYNAMIC_PATH_TARGETS.get(path)
         if targets:

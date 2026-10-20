@@ -287,7 +287,9 @@ def requests_path(monkeypatch):
     monkeypatch.setattr(DL, "pin_requests_session",
                         lambda sess, url, proxy=None: False)   # 一律"绑定不了"
     sess = _FakeSess()
-    monkeypatch.setattr(DL, "_requests_session", lambda: sess)
+    monkeypatch.setattr(DL, "_acquire_requests_session",
+                        lambda timeout=None: (sess, __import__("threading").Lock()))
+    monkeypatch.setattr(DL, "_release_requests_session", lambda lock: None)
     return DL, sess
 
 

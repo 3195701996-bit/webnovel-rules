@@ -25,6 +25,12 @@ from engine.manga.base import Comic  # noqa: E402
 from server import state as st  # noqa: E402
 
 
+# 慢源必须模拟“搜索请求一直挂起”，但不能让测试进程退出时等待 60 秒。
+# ThreadPoolExecutor 的 shutdown(wait=False) 不会取消已经运行的函数，因此
+# 用可释放事件代替 sleep；每个用例 teardown 唤醒残留 worker。
+_NEVER_EVENTS = []
+
+
 class _FakeAdapter:
     def __init__(self, key, name, rows=1, delay=0.0, never=False):
         self.key, self.name = key, name
@@ -32,7 +38,9 @@ class _FakeAdapter:
 
     def search(self, keyword, page=1, order=None):
         if self._never:
-            time.sleep(60)          # 模拟不可达源：永远不返回
+            blocked = threading.Event()
+            _NEVER_EVENTS.append(blocked)
+            blocked.wait(60)        # 模拟不可达源：直到用例结束前都不返回
         if self._delay:
             time.sleep(self._delay)
         return [Comic(id=f"{self.key}-{i}", title=f"{self.key}-{i}", author="",
@@ -42,11 +50,14 @@ class _FakeAdapter:
 
 @pytest.fixture(autouse=True)
 def _clean_caches():
+    _NEVER_EVENTS.clear()
     st._manga_search_cache.clear()
     st._manga_search_partial.clear()
     st._manga_search_fail.clear()
     ma._manga_search_latency.clear()
     yield
+    for blocked in _NEVER_EVENTS:
+        blocked.set()
     st._manga_search_cache.clear()
     st._manga_search_partial.clear()
     st._manga_search_fail.clear()

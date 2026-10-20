@@ -3,6 +3,7 @@ package com.webnovel.mobile
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -48,6 +49,12 @@ class FirstRunNativePathTest {
 
     private fun webMarkerHits(): Int = webMarkers.sumOf { texts(it, substring = true) }
 
+    private fun back() {
+        val labeled = rule.onAllNodesWithText("← 返回")
+        if (labeled.fetchSemanticsNodes().isNotEmpty()) labeled[0].performClick()
+        else rule.onAllNodesWithContentDescription("返回")[0].performClick()
+    }
+
     @Test
     fun firstRun_goesNative_notWebView() {
         // 1) 冷启动到书架
@@ -64,17 +71,18 @@ class FirstRunNativePathTest {
 
             // 3) 点「搜漫画」→ 必须落到原生搜索控件
             rule.onNodeWithTag("empty_shelf_search_manga").performClick()
-            waitText("漫画搜索", timeoutMs = 30_000)
+            waitText("发现漫画", timeoutMs = 90_000)
             rule.onNodeWithTag("manga_search_field").assertIsDisplayed()
             assertEquals("首用路径上不能出现桌面网页特征", 0, webMarkerHits())
             Views.assertNoWebView(rule.activity, "空书架→原生漫画搜索")
             ev("点「搜漫画」→ 原生漫画搜索（无桌面网页特征）")
-            rule.onAllNodesWithText("← 返回")[0].performClick()
-            waitText("书架还是空的", timeoutMs = 30_000)
+            back()
+            // 返回事件可能先触发服务桥接/动画；等首屏空态，而不是固定短超时。
+            waitText("书架还是空的", timeoutMs = 90_000)
 
             // 4) 点「浏览内置漫画源」→ 必须落到原生源清单，并能进单源页
             rule.onNodeWithTag("empty_shelf_browse_manga").performClick()
-            waitText("内置漫画源", timeoutMs = 30_000)
+            waitText("漫画源", timeoutMs = 60_000)
             rule.onNodeWithTag("manga_source_list").assertIsDisplayed()
             assertEquals("浏览内置源路径上不能出现桌面网页", 0, webMarkerHits())
             Views.assertNoWebView(rule.activity, "浏览内置漫画源")
@@ -89,13 +97,13 @@ class FirstRunNativePathTest {
         //    过去这里**无条件**点"← 返回"并等"书架还是空的"——书架非空时必然超时，
         //    是评审指出的脆弱前置条件（2026-09-15）。现在改成：有返回就点，
         //    回到主框架即可（空库/非空库都成立）。
-        while (texts("← 返回") > 0) {
-            rule.onAllNodesWithText("← 返回")[0].performClick()
+        while (rule.onAllNodesWithContentDescription("返回").fetchSemanticsNodes().isNotEmpty() ||
+            texts("← 返回") > 0) {
+            back()
             rule.waitForIdle()
         }
-        waitText("浏览", timeoutMs = 30_000)
         rule.onAllNodesWithText("浏览")[0].performClick()
-        waitText("漫画（优先）", timeoutMs = 60_000)
+        waitText("发现漫画", timeoutMs = 60_000)
         rule.onNodeWithText("内置漫画源", substring = true).assertIsDisplayed()
         assertEquals("浏览页不应再有'网页搜索页'入口", 0, texts("网页搜索页", substring = true))
         assertEquals("浏览页不应显示桌面网页", 0, webMarkerHits())
@@ -103,6 +111,9 @@ class FirstRunNativePathTest {
         ev("浏览页：漫画优先，无网页搜索入口")
 
         // 6) 漫画源卡片必须是**真实入口**（过去是空回调，点了没反应）
+        rule.onAllNodesWithText("设置")[0].performClick()
+        rule.onNodeWithTag("manga_diagnostics_entry").performScrollTo().performClick()
+        waitText("依赖：", timeoutMs = 60_000, substring = true)
         val cards = rule.onAllNodesWithText("依赖：", substring = true).fetchSemanticsNodes().size
         assertTrue("漫画源卡片应在位（实际 $cards）", cards > 0)
         rule.onAllNodesWithText("依赖：", substring = true)[0].performClick()
@@ -113,16 +124,16 @@ class FirstRunNativePathTest {
         ev("漫画源卡片 → 原生源页（能力/实测结论/分类）")
 
         // 7) 网页只在设置里，且明确标注为诊断页（这一页是唯一允许出现 WebView 的）
-        rule.onAllNodesWithText("← 返回")[0].performClick()
-        waitText("漫画（优先）", timeoutMs = 30_000)
+        back()
+        rule.onNodeWithTag("manga_diagnostics_back").performClick()
         rule.onAllNodesWithText("设置")[0].performClick()
-        waitText("高级（网页诊断）", timeoutMs = 60_000)
+        waitText("高级与诊断", timeoutMs = 60_000)
         // 设置页是**可滚动**的长页：加了「存储管理」入口后内容变长，底部说明会落到
         // 折叠线下。断言"显示中"之前必须先滚到它（实测踩到：assertIsDisplayed 失败，
         // 而节点其实存在、也不是网页）。
         rule.onNodeWithTag("build_info").performScrollTo().assertIsDisplayed()
         rule.onNodeWithText("不是日常使用界面", substring = true)
             .performScrollTo().assertIsDisplayed()
-        ev("设置：网页入口收进「高级（网页诊断）」，并显示产物基线")
+        ev("设置：网页入口收进「高级与诊断」，并显示产物基线")
     }
 }

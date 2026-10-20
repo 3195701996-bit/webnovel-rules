@@ -1,7 +1,13 @@
-# 📚 webnovel_rules — 书源驱动的小说 / 漫画系统（Web + 独立 APK）
+# webnovel_rules
 
-一套以 **legado（阅读 App）书源规则**驱动的内容系统：导入书源 → 自动校验 → 搜索 → 爬取/下载 → 阅读。
-所有站点解析全部由书源 JSON 规则驱动，**不硬编码任何网站**。
+**小说与漫画的发现、收藏、下载和日常阅读，一个公共引擎，两种独立客户端。**
+
+[![CI](https://github.com/3195701996-bit/webnovel-rules/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/3195701996-bit/webnovel-rules/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/3195701996-bit/webnovel-rules)](https://github.com/3195701996-bit/webnovel-rules/releases/latest)
+
+支持 legado 格式小说书源、多来源漫画适配器、离线书库、章节级追更，以及可预览和恢复的小说清洗。Web 适合电脑管理和阅读，Android 内嵌同一套 Python 引擎，不依赖电脑服务或云端账号。
+
+小说使用规则引擎及专属适配器，漫画按来源处理目录、图片与站点协议。在线功能受来源、依赖与网络影响，不保证所有来源持续可用。
 
 同一套引擎，两种使用形态：
 
@@ -10,8 +16,23 @@
 | **Web 桌面端** | Flask 服务端 + 浏览器界面，在本机/局域网使用 | 电脑上看书、管理书库与任务 |
 | **独立 APK** | 引擎以 Chaquopy 打包进安卓 App，**不连电脑、不连云端**，装上即用 | 手机在线/离线阅读 |
 
-> 当前版本：**APK 1.6.0（versionCode 150）** ｜ 漫画搜索修复 + APK UI 全面升级 ｜
-> JVM 单测 **38/38** ｜ 客户端↔服务端双向契约守卫 **0 问题**
+> 当前稳定版本：**3.0.0（Android versionCode 179）**。
+> [发布页与下载](https://github.com/3195701996-bit/webnovel-rules/releases/tag/v3.0.0) · [更新说明](docs/3.0.0-release-notes.md)。
+> 同签名保留数据升级、准确源码 CI、141 项客户端单测、63 项界面验收及完整后端回归已通过；验证范围和限制见验收记录。电脑 Web 通过同版源码交付，安装 APK 不会自动更新电脑服务。
+
+**快速入口：** [下载 Android](https://github.com/3195701996-bit/webnovel-rules/releases/latest) · [文档导航](docs/README.md) · [开发与验证](docs/development.md) · [版本记录](docs/releases/README.md) · [贡献指南](CONTRIBUTING.md) · [报告问题](https://github.com/3195701996-bit/webnovel-rules/issues/new/choose)
+
+## 界面预览
+
+以下为 3.0.0 实际运行界面，使用隔离演示数据；不是设计稿，不展示真实用户书库或阅读记录。书目与统计仅用于展示，不代表源站实时结果。
+
+| Android · 浏览入口 | Android · 小说详情 |
+|---|---|
+| <img src="docs/screenshots/v3-android-browse.png" alt="Android 浏览页，漫画搜索、来源与探索入口" width="280"> | <img src="docs/screenshots/v3-android-novel.png" alt="Android 小说详情，目录与下载状态" width="280"> |
+
+![Web 小说详情与章节查找](docs/screenshots/v3-web-desktop.png)
+
+[手机宽度 Web 预览](docs/screenshots/v3-web-mobile.png) · [截图环境与复现边界](docs/screenshots/README.md)
 
 ---
 
@@ -51,16 +72,17 @@ APK 的独立性：引擎运行在 App 私有服务进程里，UI 通过本机�
 - **内置漫画源**：拷贝漫画（copymanga）、JM 等多个适配器，逐源能力/分类/实测结论可查
 - **搜索 / 分类浏览**：跨源流式搜索、单源搜索与排序（jm 支持 mr/mv/mp 等排序）
 - **下载**：整话/选话下载、批量暂停恢复、断点续下、本地图片缺失检测与修复
-- **阅读器**：纵向连续 / 横向翻页、双指缩放、整话自 pacing 预取、下一话零等待、
-  页级失败自动退避重试
+- **阅读器**：纵向连续 / 横向翻页、双指缩放、小中央热区显隐工具栏、进度定位与预取；
+  图片加载失败可在当前页重试，不用退出章节重来
+- **章节与更新**：卷优先、章节身份匹配、更新预览及只补缺页，避免按目录序号误判章节
 
 ### 双端一致的体验
-- **书架**：「最近阅读 / 已缓存」双页；最近阅读是**全量历史**（含在线读过未下载的漫画）；
-  已缓存按「最近下载 / 最近阅读」排序（偏好本地持久化，双端语义一致）
-- **进度互通**：小说 `book_progress.json`、漫画 `_history.json` 双端共用，Web 与 APK 互相续读
+- **书架**：「最近阅读 / 已缓存 / 收藏」；历史包含在线未下载漫画，已缓存只读本地目录，收藏按实际已读集合显示未读数
+- **统一进度格式**：小说 `book_progress.json`、漫画 `_history.json` 在同一运行实例中共用；电脑与独立 APK 各自存储，不自动跨设备同步
 - **离线模式**：引擎未就绪时书架退化为本地只读索引，已下载内容照读不误
 - **图片缓存**：占用统计 / 上限可调（256MB–不限）/ 一键清除（存储管理页）
 - **备份恢复**：书源配置 + 阅读进度打包导出（不含正文与图片）
+- **小说工具**：清洗预览、原文存档恢复、阅读版 TXT 导出、元数据修复；提交前检查修订，避免旧预览覆盖新内容
 
 ---
 
@@ -101,11 +123,12 @@ templates/ + static/   Web 前端
 sources/               内置书源（用户运行期新增/修改不入库）
 android/               独立 APK（Kotlin + Compose，引擎经 Chaquopy 内置）
   app/src/main/java/com/webnovel/mobile/
-    WnTheme.kt         设计体系（暖墨暗色 + 组件库）
+    WnTheme.kt         共享色彩、排版与组件体系
     EngineData.kt      客户端解析层（契约守卫盯着，键名不可乱改）
-tests/                 桌面全量测试（1561 项）
+tests/                 桌面全量测试
 tools/                 契约守卫 / 探针（分页审计、目录完整性、章尾污染、本地计数核对）
-docs/                  设计文档与调研笔记
+docs/                  当前文档导航、版本说明与历史研究索引
+design/                设计 token 与概念稿（不混作真实截图）
 ```
 
 ---
@@ -116,8 +139,8 @@ docs/                  设计文档与调研笔记
 
 ```bash
 python3.12 -m venv venv
-venv/bin/pip install -r requirements.txt
-venv/bin/python app.py --port 8766
+venv/bin/pip install -r requirements.txt -r requirements-manga.txt
+venv/bin/python app.py --host 127.0.0.1 --port 8766
 # 浏览器打开 http://127.0.0.1:8766
 ```
 
@@ -125,37 +148,45 @@ venv/bin/python app.py --port 8766
 
 ```bash
 cd android
-JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home \
-  ./gradlew :app:assembleRelease        # 或 :app:assembleDebug
+./gradlew :app:assembleDebug
 # 产物：android/app/build/outputs/apk/{release,debug}/*.apk
 # 也可以直接用 Android Studio 打开本目录，Sync 后 Run
 ```
 
-要求：Android SDK 35、JDK 17、Python 3.12（引擎经 Chaquopy 打包进 APK）。
+要求：Android SDK 35、JDK 17，以及与 Chaquopy 目标版本一致的 Python 3.13（用于 APK 构建）；
+Web 服务端可使用 Python 3.11 或 3.12。完整环境、签名与升级边界见 [开发指南](docs/development.md)。
 
 ---
 
-## 验证体系（全部必须通过）
+## 开发验证
+
+离线回归与契约守卫是 CI 门禁；联网探针按实际来源选择执行，不把网络状态或单次探针结果当作全项目验收。完整命令与发布门见 [开发指南](docs/development.md)。
 
 ```bash
 # ① 客户端逻辑单测（无需设备）
-cd android && ./gradlew :app:testDebugUnitTest          # 38 项
+cd android && ./gradlew :app:testDebugUnitTest
 
 # ② 桌面全量（引擎/服务端/契约/净化，约 2 分钟）
 PYTHONDONTWRITEBYTECODE=1 WR_TEST=1 WR_DISABLE_BACKGROUND=1 \
   venv/bin/python -m pytest tests/ -o addopts='' -q -p no:cacheprovider
-# 1567 passed / 2 skipped
+# 结果数量以当前提交的 CI 输出为准
 
 # ③ 客户端↔服务端双向契约守卫（字段漂移防线）
-venv/bin/python tools/check_client_server_contract.py   # 22 接口 / 0 问题
-venv/bin/python tools/check_request_contract.py         # 14 接口 / 0 问题
+venv/bin/python tools/check_client_server_contract.py
+venv/bin/python tools/check_request_contract.py
 
 # ④ 可复跑探针（数据质量自查）
 venv/bin/python tools/probe_pagination_audit.py         # 多页正文
 venv/bin/python tools/probe_toc_integrity.py            # 全目录
 venv/bin/python tools/probe_chapter_tail.py             # 章尾污染
 venv/bin/python tools/probe_local_counts.py             # API 数字 vs 磁盘
+
+# ⑤ 正式发布前 APK 验收（只读；候选必须来自指定的干净提交）
+EXPECTED_GIT_REVISION=<本次发布完整40位Git SHA> \
+  tools/verify_android_release.sh <上一版-release.apk> <候选-release.apk> 3.0.0 <递增后的versionCode>
 ```
+
+发布验收器还会核对包名、版本、v2/v3 签名证书连续性和 APK 完整性，并输出候选 APK 的 SHA-256；未提供准确的 `EXPECTED_GIT_REVISION` 会直接拒绝验收。构建、验收、覆盖升级和发布均需在本地与目标设备验证门全部关闭后进行。
 
 ---
 

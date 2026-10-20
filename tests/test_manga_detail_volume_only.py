@@ -116,3 +116,54 @@ def test_volume_only_detail_cache_is_reused(volume_only_client):
     c.get("/api/manga/copymanga/%s" % cid)
     assert ad.calls == 1, "第二次必须命中缓存，不得重新抓取"
     assert time.time() - t0 < 1.0
+
+
+def test_mixed_detail_resume_index_uses_volume_first_order(
+        volume_only_client, tmp_path, monkeypatch):
+    """详情返回的 resume.index 必须与卷优先的 Web/APK 阅读目录一致。"""
+    c, ad, _fallbacks, _data, cid = volume_only_client
+    import server.manga_api as ma
+    from engine.manga.base import Chapter, ComicDetails
+    history = tmp_path / "_history.json"
+    history.write_text(json.dumps({f"copymanga:{cid}": {
+        "idx": 1, "chapter_id": "v1", "chapter_label": "第01卷",
+        "pos": "第01卷 P3",
+    }}, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(ma, "MANGA_HISTORY_FILE", str(history))
+    ad.comic_info = lambda comic_id: ComicDetails(
+        id=comic_id, title="混合目录", cover="", author="",
+        chapters=[Chapter(id="c1", name="第01话"),
+                  Chapter(id="v1", name="第01卷")])
+
+    response = c.get(f"/api/manga/copymanga/{cid}")
+    assert response.status_code == 200, response.get_data(as_text=True)
+    detail = response.get_json()
+    assert detail["volumes"][0]["id"] == "v1"
+    assert detail["chapters"][0]["id"] == "c1"
+    assert detail["resume"]["index"] == 0
+
+
+def test_chinese_numeral_volumes_are_classified_and_ordered_before_episodes(
+        volume_only_client, tmp_path, monkeypatch):
+    """中文数字卷不能被误放入单话目录或排在阅读顺序后部。"""
+    c, ad, _fallbacks, _data, cid = volume_only_client
+    import server.manga_api as ma
+    from engine.manga.base import Chapter, ComicDetails
+    history = tmp_path / "_history_cn_volume.json"
+    history.write_text(json.dumps({f"copymanga:{cid}": {
+        "chapter_id": "v3", "chapter_label": "第三卷",
+    }}, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(ma, "MANGA_HISTORY_FILE", str(history))
+    ad.comic_info = lambda comic_id: ComicDetails(
+        id=comic_id, title="中文卷号", cover="", author="",
+        chapters=[Chapter(id="v12", name="第十二卷"),
+                  Chapter(id="c2", name="第2話"),
+                  Chapter(id="v3", name="第三卷"),
+                  Chapter(id="c1", name="第1話")])
+
+    response = c.get(f"/api/manga/copymanga/{cid}")
+    assert response.status_code == 200, response.get_data(as_text=True)
+    detail = response.get_json()
+    assert [row["id"] for row in detail["volumes"]] == ["v3", "v12"]
+    assert [row["id"] for row in detail["chapters"]] == ["c1", "c2"]
+    assert detail["resume"]["index"] == 0

@@ -38,7 +38,7 @@ def test_mobile_page_skips_netip(client):
     assert r.status_code == 200
     body = r.get_data(as_text=True)
     assert NETIP not in body, "带 mobile=1 的页面不得加载桌面局域网地址脚本"
-    assert "进入我的书库" in body, "跳过脚本不应影响页面本身"
+    assert "书架" in body and "打开书架" in body, "跳过脚本不应影响页面本身"
 
 
 def test_mobile_param_does_not_break_other_pages(client):

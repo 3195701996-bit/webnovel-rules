@@ -27,6 +27,54 @@ KEY = "op0zzpvv.nmn.00p"          # 站点当前 ccz/cct（16 字符）；测试
 IV = "0123456789abcdef"
 
 
+def test_cached_host_connection_failure_tries_remaining_domains(monkeypatch, clean_caches):
+    first, second = cw.WEB_DOMAINS[:2]
+    cw._BASE.update(base=first, ts=time.time())
+    calls = []
+
+    def get(url, **kwargs):
+        calls.append(url)
+        if url.startswith(first):
+            raise cw.WebUnreachable("Connection refused")
+        return _R(text="拷贝漫画" if url.endswith("/") else "catalog")
+
+    monkeypatch.setattr(cw, "_web_get", get)
+    assert cw._get_path("/comics").text == "catalog"
+    assert calls == [first + "/comics", second + "/", second + "/comics"]
+
+
+def test_cached_host_explicit_block_does_not_rotate(monkeypatch, clean_caches):
+    first = cw.WEB_DOMAINS[0]
+    cw._BASE.update(base=first, ts=time.time())
+    calls = []
+
+    def get(url, **kwargs):
+        calls.append(url)
+        raise cw.WebBlocked("HTTP 403")
+
+    monkeypatch.setattr(cw, "_web_get", get)
+    with pytest.raises(cw.WebBlocked):
+        cw._get_path("/comics")
+    assert calls == [first + "/comics"]
+
+
+def test_cached_host_failure_never_revisits_host(monkeypatch, clean_caches):
+    first = cw.WEB_DOMAINS[0]
+    cw._BASE.update(base=first, ts=time.time())
+    calls = []
+
+    def get(url, **kwargs):
+        calls.append(url)
+        if url.endswith("/"):
+            return _R(text="拷贝漫画")
+        raise cw.WebUnreachable("Connection refused")
+
+    monkeypatch.setattr(cw, "_web_get", get)
+    with pytest.raises(cw.WebUnreachable):
+        cw._get_path("/comics")
+    assert [u for u in calls if u.endswith("/comics")] == [d + "/comics" for d in cw.WEB_DOMAINS]
+
+
 # ── 正向加密（本文件的独立实现，用来验证解密）────────────────────────────
 def _enc(plain, key=KEY, iv=IV):
     """AES-128-CBC + PKCS7 加密 → 拷贝漫画密文串格式：IV(16 明文) + hex(密文)"""
@@ -609,14 +657,14 @@ def test_get_path_rotates_domain_then_reports(monkeypatch, clean_caches):
     assert len(path_calls) == len(cw._domain_pool()), tried
     assert path_calls[0].startswith(cw.WEB_DOMAINS[0])
     assert path_calls[1].startswith(cw.WEB_DOMAINS[1])
-    assert all("//www." in u for u in path_calls)       # 绝不含裸域
+    assert all("//www." in u or u.startswith("https://2026copy.com/") for u in path_calls)
 
 
 def test_naked_domain_not_in_pool():
     """裸域 copy4000.com 对匿名 HTTP 是空壳——绝不能进域池（放最前更不行）"""
     assert cw.WEB_DOMAINS[0] == "https://www.copy4000.com"
     assert not any(d.rstrip("/") == "https://copy4000.com" for d in cw.WEB_DOMAINS)
-    assert all(d.startswith("https://www.") for d in cw.WEB_DOMAINS)
+    assert all(d.startswith("https://www.") or d == "https://2026copy.com" for d in cw.WEB_DOMAINS)
 
 
 def test_domain_pool_env_override(monkeypatch):

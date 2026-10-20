@@ -21,6 +21,7 @@ worker 里有一条"纯整卷合集不下载"的规则（名字整名匹配"第N
 import json
 import os
 import sys
+import threading
 import time
 
 import pytest
@@ -69,10 +70,10 @@ class _FakeImageDownloader(object):
     def __init__(self, adapter, cache_root, *a, **k):
         self.cache_root = cache_root
 
-    def get(self, image_url, comic_id, chapter_id, idx, timeout=20):
-        d = os.path.join(self.cache_root, comic_id, chapter_id)
+    def get(self, image_url, comic_id, chapter_id, idx, timeout=20, **kwargs):
+        d = os.path.join(self.cache_root, chapter_id)
         os.makedirs(d, exist_ok=True)
-        p = os.path.join(d, "%04d.jpg" % idx)
+        p = os.path.join(d, "%04d.webp" % idx)
         data = b"\xff\xd8\xff\xe0" + b"x" * 2000
         with open(p, "wb") as f:
             f.write(data)
@@ -90,7 +91,7 @@ def test_user_selection_wins_over_volume_rule():
     chs = [_ch("第01卷", "v1"), _ch("第02卷", "v2")]
     kept, note = filter_volume_only(chs, sel_chapters=["v1"])
     assert [c["id"] for c in kept] == ["v1", "v2"], kept
-    assert "用户已明确选择" in note
+    assert note == ""
 
 
 def test_all_volumes_are_kept_not_emptied():
@@ -99,20 +100,404 @@ def test_all_volumes_are_kept_not_emptied():
     chs = [_ch("第01卷", "v1"), _ch("第二卷", "v2"), _ch("Vol.3", "v3")]
     kept, note = filter_volume_only(chs, sel_chapters=None)
     assert len(kept) == 3, kept
-    assert "不再按整卷规则排除" in note, note
+    assert note == ""
     assert "风控" not in note and "下架" not in note, (
         "绝不能把'我们自己跳过'说成'源在风控/已下架'：%s" % note)
 
 
-def test_mixed_list_still_drops_collection_stubs():
-    """R36 的初衷仍要保住：混合列表里把整卷打包条目剔除"""
+def test_mixed_list_keeps_volumes_before_single_chapters_for_download():
+    """卷式前段与单话后段混合时，下载必须覆盖两种阅读单元。"""
     from engine.manga.download_manager import filter_volume_only
     chs = [_ch("第01卷", "v1"), _ch("第1话 开端", "c1"), _ch("01卷番外", "e1")]
     kept, note = filter_volume_only(chs, sel_chapters=None)
     ids = [c["id"] for c in kept]
-    assert "v1" not in ids, "整卷打包条目应被剔除：%s" % ids
-    assert "c1" in ids and "e1" in ids, "正文与卷附加内容必须保留：%s" % ids
-    assert "跳过 1 个整卷" in note, note
+    assert ids == ["v1", "c1", "e1"], "卷和单话均须下载：%s" % ids
+    assert note == ""
+
+
+def test_worker_downloads_volume_and_episode_from_mixed_catalog(
+        tmp_path, monkeypatch):
+    """目录含卷和单话时，二者都应真正经过 worker 并写入缓存。"""
+    from engine.manga import download_manager as manager_module
+    from engine.manga import downloader as downloader_module
+    import server.state as manga_state
+
+    source, comic_id = "demovol", "mixed-comic"
+    root = tmp_path / "downloads"
+    monkeypatch.setattr(manga_state, "MANGA_DOWNLOADS_DIR", str(root))
+    monkeypatch.setattr(manga_state, "MANGA_CACHE_DIR", str(tmp_path / "cache"))
+
+    class _MixedAdapter(_VolAdapter):
+        def _chs(self):
+            return [Chapter(id="v1", name="第01卷", group="默認"),
+                    Chapter(id="c1", name="第1话 开端", group="默認")]
+
+        def comic_info(self, cid):
+            return ComicDetails(id=cid, title="卷话混合漫画", cover="",
+                                chapters=self._chs())
+
+    manager = manager_module.DownloadManager(
+        state_file=str(tmp_path / "tasks.json"))
+    manager.configure(
+        downloads_root=str(root), state_dir=str(tmp_path / "state"),
+        library_file=str(tmp_path / "library.json"))
+    manager._adapter_pool = {source: _MixedAdapter()}
+    key = f"{source}:{comic_id}"
+    manager._tasks[key] = {
+        "status": "running", "source": source, "comic_id": comic_id,
+        "title": "卷话混合漫画", "cover": "", "chapters": None,
+        "images_done": 0, "images_total": 0, "paused": False,
+    }
+    manager._active = 1
+    manager._worker_alive.add(key)
+    requested_ids = []
+
+    class _RecordingDownloader(_FakeImageDownloader):
+        def __init__(self, adapter, cache_root, *args, **kwargs):
+            super().__init__(adapter, cache_root, *args, **kwargs)
+            self._requested_root = cache_root
+
+        def get(self, image_url, comic_id, chapter_id, idx, **kwargs):
+            requested_ids.append(chapter_id)
+            return super().get(image_url, comic_id, chapter_id, idx, **kwargs)
+
+    monkeypatch.setattr(downloader_module, "ImageDownloader",
+                        _RecordingDownloader)
+    monkeypatch.setattr(manager_module, "images_resolver",
+                        lambda _adapter, _source, _comic, chapter:
+                        [f"https://img.example/{chapter}/1.jpg"])
+
+    manager._worker(key)
+
+    task = manager.status(key)
+    assert task["status"] == "done"
+    assert task["total"] == 2
+    assert task["images_done"] == 2
+    assert sorted(requested_ids) == ["c1", "v1"]
+    cache_root = root / source / comic_id
+    assert (cache_root / "v1" / "0000.webp").is_file()
+    assert (cache_root / "c1" / "0000.webp").is_file()
+    with (cache_root / "_info.json").open(encoding="utf-8") as stream:
+        manifest = json.load(stream)
+    assert {row["id"]: row["download_page_count"]
+            for row in manifest["chapters"]} == {"v1": 1, "c1": 1}
+    assert set(manga_state._scan_downloaded_chapters(source, comic_id)) == {
+        "v1", "c1"}
+
+
+def test_worker_rechecks_and_fills_only_missing_pages_across_image_formats(
+        tmp_path, monkeypatch):
+    """Failed-chapter recovery must key on valid page indices, not file count."""
+    from engine.manga import download_manager as manager_module
+    from engine.manga import downloader as downloader_module
+
+    source, comic_id = "demovol", "mixed-format-resume-comic"
+    root = tmp_path / "downloads"
+
+    class _MixedImageAdapter(_VolAdapter):
+        def images(self, _cid, _chapter):
+            return [
+                "https://img.example/0.avif",
+                "https://img.example/1.jpg",
+                "https://img.example/2.gif",
+            ]
+
+    requested = []
+
+    class _InterruptedDownloader:
+        def __init__(self, _adapter, cache_root, *args, **kwargs):
+            self.cache_root = cache_root
+
+        def get(self, image_url, _comic, chapter_id, idx, **kwargs):
+            requested.append(idx)
+            if idx == 1 and requested.count(1) == 1:
+                raise RuntimeError("simulated first-attempt network failure")
+            extension = os.path.splitext(image_url)[1]
+            signatures = {
+                ".avif": b"\x00\x00\x00\x18ftypavif" + b"x" * 12,
+                ".jpg": b"\xff\xd8\xff" + b"x" * 20,
+                ".gif": b"GIF89a" + b"x" * 20,
+            }
+            directory = os.path.join(self.cache_root, chapter_id)
+            os.makedirs(directory, exist_ok=True)
+            path = os.path.join(directory, f"{idx:04d}{extension}")
+            with open(path, "wb") as image:
+                image.write(signatures[extension])
+            return signatures[extension], path
+
+    manager = manager_module.DownloadManager(
+        state_file=str(tmp_path / "tasks.json"))
+    manager.configure(
+        downloads_root=str(root), state_dir=str(tmp_path / "state"),
+        library_file=str(tmp_path / "library.json"))
+    manager._adapter_pool = {source: _MixedImageAdapter()}
+    monkeypatch.setattr(downloader_module, "ImageDownloader", _InterruptedDownloader)
+    monkeypatch.setattr(manager_module, "images_resolver", None)
+    key = f"{source}:{comic_id}"
+    manager._tasks[key] = {
+        "status": "running", "source": source, "comic_id": comic_id,
+        "title": "混合格式续传漫画", "cover": "", "chapters": [
+            {"id": "v1", "name": "第01卷", "group": "默认"}],
+        "images_done": 0, "images_total": 0, "paused": False,
+    }
+    manager._active = 1
+    manager._worker_alive.add(key)
+
+    manager._worker(key)
+
+    assert manager.status(key)["status"] == "done"
+    assert requested == [0, 1, 2, 1], "只应复用已验证页并请求唯一缺页"
+    chapter_dir = root / source / comic_id / "v1"
+    assert sorted(path.name for path in chapter_dir.iterdir()) == [
+        "0000.avif", "0001.jpg", "0002.gif"]
+
+
+def test_worker_publishes_done_only_after_library_index_is_written(
+        tmp_path, monkeypatch):
+    """Completion polling must not outrun publication of the library index."""
+    from engine.manga import download_manager as manager_module
+    from engine.manga import downloader as downloader_module
+
+    source, comic_id = "demovol", "completion-order-comic"
+    root = tmp_path / "downloads"
+    manager = manager_module.DownloadManager(
+        state_file=str(tmp_path / "tasks.json"))
+    manager.configure(
+        downloads_root=str(root), state_dir=str(tmp_path / "state"),
+        library_file=str(tmp_path / "library.json"))
+    manager._adapter_pool = {source: _VolAdapter()}
+    monkeypatch.setattr(downloader_module, "ImageDownloader", _FakeImageDownloader)
+    monkeypatch.setattr(manager_module, "images_resolver",
+                        lambda _adapter, _source, _comic, chapter:
+                        [f"https://img.example/{chapter}/1.jpg"])
+    key = f"{source}:{comic_id}"
+    manager._tasks[key] = {
+        "status": "running", "source": source, "comic_id": comic_id,
+        "title": "完成顺序漫画", "cover": "", "chapters": [
+            {"id": "v1", "name": "第01卷", "group": "默认"}],
+        "images_done": 0, "images_total": 0, "paused": False,
+    }
+    manager._active = 1
+    manager._worker_alive.add(key)
+
+    entering_write = threading.Event()
+    release_write = threading.Event()
+    real_write_library = manager._write_library
+
+    def blocked_write_library(*args, **kwargs):
+        entering_write.set()
+        assert release_write.wait(timeout=5), "test did not release library write"
+        return real_write_library(*args, **kwargs)
+
+    monkeypatch.setattr(manager, "_write_library", blocked_write_library)
+    worker = threading.Thread(target=manager._worker, args=(key,), daemon=True)
+    worker.start()
+    try:
+        assert entering_write.wait(timeout=5), (
+            "worker never reached library publication")
+        assert manager.status(key)["status"] == "running"
+        assert not (tmp_path / "library.json").exists()
+    finally:
+        release_write.set()
+        worker.join(timeout=5)
+
+    assert not worker.is_alive()
+    assert manager.status(key)["status"] == "done"
+    library = json.loads((tmp_path / "library.json").read_text(encoding="utf-8"))
+    assert any(row["source"] == source and row["comic_id"] == comic_id
+               for row in library)
+
+
+@pytest.mark.parametrize("first,second", [
+    (("v1", "第01卷"), ("v2", "第02卷")),
+    (("3b77390f-c4d7-11f1-8ff4-fa163e02432f", "第41話"),
+     ("be6236cb-c985-11f1-80bc-fa163e02432f", "第42話")),
+])
+def test_incremental_volume_worker_preserves_existing_page_count(
+        tmp_path, monkeypatch, first, second):
+    """Refreshing the catalog for a new volume must retain old completeness data."""
+    from engine.manga import download_manager as manager_module
+    from engine.manga import downloader as downloader_module
+
+    source, comic_id = "demovol", "incremental-comic"
+    root = tmp_path / "downloads"
+
+    class _IncrementalAdapter(_VolAdapter):
+        expanded = False
+
+        def _chs(self):
+            chapters = [Chapter(id=first[0], name=first[1], group="默认")]
+            if self.expanded:
+                chapters.append(Chapter(id=second[0], name=second[1], group="默认"))
+            return chapters
+
+    manager = manager_module.DownloadManager(
+        state_file=str(tmp_path / "tasks.json"))
+    manager.configure(
+        downloads_root=str(root), state_dir=str(tmp_path / "state"),
+        library_file=str(tmp_path / "library.json"))
+    manager._adapter_pool = {source: _IncrementalAdapter()}
+    monkeypatch.setattr(downloader_module, "ImageDownloader", _FakeImageDownloader)
+    requested = []
+
+    def resolve(_adapter, _source, _comic, chapter):
+        requested.append(chapter)
+        return [f"https://img.example/{chapter}/1.jpg"]
+
+    monkeypatch.setattr(manager_module, "images_resolver", resolve)
+    key = f"{source}:{comic_id}"
+
+    for chapter_id, chapter_name in (first, second):
+        manager._adapter_pool[source].expanded = chapter_id == second[0]
+        manager._tasks[key] = {
+            "status": "running", "source": source, "comic_id": comic_id,
+            "title": "增量卷漫画", "cover": "", "chapters": [
+                {"id": chapter_id, "name": chapter_name, "group": "默认"}],
+            "images_done": 0, "images_total": 0, "paused": False,
+        }
+        manager._active = 1
+        manager._worker_alive.add(key)
+        manager._worker(key)
+        assert manager.status(key)["status"] == "done"
+
+    manifest_path = root / source / comic_id / "_info.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert {row["id"]: row.get("download_page_count")
+            for row in manifest["chapters"]} == {first[0]: 1, second[0]: 1}
+    assert requested == [first[0], second[0]], "新增章节不得再次请求上一话"
+    assert [row["name"] for row in manifest["chapters"]] == [first[1], second[1]]
+
+
+@pytest.mark.parametrize("already_archived", [False, True])
+def test_refresh_keeps_withdrawn_local_identity_without_downloading_it(
+        tmp_path, monkeypatch, already_archived):
+    """A removed upstream UUID stays locally readable, never a new task target."""
+    from engine.manga import download_manager as module
+    from engine.manga import downloader
+
+    source, comic_id = "demovol", "withdrawn-local"
+    root = tmp_path / "downloads"
+    base = root / source / comic_id
+    old_id = "3ed54ac2-c519-11f1-a73b-fa163e02432f"
+    (base / old_id).mkdir(parents=True)
+    old_page = base / old_id / "0000.webp"
+    old_page.write_bytes(b"original downloaded image")
+    original_stat = old_page.stat().st_mtime_ns
+    manifest_path = base / "_info.json"
+    manifest_path.write_text(json.dumps({"chapters": [
+        {"id": old_id, "name": "第41話", "group": "默認",
+         "download_page_count": 1, "local_archive": already_archived}]}), encoding="utf-8")
+    manager = module.DownloadManager(state_file=str(tmp_path / "tasks.json"))
+    manager.configure(downloads_root=str(root), state_dir=str(tmp_path / "state"),
+                      library_file=str(tmp_path / "library.json"))
+    manager._adapter_pool = {source: _VolAdapter()}
+    monkeypatch.setattr(downloader, "ImageDownloader", _FakeImageDownloader)
+    requested = []
+    monkeypatch.setattr(module, "images_resolver", lambda a, s, c, chapter:
+                        requested.append(chapter) or [f"https://img.example/{chapter}.jpg"])
+    key = f"{source}:{comic_id}"
+    # First force a source refresh for a selected new identity; then a whole-book
+    # task reuses the fresh manifest. Neither may ask the source for old_id.
+    for selection in ([] if already_archived else ["v2"], []):
+        manager._tasks[key] = {
+            "status": "running", "source": source, "comic_id": comic_id,
+            "title": "保留旧目录", "cover": "https://img.example/cover.jpg",
+            "chapters": selection, "images_done": 0, "images_total": 0,
+            "paused": False,
+        }
+        manager._active = 1
+        manager._worker_alive.add(key)
+        manager._worker(key)
+        assert manager.status(key)["status"] == "done"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        archived = [row for row in manifest["chapters"] if row["id"] == old_id]
+        assert len(archived) == 1, "刷新不得丢掉已下载的旧章节身份"
+        assert archived[0]["local_archive"] is True
+        assert archived[0]["download_page_count"] == 1
+    assert old_id not in requested
+    assert old_page.read_bytes() == b"original downloaded image"
+    assert old_page.stat().st_mtime_ns == original_stat
+
+
+@pytest.mark.parametrize("mobile", [True, False])
+def test_legacy_copy_task_preserves_storage_identity_with_mobile_transport(
+        tmp_path, monkeypatch, mobile):
+    from engine import config
+    from engine.manga import download_manager as module
+    from engine.manga import downloader, manager as adapters
+
+    monkeypatch.setattr(config, "IS_MOBILE", mobile)
+    requested_adapters = []
+
+    def adapter(key, **_kwargs):
+        requested_adapters.append(key)
+        if mobile and key == "copymanga_web":
+            raise RuntimeError("browser is unavailable on mobile")
+        value = _VolAdapter()
+        value.key = key
+        return value
+
+    monkeypatch.setattr(adapters, "get_adapter", adapter)
+    monkeypatch.setattr(downloader, "ImageDownloader", _FakeImageDownloader)
+    resolved = []
+    monkeypatch.setattr(module, "images_resolver", lambda ad, source, cid, chapter:
+                        resolved.append((ad.key, source, chapter)) or
+                        [f"https://img.example/{chapter}.jpg"])
+    manager = module.DownloadManager(state_file=str(tmp_path / "tasks.json"))
+    root = tmp_path / "downloads"
+    manager.configure(downloads_root=str(root), state_dir=str(tmp_path / "state"),
+                      library_file=str(tmp_path / "library.json"))
+    key = "copymanga_web:legacy-copy-task"
+    manager._tasks[key] = {
+        "source": "copymanga_web", "comic_id": "legacy-copy-task",
+        "title": "旧下载", "status": "running", "chapters": ["v2"],
+        "cover": "https://img.example/cover.jpg", "paused": False,
+    }
+    manager._active = 1
+    manager._worker_alive.add(key)
+    manager._worker(key)
+    assert manager.status(key)["status"] == "done"
+    transport = "copymanga" if mobile else "copymanga_web"
+    assert requested_adapters == [transport]
+    assert resolved == [(transport, "copymanga_web", "v2")]
+    assert manager.status(key)["source"] == "copymanga_web"
+    assert (root / "copymanga_web" / "legacy-copy-task" / "v2" / "0000.webp").is_file()
+    assert not (root / "copymanga").exists(), "兼容传输不能搬迁或重建旧下载路径"
+
+
+@pytest.mark.parametrize("selection", [["missing"], ["v1", "missing"]])
+def test_worker_never_downloads_other_chapters_for_unresolved_selection(
+        tmp_path, monkeypatch, selection):
+    from engine.manga import download_manager as module
+    from engine.manga import downloader
+
+    manager = module.DownloadManager(state_file=str(tmp_path / "tasks.json"))
+    manager.configure(downloads_root=str(tmp_path / "downloads"),
+                      state_dir=str(tmp_path / "state"),
+                      library_file=str(tmp_path / "library.json"))
+    manager._adapter_pool = {"demovol": _VolAdapter()}
+    manifest = tmp_path / "downloads" / "demovol" / "unresolved-selection" / "_info.json"
+    manifest.parent.mkdir(parents=True)
+    original = json.dumps({"title": "旧本地目录", "chapters": [
+        {"id": "v1", "name": "第01卷", "download_page_count": 7}]})
+    manifest.write_text(original, encoding="utf-8")
+    monkeypatch.setattr(downloader, "ImageDownloader", _FakeImageDownloader)
+    requested = []
+    monkeypatch.setattr(module, "images_resolver",
+                        lambda *args: requested.append(args[-1]) or [])
+    key = "demovol:unresolved-selection"
+    manager._tasks[key] = {
+        "status": "running", "source": "demovol", "comic_id": "unresolved-selection",
+        "title": "选择失配", "cover": "", "chapters": selection,
+        "images_done": 0, "images_total": 0, "paused": False,
+    }
+    manager._active = 1
+    manager._worker_alive.add(key)
+    manager._worker(key)
+    assert manager.status(key)["status"] == "error"
+    assert "未回退全量下载" in manager.status(key)["error"]
+    assert requested == []
+    assert manifest.read_text(encoding="utf-8") == original
 
 
 def test_empty_list_is_untouched():

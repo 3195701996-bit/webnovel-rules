@@ -1,10 +1,12 @@
 package com.webnovel.mobile
 
 import android.content.Context
+import android.util.AtomicFile
 import android.util.Log
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.io.FileOutputStream
 
 /**
  * 内置书源的解压（APK 的 assets/sources → 应用私有数据目录）。
@@ -18,6 +20,35 @@ object BundledSources {
 
     private const val TAG = "BundledSources"
     const val ASSET_DIR = "sources"
+
+    /**
+     * Replace a seed/config file atomically so process death or storage errors cannot leave
+     * a truncated user source behind during startup migration.
+     * The writer hook is internal and exists to inject interrupted writes in instrumentation.
+     */
+    internal fun writeAtomically(
+        file: File,
+        bytes: ByteArray,
+        writer: (FileOutputStream, ByteArray) -> Unit = { stream, payload ->
+            stream.write(payload)
+        },
+    ) {
+        file.parentFile?.let { parent ->
+            if (!parent.exists() && !parent.mkdirs() && !parent.isDirectory) {
+                throw java.io.IOException("无法创建目标目录：$parent")
+            }
+        }
+        val atomic = AtomicFile(file)
+        val stream = atomic.startWrite()
+        try {
+            writer(stream, bytes)
+            stream.fd.sync()
+            atomic.finishWrite(stream)
+        } catch (failure: Throwable) {
+            atomic.failWrite(stream)
+            throw failure
+        }
+    }
 
     /** 删除墓碑文件名（用户删掉/清理掉的源：**不许**在下次启动时又解压回来） */
     private const val TOMBSTONE = ".seed-removed.json"
@@ -50,7 +81,7 @@ object BundledSources {
                 val out = File(dst, name)
                 if (out.exists()) continue
                 ctx.assets.open("$ASSET_DIR/$name").use { input ->
-                    java.io.FileOutputStream(out).use { output -> input.copyTo(output) }
+                    writeAtomically(out, input.readBytes())
                 }
                 n++
             }
@@ -110,7 +141,16 @@ object BundledSources {
      */
     fun applySeed(ctx: Context, dst: File,
                   manifestText: String? = null,
-                  assetReader: ((String) -> ByteArray?)? = null): Int {
+                  assetReader: ((String) -> ByteArray?)? = null): Int =
+        applySeed(ctx, dst, manifestText, assetReader) { file, bytes ->
+            writeAtomically(file, bytes)
+        }
+
+    /** Writer-injectable implementation for exercising interrupted startup migrations. */
+    internal fun applySeed(ctx: Context, dst: File,
+                           manifestText: String?,
+                           assetReader: ((String) -> ByteArray?)?,
+                           fileWriter: (File, ByteArray) -> Unit): Int {
         var changed = 0
         try {
             val text = manifestText ?: ctx.assets.open(SEED_MANIFEST).use {
@@ -185,7 +225,7 @@ object BundledSources {
                 var touched = false
                 // 1) 出厂**内容**（规则/URL/正文）：与出厂不一致才写（除 enabled 外）
                 if (assetBytes != null && assetObj != null && !sameIgnoringEnabled(o, assetObj)) {
-                    f.writeBytes(assetBytes)
+                    fileWriter(f, assetBytes)
                     contentUpdated++
                     touched = true
                 }
@@ -197,7 +237,7 @@ object BundledSources {
                     val jo = runCatching { JSONObject(f.readText(Charsets.UTF_8)) }.getOrNull()
                     if (jo != null) {
                         jo.put("enabled", want)
-                        f.writeText(jo.toString(), Charsets.UTF_8)
+                        fileWriter(f, jo.toString().toByteArray(Charsets.UTF_8))
                         enabledChanged++
                         touched = true
                     }
@@ -213,8 +253,7 @@ object BundledSources {
                 }
                 if (touched) changed++
             }
-            marker.writeText(
-                JSONObject().put("schema", schema)
+            val markerBytes = JSONObject().put("schema", schema)
                     .put("revision", revision)
                     .put("logic", SEED_LOGIC)
                     .put("applied_at", System.currentTimeMillis())
@@ -224,7 +263,8 @@ object BundledSources {
                     .put("untouched", untouched)
                     .put("modified_skipped", modified)
                     .put("memory_recorded", memoryRecorded)
-                    .put("ours", ours).toString(), Charsets.UTF_8)
+                    .put("ours", ours).toString().toByteArray(Charsets.UTF_8)
+            fileWriter(marker, markerBytes)
             Log.i(TAG, "内置源种子合并：schema=$schema revision=${revision.take(12)} " +
                 "logic=$SEED_LOGIC 改动 $changed 个" +
                 "（内容 $contentUpdated、启用 $enabledChanged；出厂未改动 $untouched，" +

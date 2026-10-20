@@ -25,6 +25,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 CID = "399123"
 CH1 = "300001"
 CH2 = "300002"
+_WEBP = b"RIFF" + b"\x00\x00\x00\x00" + b"WEBP" + b"W" * 2036
 
 
 
@@ -57,7 +58,7 @@ class _FakeDL:
         with self._lock:
             return [i for (c, i) in self.calls if c == chapter_id]
 
-    def get(self, url, comic_id, chapter_id, idx):
+    def get(self, url, comic_id, chapter_id, idx, **kwargs):
         with self._lock:
             self.calls.append((chapter_id, idx))
         if self.delay:
@@ -66,7 +67,7 @@ class _FakeDL:
         os.makedirs(_d, exist_ok=True)
         _p = os.path.join(_d, f"{idx:04d}.webp")
         with open(_p, "wb") as f:
-            f.write(b"W" * 2048)
+            f.write(_WEBP)
         with open(_p, "rb") as f:
             return f.read(), _p
 
@@ -160,7 +161,7 @@ def test_warm_skips_already_cached_pages(env):
     os.makedirs(_d, exist_ok=True)
     for i in (0, 1, 2):
         with open(os.path.join(_d, f"{i:04d}.webp"), "wb") as f:
-            f.write(b"W" * 2048)
+            f.write(_WEBP)
     ma._warm_chapter_images("jm", CID, CH1, concurrency=2)
     assert _run_to_idle(env, [("jm", CID, CH1)])
     assert env["dl"].pages(CH1) == list(range(3, 20))   # 已缓存页不再回源
@@ -232,7 +233,7 @@ def test_fully_cached_chapter_still_chains_next(env):
     os.makedirs(_d, exist_ok=True)
     for i in range(20):
         with open(os.path.join(_d, f"{i:04d}.webp"), "wb") as f:
-            f.write(b"W" * 2048)
+            f.write(_WEBP)
     ma._warm_chapter_images("jm", CID, CH1, concurrency=2)
     assert _wait(lambda: len(_cached_pages(env, CH2)) == ma._NEXT_WARM_PAGES,
                  timeout=8)
@@ -265,6 +266,11 @@ def test_state_prefetch_warms_images_when_urls_cached(env, monkeypatch):
         return a, []
 
     monkeypatch.setattr(st, "_manga_read_images", _imgs)
+    # 损坏文件即使使用图片扩展名，也不能阻止“下一话首屏预热”。
+    corrupt = os.path.join(str(env["downloads"]), "jm", CID, CH2)
+    os.makedirs(corrupt, exist_ok=True)
+    with open(os.path.join(corrupt, "0000.webp"), "wb") as f:
+        f.write(b"<html>rate limited</html>")
     st._CHAPTER_IMAGES_CACHE[("jm", CID, CH2)] = (time.time(), ["u"])  # 列表热
     st._prefetch_next_chapter_images("jm", CID, CH1)
     assert _wait(lambda: seen, timeout=5)
@@ -279,11 +285,23 @@ def test_next_chapter_warm_skipped_when_already_local(env):
     _d = os.path.join(str(env["downloads"]), "jm", CID, CH2)
     os.makedirs(_d, exist_ok=True)
     with open(os.path.join(_d, "0000.webp"), "wb") as f:
-        f.write(b"W" * 2048)
+        f.write(_WEBP)
     ma._warm_chapter_images("jm", CID, CH1, concurrency=2)
     assert _run_to_idle(env, [("jm", CID, CH1)])
     time.sleep(0.2)
     assert env["dl"].pages(CH2) == []                # 已下载 → 不预热
+
+
+def test_corrupt_cache_page_is_not_considered_warm(tmp_path):
+    import server.manga_api as ma
+
+    chapter = tmp_path / "chapter"
+    chapter.mkdir()
+    (chapter / "0000.webp").write_bytes(b"x" * 2048)
+    assert not ma._page_cached(str(chapter), 0)
+
+    (chapter / "0000.webp").write_bytes(_WEBP)
+    assert ma._page_cached(str(chapter), 0)
 
 
 # ── 4. 开关 ──────────────────────────────────────────────────
@@ -316,11 +334,11 @@ def test_cached_image_served_immutable_and_304(env):
     _d = os.path.join(str(env["cache"]), "jm", CID, CH1)
     os.makedirs(_d, exist_ok=True)
     with open(os.path.join(_d, "0000.webp"), "wb") as f:
-        f.write(b"W" * 2048)
+        f.write(_WEBP)
     url = f"/api/manga/jm/{CID}/chapter/{CH1}/img/0"
     r = c.get(url)
     assert r.status_code == 200
-    assert r.data == b"W" * 2048
+    assert r.data == _WEBP
     cc = r.headers.get("Cache-Control", "")
     assert "immutable" in cc and "max-age=604800" in cc
     etag = r.headers.get("ETag")
@@ -342,7 +360,7 @@ def test_remote_serve_uses_static_disk_path(env):
 
     def _get(url, comic_id, chapter_id, idx):
         with open(_p, "wb") as f:
-            f.write(b"W" * 2048)
+            f.write(_WEBP)
         return open(_p, "rb").read(), _p
 
     env["dl"].get = _get

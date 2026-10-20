@@ -18,7 +18,8 @@ from engine.crawler import SourceCrawler
 from engine.crawler import (export_is_fresh as _export_is_fresh,
                             merge_book_txt as _merge_book_txt)
 from engine.app_utils import (now_iso, _norm, atomic_write, atomic_write_text,
-                              load_json, _read_json, update_json,
+                              load_json, _read_json, update_json, chapter_cache_keys,
+                              chapter_cache_valid,
                               cache_key_of as _cache_key)
 from engine.config import (TOC_CACHE_TTL, SLOW_COOLDOWN,
                            SEARCH_MAX_WORKERS, SEARCH_SOURCE_TIMEOUT,
@@ -465,7 +466,7 @@ def _manga_explore_info():
         if ad is None or not hasattr(ad, "categories"):
             continue
         try:
-            cats = ad.categories() or []
+            cats = getattr(ad, "categories_snapshot", ad.categories)() or []
         except Exception:
             cats = []
         if cats:
@@ -930,8 +931,12 @@ def api_search():
         except Exception as _e:
             print(f"[search-enhance] {_cache_key[0]}: 后台增强失败: "
                   f"{type(_e).__name__}: {_e}", flush=True)
-    threading.Thread(target=_enhance_bg, args=(glist, _cache_key),
-                     daemon=True).start()
+    # 跟随服务统一后台开关：契约检查/移动受控环境禁用后台工作时，
+    # 不应留下仍在输出日志的守护线程，导致 Python 解释器退出崩溃。
+    from server.runtime import worker_enabled
+    if worker_enabled("search-warm"):
+        threading.Thread(target=_enhance_bg, args=(glist, _cache_key),
+                         daemon=True).start()
 
     # 写入搜索缓存（限制容量，落盘；含未增强快照，后台增强完成后覆写）
     # R52: 空结果不写缓存——一次全源失败/抽风的空结果不应让后续搜索
@@ -1319,6 +1324,7 @@ def api_tasks():
                     "speed": job.get("speed", 0), "eta": job.get("eta", 0),
                     "images_done": job.get("images_done", 0),
                     "images_total": job.get("images_total", 0),
+                    "pending_chapters": len(job.get("pending_chapters") or []),
                 },
                 "error": job.get("error"), "running": job.get("status") == "running",
                 # P1-1: 漫画下载的停止原因/断点（与小说任务同字段，界面同一套渲染）
@@ -1450,15 +1456,15 @@ def api_books():
 def _failed_live(book_dir, failed):
     """真正"还没拿到正文"的失败章节（本机已有非空缓存的不算失败）。
 
-    判据：`cache_key_of(url) + ".cache"` 存在且**非空** —— 与下载路径写缓存的口径
-    一致（`Crawler._save_cache` 非空才写、`_has_cache` 只看存在）。只读判断、不改盘。
+    判据：`cache_key_of(url) + ".cache"` 是有效 UTF-8 且包含非空白正文，
+    与续传 `_has_cache` 一致。只读判断、不改盘。
     """
     from engine.app_utils import cache_key_of
     out = {}
     for url, why in (failed or {}).items():
         try:
             p = os.path.join(book_dir, cache_key_of(url) + ".cache")
-            if os.path.exists(p) and os.path.getsize(p) > 0:
+            if chapter_cache_valid(p):
                 continue                     # 本机已有正文 → 不算失败
         except OSError:
             pass
@@ -1479,9 +1485,9 @@ def api_book_detail(book_key):
     chapters = state.get("chapters", [])
     completed = set(state.get("completed", []))
     failed = state.get("failed", {}) or {}
+    live_failed = _failed_live(d, failed)
     info = state.get("book") or {}
-    cache_map = {f[:-6]: os.path.join(d, f)
-                 for f in os.listdir(d) if f.endswith(".cache")}
+    cache_map = chapter_cache_keys(d)
     # 0.55.0: "已下载"只看**磁盘上真的有缓存**（与 _scan_books 同口径）。
     # 此前把 state 的 completed 也算进来，于是"缓存被清理/书目录被任务重建"
     # 的书会显示"已下载"而点开正文是空的；completed 只作诊断字段暴露。
@@ -1500,12 +1506,13 @@ def api_book_detail(book_key):
         "intro": info.get("intro", ""),
         "total": len(chapters),
         "done": done,
+        "percent": round(done * 100 / len(chapters), 1) if chapters else 0,
         "state_completed": len(completed),
         "stale_completed": stale,
         # **失败数以磁盘为准**：`_state.json` 里的 failed 可能挂着旧记录
         # （实测：2 章正文其实已下载 1 万字、能正常读，却仍被算作失败 ✗），
         # 于是检查更新会劝用户再下一次已经能读的章。这里剔掉"本机已有正文"的条目。
-        "failed_count": len(_failed_live(d, failed)),
+        "failed_count": len(live_failed),
         "progress": load_json(os.path.join(d, "_progress.json")),
         "fallback": {
             "sources": _fb.get("sources") or [],
@@ -1516,12 +1523,74 @@ def api_book_detail(book_key):
         "chapters": [
             {"index": i + 1, "name": c.get("name", ""), "url": c.get("url", ""),
              "downloaded": has_cache(c),
-             "failed": c.get("url") in failed,
-             "failed_reason": failed.get(c.get("url", ""), ""),
+             "failed": c.get("url") in live_failed,
+             "failed_reason": live_failed.get(c.get("url", ""), ""),
              "fb_from": (_fb_map.get(c.get("url", "")) or {}).get("uid", "")}
             for i, c in enumerate(chapters)
         ],
     })
+
+
+@bp.route("/api/books/<book_key>/metadata/preview", methods=["GET"])
+def api_book_metadata_preview(book_key):
+    """Fetch proposed name/author only; never replace catalogs or cached text."""
+    book_key = _safe_seg(book_key, "书籍")
+    path = os.path.join(BOOKS_DIR, book_key, "_state.json")
+    try:
+        from engine.novel_metadata import metadata_snapshot
+        state, revision = metadata_snapshot(path)
+        info = state.get("book") if isinstance(state, dict) else None
+        if not isinstance(info, dict):
+            raise ValueError("书籍元数据格式异常")
+    except FileNotFoundError:
+        return _err_json("书籍不存在", 404)
+    except (OSError, ValueError, TypeError):
+        return _err_json("书籍数据无法读取，原数据已保留", 503)
+    book_url = info.get("book_url")
+    if not isinstance(book_url, str) or not book_url.strip():
+        return _err_json("书籍缺少原站地址，无法刷新元数据", 409)
+    source = get_by_uid(info.get("source_uid") or "") or find_source(book_url)
+    if not source:
+        return _err_json("原书源已不可用；本地内容未修改", 409)
+    try:
+        book = SourceCrawler(source).get_book(book_url, fast=True, deadline=12)
+        proposed = {}
+        for field in ("name", "author"):
+            value = getattr(book, field, "")
+            if not isinstance(value, str):
+                continue
+            value = re.sub(r'\s+', ' ', value).strip()
+            if value and value != book_url and not value.lower().startswith(("http://", "https://")):
+                proposed[field] = value
+        changes = [{"field": field, "before": str(info.get(field) or ""), "after": value}
+                   for field, value in proposed.items() if value != info.get(field)]
+        if not proposed.get("name"):
+            return _err_json("源站未返回可信书名，未修改本地数据", 502)
+        return jsonify({"ok": True, "read_only": True, "changes": changes,
+                        "proposed": proposed, "state_revision": revision})
+    except Exception as exc:
+        return _err_response(exc, 502, "读取源站元数据失败；本地内容未修改")
+
+
+@bp.route("/api/books/<book_key>/metadata", methods=["POST"])
+def api_book_metadata_apply(book_key):
+    book_key = _safe_seg(book_key, "书籍")
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict) or not isinstance(body.get("state_revision"), str):
+        return _err_json("缺少元数据预览版本", 400)
+    from engine.novel_metadata import save_metadata
+    try:
+        saved = save_metadata(os.path.join(BOOKS_DIR, book_key, '_state.json'),
+                              body["state_revision"], body.get("metadata"))
+        return jsonify({"ok": True, "metadata": saved, "catalog_preserved": True})
+    except FileNotFoundError:
+        return _err_json("书籍不存在", 404)
+    except RuntimeError as exc:
+        return _err_json(str(exc), 409)
+    except ValueError as exc:
+        return _err_json(str(exc), 400)
+    except Exception as exc:
+        return _err_response(exc, 500, "元数据保存失败；章节与进度未修改")
 
 
 @bp.route("/api/books/<book_key>/chapter/<int:idx>", methods=["POST"])
@@ -1601,7 +1670,8 @@ def api_book_chapter(book_key, idx):
         abort(404, "章节序号越界")
     entry = chapters[idx - 1]
     cp = os.path.join(d, _cache_key(entry.get("url", "")) + ".cache")
-    # B07: 先 stat 取文件指纹做条件校验，命中直接 304——不读正文。
+    # 先验证正文，再做条件请求；坏缓存不得凭 mtime/size 返回 304。
+    # 校验结果按文件指纹缓存，重复读取不重复扫描全文。
     # ETag 用 (mtime_ns, size) 高精度指纹：同秒重爬/修复（int(mtime) 不变）
     # 也会产生新标识，客户端不会拿到陈旧正文。
     try:
@@ -1609,7 +1679,7 @@ def api_book_chapter(book_key, idx):
     except OSError:
         st = None
     etag = None
-    if st is not None and st.st_size > 0:
+    if st is not None and chapter_cache_valid(cp):
         # R78: ETag 不得含 book_key——中文目录名(爱下书_/夜天连看_…)会触发
         # HTTP 头 latin-1 编码异常(UnicodeEncodeError → 连接被断 → 章节
         # 永远读不了, 而导出 txt 不走此 header 故正常)。URL 已含 book_key,
@@ -1873,26 +1943,33 @@ def api_book_reclean(book_key):
         abort(404, "书籍不存在")
 
     from engine.cleaner import clean_text
-    from engine.app_utils import cache_key_of, atomic_write_text
+    from engine.novel_review import review_chapter
+    from engine.app_utils import cache_key_of
+    from engine.text_recovery import save_cleaned_cache
 
     chapters = state.get("chapters", []) or []
     _title_re = re.compile(r'^(第[一二三四五六七八九十百千万零两\d]+[章卷篇节]|序章|楔子|番外|尾声|终章|后记|外传)')
     changed, skipped, failed = 0, 0, []
     removed_chars, removed_lines = 0, 0
     samples = []
+    review_items, review_count, scanned = [], 0, 0
 
     for idx, c in enumerate(chapters):
-        if dry and len(samples) >= 3 and changed >= 400:
-            break          # 干跑不必扫全库：够给用户看规模即可
         cp = os.path.join(d, cache_key_of(c.get("url", "")) + ".cache")
         if not os.path.isfile(cp):
             continue
         try:
-            with open(cp, encoding="utf-8") as f:
+            with open(cp, encoding="utf-8", newline="") as f:
                 raw = f.read()
         except (OSError, UnicodeDecodeError) as e:
             failed.append({"index": idx + 1, "reason": f"{type(e).__name__}: {e}"})
             continue
+        scanned += 1
+        review = review_chapter(c.get("name"), raw)
+        if review:
+            review_count += 1
+            if len(review_items) < 100:
+                review_items.append({"index": idx + 1, "name": c.get("name") or "", **review})
         # 缓存首行可能是章节名（重爬单章写入的格式）——**标题不参与净化**，
         # 否则 L3 的"正文内标题残留"规则会把标题本身删掉
         head, body = "", raw
@@ -1918,32 +1995,108 @@ def api_book_reclean(book_key):
         changed += 1
         if not dry:
             try:
-                atomic_write_text(cp, head + cleaned)
+                save_cleaned_cache(d, os.path.basename(cp), raw, head + cleaned)
             except Exception as e:      # noqa: BLE001
                 failed.append({"index": idx + 1, "reason": f"{type(e).__name__}: {e}"})
                 changed -= 1
 
     rebuilt = False
     if not dry and changed:
-        # 全文导出跟着更新（导出读的是缓存，缓存变了 txt 就是旧的）
-        try:
-            src = get_by_uid(state.get("book", {}).get("source_uid")
-                            or book_key.rsplit("_", 1)[0])
-            if src:
-                from engine.crawler import CrawlTask
-                t = CrawlTask(src, state.get("book", {}).get("book_url", ""), d, resume=True)
-                if t._load_state():
-                    t.merge_txt()
-                    rebuilt = True
-        except Exception as e:          # noqa: BLE001
-            failed.append({"index": 0, "reason": f"重建全文失败：{type(e).__name__}: {e}"})
+        # 重新净化的是本地缓存；重建不得依赖仍然存在的书源或网络。
+        # 复用有锁、原子写和显式失败返回的本地合并入口。
+        rebuilt, rebuild_error = _rebuild_book_txt_local(book_key, d, chapters)
+        if not rebuilt:
+            failed.append({"index": 0, "reason": f"重建全文失败：{rebuild_error}"})
 
     return jsonify({
         "ok": True, "dry_run": dry, "chapters": len(chapters),
         "changed": changed, "already_clean": skipped,
         "removed_lines": removed_lines, "removed_chars": removed_chars,
         "samples": samples, "failed": failed, "txt_rebuilt": rebuilt,
+        "scanned": scanned, "review_count": review_count,
+        "review_items": review_items, "review_truncated": review_count > len(review_items),
     })
+
+
+@bp.route("/api/books/<book_key>/reclean/recovery")
+def api_book_reclean_recovery(book_key):
+    """只返回原文存档身份/可恢复状态，不返回原文正文。"""
+    from engine.text_recovery import restore_cleaned_cache
+    book_key = _safe_seg(book_key, "书籍")
+    d = os.path.join(BOOKS_DIR, book_key)
+    state = load_book_state(os.path.join(d, "_state.json"))
+    if not state:
+        abort(404, "书籍不存在")
+    archive_dir = os.path.join(d, ".reclean-originals")
+    if os.path.islink(archive_dir):
+        return _err_json("原文存档目录异常", 409)
+    try:
+        names = sorted(os.listdir(archive_dir))
+    except FileNotFoundError:
+        names = []
+    labels = {}
+    positions = {}
+    for index, chapter in enumerate(state.get("chapters") or [], 1):
+        if isinstance(chapter, dict) and chapter.get("url"):
+            filename = _cache_key(chapter["url"]) + ".cache"
+            positions.setdefault(filename, index)
+            labels.setdefault(filename, []).append(f"第{index}项 · {chapter.get('name') or '未命名章节'}")
+    items = []
+    ranks = {}
+    for name in names:
+        if not re.fullmatch(r'[0-9a-f]{64}\.json', name):
+            continue
+        identity = name[:-5]
+        try:
+            preview = restore_cleaned_cache(d, identity)
+            # Associate only after archive identity/content validation. Never use
+            # unverified metadata or repeated chapter titles to infer a position.
+            if preview["filename"] in positions:
+                ranks[identity] = positions[preview["filename"]]
+            items.append({"id": identity, "restorable": not preview["already_original"],
+                          "already_original": preview["already_original"],
+                          "label": " / ".join(labels.get(preview["filename"], ["历史章节（目录已变化）"]))})
+        except (ValueError, OSError, TypeError):
+            items.append({"id": identity, "restorable": False, "conflict": True})
+    # Both clients consume this order. Historical/unverifiable archives stay
+    # visible at the end, with a stable identity tie-breaker, not guessed order.
+    items.sort(key=lambda item: (item["id"] not in ranks, ranks.get(item["id"], 0), item["id"]))
+    return jsonify({"ok": True, "items": items, "count": len(items)})
+
+
+@bp.route("/api/books/<book_key>/reclean/restore", methods=["POST"])
+def api_book_reclean_restore(book_key):
+    """显式存档身份恢复；默认仅预览，后续修改时拒绝覆盖。"""
+    from engine.text_recovery import restore_cleaned_cache
+    book_key = _safe_seg(book_key, "书籍")
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return _err_json("恢复参数必须是对象", 400)
+    identities = data.get("ids")
+    if (not isinstance(identities, list) or not 1 <= len(identities) <= 500
+            or any(not isinstance(i, str) or not re.fullmatch(r'[0-9a-f]{64}', i) for i in identities)
+            or ("dry_run" in data and not isinstance(data["dry_run"], bool))):
+        return _err_json("请选择1至500个有效原文存档，dry_run必须为布尔值", 400)
+    dry = data.get("dry_run", True)
+    d = os.path.join(BOOKS_DIR, book_key)
+    state = load_book_state(os.path.join(d, "_state.json"))
+    if not state:
+        abort(404, "书籍不存在")
+    items, restored = [], 0
+    for identity in dict.fromkeys(identities):
+        try:
+            result = restore_cleaned_cache(d, identity, dry_run=dry)
+            restored += int(result["restored"])
+            items.append({"id": identity, "ok": True, **result})
+        except ValueError as error:
+            items.append({"id": identity, "ok": False, "error": str(error)})
+        except (OSError, TypeError):
+            items.append({"id": identity, "ok": False, "error": "原文存档或章节无法读取"})
+    rebuilt, rebuild_error = False, ""
+    if restored:
+        rebuilt, rebuild_error = _rebuild_book_txt_local(book_key, d, state.get("chapters") or [])
+    return jsonify({"ok": True, "dry_run": dry, "items": items, "restored": restored,
+                    "txt_rebuilt": rebuilt, "export_error": rebuild_error})
 
 
 @bp.route("/api/books/<book_key>/check-update", methods=["POST"])
@@ -2088,10 +2241,55 @@ def _rebuild_book_txt_local(book_key, d, chapters):
     return True, ""
 
 
+def _reader_edition(book_key, preview=False):
+    from engine.reader_export import build_reader_export
+    d = os.path.join(BOOKS_DIR, book_key)
+    state = load_book_state(os.path.join(d, "_state.json"))
+    if not state:
+        abort(404, "书籍不存在")
+    clean = request.args.get("clean", "1")
+    omit = request.args.get("omit_promotions", "0")
+    revision = request.args.get("revision", "")
+    if clean not in ("0", "1") or omit not in ("0", "1"):
+        return _err_json("clean与omit_promotions必须为0或1", 400)
+    if not preview and not re.fullmatch(r'[0-9a-f]{64}', revision):
+        return _err_json("请先预览阅读版，再提交预览版本导出", 400)
+    try:
+        artifact, report = build_reader_export(d, state.get("chapters") or [],
+                                              clean=clean == "1", omit_promotions=omit == "1")
+    except ValueError as error:
+        return _err_json(str(error), 400)
+    except OSError:
+        return _err_json("阅读版生成失败，请检查本地文件和可用空间", 500)
+    if preview:
+        artifact.close()
+        return jsonify({"ok": True, **report})
+    if revision != report["revision"]:
+        artifact.close()
+        return _err_json("目录、正文或导出选项已变化，请重新预览", 409)
+    name = re.sub(r'[\r\n\x00]', ' ', str((state.get("book") or {}).get("name") or book_key))
+    try:
+        response = send_file(artifact, as_attachment=True, download_name=f"{name}-阅读版.txt",
+                             mimetype="text/plain; charset=utf-8")
+    except BaseException:
+        artifact.close()
+        raise
+    response.headers["X-Export-Revision"] = report["revision"]
+    response.call_on_close(artifact.close)
+    return response
+
+
+@bp.route("/api/books/<book_key>/txt/preview")
+def api_book_reader_txt_preview(book_key):
+    return _reader_edition(_safe_seg(book_key, "书籍"), preview=True)
+
+
 @bp.route("/api/books/<book_key>/txt")
 def api_book_txt(book_key):
 
     book_key = _safe_seg(book_key, "书籍")
+    if request.args.get("layout") == "reader":
+        return _reader_edition(book_key)
     d = os.path.join(BOOKS_DIR, book_key)
     p = os.path.join(d, "book.txt")
     state = load_book_state(os.path.join(d, "_state.json")) or {}
@@ -2135,8 +2333,19 @@ def api_book_progress_get(book_key):
 def api_book_progress_save(book_key):
     book_key = _safe_seg(book_key, "书籍")
     body = request.get_json(silent=True) or {}
-    idx = int(body.get("idx") or 0)
-    pct = int(body.get("pct") or 0)
+    if not isinstance(body, dict):
+        return jsonify({"ok": False, "error": "无效的阅读进度"}), 400
+    try:
+        raw_idx = body.get("idx", 0)
+        raw_pct = body.get("pct", 0)
+        if isinstance(raw_idx, bool) or isinstance(raw_pct, bool):
+            raise ValueError("boolean progress")
+        idx = int(raw_idx)
+        pct = int(raw_pct)
+        if isinstance(raw_idx, float) and raw_idx != idx:
+            raise ValueError("fractional chapter index")
+    except (ValueError, TypeError, OverflowError):
+        return jsonify({"ok": False, "error": "无效的阅读进度"}), 400
     name = str(body.get("name") or "")[:100]
     # 兜底：章节序号必须 >= 1。客户端在"读进度失败"时可能回退到 0/第 1 章，
     # 那种写入会把两端已有进度一起清掉（用户实测的"重连后进度被重置"）。
@@ -2167,5 +2376,3 @@ def api_book_progress_save(book_key):
         print(f"[error] 进度保存失败: {type(e).__name__}: {e}", flush=True)
         return jsonify({"ok": False, "error": "进度保存失败，请稍后重试"}), 500
     return jsonify({"ok": True})
-
-

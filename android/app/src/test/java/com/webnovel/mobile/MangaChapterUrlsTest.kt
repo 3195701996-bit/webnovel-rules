@@ -11,6 +11,19 @@ import org.junit.Test
  */
 class MangaChapterUrlsTest {
 
+    @Test fun parsesPartialDownloadStateWithoutPromotingItToComplete() {
+        val detail = EngineData.mangaDetail("""
+            {"source":"jm","comic_id":"comic","title":"缓存状态",
+             "chapters":[{"id":"ch1","name":"第1话"},
+                         {"id":"ch2","name":"第2话"}],
+             "downloaded":["ch1","ch2"],
+             "partial_downloaded":["ch2","ch3"]}
+        """.trimIndent())!!
+        assertEquals(setOf("ch1", "ch2"), detail.downloaded)
+        assertEquals(setOf("ch3"), detail.partialDownloaded)
+        assertEquals(2, detail.downloadedCount)
+    }
+
     @Test fun parsesAllThreeLoadingModes() {
         val body = """
           {"count": 3, "source": "s", "comic_id": "c", "chapter_id": "ch1",

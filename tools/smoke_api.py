@@ -19,6 +19,7 @@ from runtime_server import LocalServer
 # (方法, 路径, 期望状态码集合, 说明)
 CHECKS = [
     ("GET",  "/", {200}, "首页"),
+    ("GET",  "/explore", {200}, "小说榜单页"),
     ("GET",  "/sources", {200}, "书源管理页"),
     ("GET",  "/library", {200}, "书库页"),
     ("GET",  "/tasks_page", {200}, "任务页"),

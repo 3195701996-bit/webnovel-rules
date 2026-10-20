@@ -101,6 +101,7 @@ def sources_with_explore(sources=None):
         from engine.source_mgr import load_all
         sources = load_all() or []
     out = []
+    seen = set()
     for s in sources:
         try:
             cats = parse_explore(s)
@@ -108,6 +109,10 @@ def sources_with_explore(sources=None):
             cats = []
         if not cats:
             continue
+        uid = s.get("uid") or ""
+        if not uid or uid in seen:
+            continue
+        seen.add(uid)
         out.append({"uid": s.get("uid") or "", "name": s.get("bookSourceName") or "",
                     "enabled": bool(s.get("enabled", True)),
                     "categories": cats})

@@ -1,10 +1,16 @@
 package com.webnovel.mobile
 
+import android.os.Build
+import android.graphics.Bitmap
+import androidx.core.view.WindowCompat
+import androidx.test.platform.app.InstrumentationRegistry
+import java.io.File
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.hasText
@@ -13,6 +19,7 @@ import androidx.test.filters.LargeTest
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -35,8 +42,20 @@ class ReaderUiAcceptanceTest {
     val rule = createAndroidComposeRule<MainActivity>()
 
     private lateinit var book: SelfTestBook
+    private var savedPrefs: ReaderPrefs? = null
 
     private fun ev(line: String) = println("READER_UI_EVIDENCE $line")
+
+    private fun assertChromeSystemBars() {
+        rule.runOnIdle {
+            val window = rule.activity.window
+            val controller = WindowCompat.getInsetsController(window, window.decorView)
+            assertTrue("浅色顶栏必须使用深色状态栏图标", controller.isAppearanceLightStatusBars)
+            if (Build.VERSION.SDK_INT >= 26) {
+                assertTrue("浅色底栏必须使用深色导航栏图标", controller.isAppearanceLightNavigationBars)
+            }
+        }
+    }
 
     private fun waitText(text: String, timeoutMs: Long = 150_000, substring: Boolean = false) {
         rule.waitUntil(timeoutMs) {
@@ -51,13 +70,23 @@ class ReaderUiAcceptanceTest {
 
     @Before
     fun setUp() {
+        assertTrue("Synthetic reader UI fixtures are forbidden on physical devices",
+            Shell.run("getprop ro.kernel.qemu").trim() == "1")
+        val ctx = InstrumentationRegistry.getInstrumentation().targetContext
+        savedPrefs = ReaderPrefs.load(ctx)
+        ReaderPrefs.save(ctx, ReaderPrefs())
         book = SelfTestBook()
         book.create()
+        rule.activityRule.scenario.recreate()
         ev("已造自检书 key=${book.bookKey}")
     }
 
     @After
     fun tearDown() {
+        savedPrefs?.let {
+            ReaderPrefs.save(InstrumentationRegistry.getInstrumentation().targetContext, it)
+        }
+        if (!::book.isInitialized) return
         book.cleanup()
         assertFalse("自检书目录未清理干净", book.exists())
         assertEquals("阅读进度里有自检残留", 0, book.progressEntryCount())
@@ -66,7 +95,9 @@ class ReaderUiAcceptanceTest {
 
     @Test
     fun shelfToDetailToNativeReader() {
+        assertChromeSystemBars()
         // 1) 冷启动落到书架，并列出合成书
+        rule.openCachedShelf()
         waitText(SelfTestBook.BOOK_NAME)
         ev("书架已列出 ${SelfTestBook.BOOK_NAME}")
         rule.onAllNodesWithText(SelfTestBook.BOOK_NAME)[0].assertIsDisplayed()
@@ -86,6 +117,8 @@ class ReaderUiAcceptanceTest {
         // 3) 进入原生阅读器：渲染第一段正文
         clickText("开始阅读")
         waitText(SelfTestBook.CHAPTER1_BODY_1, substring = true)
+
+        assertChromeSystemBars()
         rule.onNodeWithText(SelfTestBook.CHAPTER1_BODY_2, substring = true).assertIsDisplayed()
         // 章节名出现在标题栏与正文标题两处（正文里的重复首行已去重），故取第一个节点
         rule.onAllNodesWithText(SelfTestBook.CHAPTER1_NAME, substring = true)[0].assertIsDisplayed()
@@ -96,7 +129,7 @@ class ReaderUiAcceptanceTest {
         // "下一章"在底部栏与正文末尾各有一个，取第一个即可
         rule.onAllNodesWithText("下一章")[0].assertIsDisplayed()
         rule.onNodeWithText("目录").assertIsDisplayed()
-        rule.onNodeWithText("Aa").assertIsDisplayed()
+        rule.onNodeWithContentDescription("阅读设置").assertIsDisplayed()
         rule.onNodeWithText("1 / 3", substring = true).assertIsDisplayed()
 
         // 5) 未下载章节：明确提示 + 手动获取入口，不自动联网、不显示空正文
@@ -119,7 +152,7 @@ class ReaderUiAcceptanceTest {
         clickText("关闭")
 
         // 7) 阅读设置：字号/行距/主题，且立即生效不崩溃
-        clickText("Aa")
+        rule.onNodeWithContentDescription("阅读设置").performClick()
         waitText("阅读设置")
         rule.onNodeWithText("字号", substring = true).assertIsDisplayed()
         rule.onNodeWithText("行距", substring = true).assertIsDisplayed()
@@ -128,9 +161,22 @@ class ReaderUiAcceptanceTest {
         ev("阅读设置：字号/行距/主题可见，切换到夜间正常")
         clickText("关闭")
         waitText(SelfTestBook.CHAPTER1_BODY_1, substring = true)
+        rule.waitUntil(5_000) {
+            rule.onAllNodesWithText("阅读设置").fetchSemanticsNodes().isEmpty()
+        }
+        // 夜间只改变正文，外壳仍为浅色：系统图标不可错误切回白色。
+        assertChromeSystemBars()
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        instrumentation.uiAutomation.waitForIdle(250, 5_000)
+        val screenshot = instrumentation.uiAutomation.takeScreenshot()
+        checkNotNull(screenshot)
+        File(rule.activity.cacheDir, "reader-system-bars-night.png").outputStream().use {
+            screenshot.compress(Bitmap.CompressFormat.PNG, 100, it)
+        }
+        screenshot.recycle()
 
         // 8) 返回详情：进度已写入引擎 → 按钮变为"继续阅读 第 1 章"
-        clickText("← 返回")
+        rule.onNodeWithContentDescription("返回").performClick()
         waitText("继续阅读 第 1 章", timeoutMs = 20_000)
         ev("返回详情：按钮已变为『继续阅读 第 1 章』（进度已落库）")
 

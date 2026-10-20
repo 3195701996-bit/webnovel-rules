@@ -3,6 +3,7 @@
 package com.webnovel.mobile
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -171,16 +172,17 @@ internal fun MangaSourceScreen(
     // 仍停在原来的分类结果里，而不是被打回源清单。
     // 保存的是**原始响应**：恢复时复用同一套防御式解析，不需要自定义 Saver。
     var sourcesBody by rememberSaveable(sourceKey) { mutableStateOf("") }
-    var catsBody by rememberSaveable(sourceKey) { mutableStateOf("") }
+    var catsBody by rememberSaveable { mutableStateOf("") }
     var selUrl by rememberSaveable(sourceKey) { mutableStateOf("") }
     var loading by remember { mutableStateOf(true) }
     // 重建图片缓存（混淆源 jm 等）：算法修好后，旧缓存里的花图必须能少代价重建
     var rebuildBusy by remember { mutableStateOf(false) }
     var rebuildDialog by remember { mutableStateOf(false) }
+    var showSourceInfo by rememberSaveable(sourceKey) { mutableStateOf(false) }
     var rebuildMsg by rememberSaveable(sourceKey) { mutableStateOf("") }
     val scope = rememberCoroutineScope()
 
-    val card: MangaSourceCard? = remember(sourcesBody) {
+    val card: MangaSourceCard? = remember(sourcesBody, sourceKey) {
         if (sourcesBody.isBlank()) null
         else EngineData.sources(sourcesBody).map {
             MangaSourceCard(it.key, it.name, it.status, it.reason, it.verifyLabel,
@@ -188,7 +190,7 @@ internal fun MangaSourceScreen(
                 it.failedStage)
         }.firstOrNull { it.key == sourceKey }
     }
-    val cats: List<EngineData.MangaBrowseSource> = remember(catsBody) {
+    val cats: List<EngineData.MangaBrowseSource> = remember(catsBody, sourceKey) {
         if (catsBody.isBlank()) emptyList()
         else EngineData.exploreMangaSources(catsBody).filter { it.key == sourceKey }
     }
@@ -241,6 +243,7 @@ internal fun MangaSourceScreen(
 
     // 选中分类后：同屏切到结果（返回先回到本页的分类列表）
     if (sel != null) {
+        BackHandler { selUrl = "" }
         val src = cats.firstOrNull()
         if (src != null) {
             Scaffold(topBar = {
@@ -308,6 +311,9 @@ internal fun MangaSourceScreen(
                 IconButton(onClick = onBack) {
                     Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                 }
+            }, actions = {
+                TextButton(onClick = { showSourceInfo = !showSourceInfo },
+                    modifier = Modifier.testTag("manga_source_info_toggle")) { Text("源信息") }
             })
     }) { pad ->
         Box(Modifier.padding(pad).fillMaxSize()) {
@@ -316,7 +322,7 @@ internal fun MangaSourceScreen(
                 else -> LazyColumn(Modifier.fillMaxSize().testTag("manga_source_page"),
                     contentPadding = PaddingValues(WnSpace.md),
                     verticalArrangement = Arrangement.spacedBy(WnSpace.sm)) {
-                    item {
+                    if (showSourceInfo) item {
                         val c = card
                         WnHairlineCard {
                             Column(Modifier.padding(WnSpace.md)) {
@@ -368,7 +374,7 @@ internal fun MangaSourceScreen(
                             Text("在「$sourceName」里搜漫画")
                         }
                     }
-                    if (card?.scrambled == true) {
+                    if (showSourceInfo && card?.scrambled == true) {
                         item {
                             Text("图片块还原：本源图片由服务器按块倒序还原后才可读" +
                                 "（当前算法版本 v${card.processVersion}）。" +
@@ -406,12 +412,12 @@ internal fun MangaSourceScreen(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     } else {
-                        items(catList, key = { it.url }) { c ->
-                            OutlinedButton(
-                                onClick = { selUrl = c.url },
-                                modifier = Modifier.fillMaxWidth().testTag("src_cat_" + c.url),
-                                contentPadding = PaddingValues(vertical = 6.dp),
-                            ) { Text(c.title, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                        catList.groupBy { it.group.ifBlank { "分类" } }.forEach { (group, categories) ->
+                            item(key = "category_group_" + group) {
+                                Text(group, style = MaterialTheme.typography.titleMedium,
+                                    modifier = Modifier.padding(top = 18.dp, bottom = 12.dp))
+                                CategoryButtons(categories, sourceKey, tagPrefix = "src_cat_") { c -> selUrl = c.url }
+                            }
                         }
                     }
                 }

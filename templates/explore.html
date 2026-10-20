@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>小说榜单 · webnovel_rules</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+<header class="topbar">
+  <a class="logo" href="/">📚 webnovel_rules</a>
+  <nav aria-label="主导航">
+    <a href="/">🔍 发现</a><a href="/explore" class="active">小说榜单</a>
+    <a href="/library">📖 书架</a><a href="/tasks_page">⬇ 下载</a><a href="/manga">🎨 漫画</a>
+  </nav>
+</header>
+<main class="container novel-explore">
+  <button id="explore-back" class="btn" hidden>返回</button>
+  <h1 id="explore-heading" tabindex="-1">小说榜单</h1>
+  <p class="explore-note">仅展示来源实际提供的榜单和分类；不同来源的排行规则各自独立。</p>
+  <p id="explore-status" role="status" aria-live="polite">正在读取来源…</p>
+  <button id="explore-retry" class="btn" hidden>重试</button>
+  <section id="explore-menu" aria-label="榜单入口"></section>
+  <section id="explore-books" class="explore-book-grid" aria-label="榜单作品"></section>
+  <nav id="explore-pagination" class="explore-pagination" aria-label="榜单分页" hidden>
+    <button id="explore-prev" class="btn">上一页</button>
+    <span id="explore-page"></span>
+    <button id="explore-next" class="btn">下一页</button>
+  </nav>
+</main>
+<script src="/static/js/common.js"></script>
+<script src="/static/js/novel_explore.js"></script>
+</body>
+</html>
