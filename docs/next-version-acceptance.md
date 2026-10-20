@@ -13,6 +13,7 @@
 - 本轮未切走手机前台短信/浏览器，已发出非阻塞切回本应用提示；尚未安装3.0.0到iQOO。准确SHA的CI39346274471/39346269904当时仍在运行，真实整卷复验另行进行，不能将上述本机通过当作这些待验收项完成。尚未发布tag/Release、未部署用户现有Web服务。
 - 后续上述两个准确SHA的CI均success（Python3.11/3.12及android-compile），外部源首卷复验 **OK(1 test)，63.382s**：真实6卷/54单话，指定卷UUID的227张文件逐一Pillow.verify，生产阅读通道首图成功，真实worker从隔离错误任务手动resume后done1/total1/images_done227、error空/events空，夹具清理断言通过。仅临时测试代理finally恢复，未改手机VPN；不声称整卷逐页人工阅读。
 - 已创建GitHub **v3.0.0草稿**（release ID417877516，target精确0e5118e7b709c099e42012e7915eb12c41899f4d，draft=true，不公开）。三项资产均uploaded：APK40891003字节、完整源码ZIP7051584字节、SHA256SUMS195字节。GitHub服务端digest分别与本地APK **4d850409…86f66a4**、源码ZIP **890e0521eea5487d4cb9c32a9ed727805a1ecb128214d2bdc9a23b51ab202721**和校验文件一致；源码通过git archive从准确提交生成、ZIP完整性通过。远端回下载仍在进行，不能说已经完成回下载比对。手机随后USB断开，未覆盖安装3.0.0；测试模拟器正常退出，隔离浏览器/服务关闭，不以手机断开为理由提前公开稳定版。
+- 回下载首轮以unexpected EOF终止，APK/ZIP分别仅约7.1MiB/4.0MiB，未计成功。随后在同一专属临时目录分文件重新下载，完整两项均通过远端SHA256SUMS核对；源码ZIP解压完整性和Git archive注释精确0e5118e7b709c099e42012e7915eb12c41899f4d通过，下载回来的APK再执行verify_android_release.sh，正式3.0.0/code179、完整clean源码身份、证书连续性、ZIP及SHA全部通过。下载验收目录`/private/tmp/webnovel-300-remote.5QZm6v`。当前发布仍为草稿，手机USB未连接，最后真机保留数据升级及公开发布/稳定入口尚未完成。
 
 ### rc19补齐离线入口及小说阅读链路，扩展核心合跑63项
 
