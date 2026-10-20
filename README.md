@@ -1,7 +1,7 @@
 # 📚 webnovel_rules — 书源驱动的小说 / 漫画系统（Web + 独立 APK）
 
 一套以 **legado（阅读 App）书源规则**驱动的内容系统：导入书源 → 自动校验 → 搜索 → 爬取/下载 → 阅读。
-所有站点解析全部由书源 JSON 规则驱动，**不硬编码任何网站**。
+小说解析由书源 JSON 规则驱动；漫画通过各来源适配器处理目录、图片与站点协议。
 
 同一套引擎，两种使用形态：
 
@@ -10,9 +10,9 @@
 | **Web 桌面端** | Flask 服务端 + 浏览器界面，在本机/局域网使用 | 电脑上看书、管理书库与任务 |
 | **独立 APK** | 引擎以 Chaquopy 打包进安卓 App，**不连电脑、不连云端**，装上即用 | 手机在线/离线阅读 |
 
-> 当前版本：**APK 2.0.4（versionCode 159）**。版本号以 `android/app/build.gradle` 为准；
-> [查看 2.0.4 发布页并下载 APK](https://github.com/3195701996-bit/webnovel-rules/releases/tag/v2.0.4)。
-> 该版本已通过签名核验、GitHub CI 与专用 API 35 模拟器覆盖升级数据保全测试；目标手机实机体验仍待验收。
+> 当前稳定版本：**3.0.0（Android versionCode 179）**。
+> [发布页与下载](https://github.com/3195701996-bit/webnovel-rules/releases/tag/v3.0.0) · [更新说明](docs/3.0.0-release-notes.md)。
+> 同签名保留数据升级、准确源码 CI、141 项客户端单测、63 项界面验收及完整后端回归已通过；验证范围和限制见验收记录。电脑 Web 通过同版源码交付，安装 APK 不会自动更新电脑服务。
 
 ---
 
@@ -58,7 +58,7 @@ APK 的独立性：引擎运行在 App 私有服务进程里，UI 通过本机�
 ### 双端一致的体验
 - **书架**：「最近阅读 / 已缓存」双页；最近阅读是**全量历史**（含在线读过未下载的漫画）；
   已缓存按「最近下载 / 最近阅读」排序（偏好本地持久化，双端语义一致）
-- **进度互通**：小说 `book_progress.json`、漫画 `_history.json` 双端共用，Web 与 APK 互相续读
+- **统一进度格式**：小说 `book_progress.json`、漫画 `_history.json` 在同一运行实例中共用；电脑与独立 APK 各自存储，不自动跨设备同步
 - **离线模式**：引擎未就绪时书架退化为本地只读索引，已下载内容照读不误
 - **图片缓存**：占用统计 / 上限可调（256MB–不限）/ 一键清除（存储管理页）
 - **备份恢复**：书源配置 + 阅读进度打包导出（不含正文与图片）
@@ -160,7 +160,7 @@ venv/bin/python tools/probe_local_counts.py             # API 数字 vs 磁盘
 
 # ⑤ 正式发布前 APK 验收（只读；候选必须来自指定的干净提交）
 EXPECTED_GIT_REVISION=<本次发布完整40位Git SHA> \
-  tools/verify_android_release.sh <上一版-release.apk> <候选-release.apk> 2.0.0 <递增后的versionCode>
+  tools/verify_android_release.sh <上一版-release.apk> <候选-release.apk> 3.0.0 <递增后的versionCode>
 ```
 
 发布验收器还会核对包名、版本、v2/v3 签名证书连续性和 APK 完整性，并输出候选 APK 的 SHA-256；未提供准确的 `EXPECTED_GIT_REVISION` 会直接拒绝验收。构建、验收、覆盖升级和发布均需在本地与目标设备验证门全部关闭后进行。
