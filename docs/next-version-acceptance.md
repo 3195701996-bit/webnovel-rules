@@ -4,6 +4,16 @@
 
 ## 2026-10-20 元数据修复跨端验收与全量回归
 
+### 3.0.0正式身份冻结与准确构建回归（尚未发布）
+
+- 冻结提交 **0e5118e7b709c099e42012e7915eb12c41899f4d**，Android **3.0.0/code179**；用户可读增量及升级边界写入docs/3.0.0-release-notes.md。仅递增版本和发布说明，不改rc19业务。19s完成Release JVM/主包/仪器构建，JVM **141/141**；冻结APK `/private/tmp/webnovel-iqoo-inspect-gs7YcH/3.0.0-0e5118e7.apk`，SHA256 **4d850409651bfd3d276b26c6ecf658c0d2ef61db5f7553d46d17dc12586f66a4**。完整40位clean源码身份、包名、递增版本、ZIP与v2/v3签名通过，证书与rc19同为141ec0bef7e49d1b9b31aae3af65da2be2d124eb98641d096d53ecc86a4a93b4；内置Web资源与源码逐文件一致。
+- 上述冻结APK保留数据安装ReaderAudit_API36，19类核心及离线/小说阅读链路 **OK(63 tests)，131.067s**，日志`/private/tmp/webnovel-300-core-ui.log`。5000章本地目录实际cold API241ms/JSON解析4ms/warm detail130ms/再次打开133ms，仅为该模拟器数据，不推断手机普遍耗时。
+- Python源码及测试运行期保持冻结，全量 **2057 passed / 2 skipped（160.12s）**，日志`/private/tmp/webnovel-300-pytest.log`；45组JS、请求契约和响应契约均0问题、HTTP smoke21/21、Ruff错误门通过。契约夹具未覆盖的空列表/条件字段有明确登记，不把其当作业务逐项全部实测。
+- 再使用frontend-testing-debugging技能，Browser plugin not available，沿用现有Python Playwright+系统Chrome。真实隔离恢复API（端口52995，运行后已关闭）在1280×900、390×844、390×500验证100正常+1异常存档目录顺序、精确99项dry_run预览、末项滚动后确认/关闭可达、取消回焦点、全部文件字节/mtime不变；零页面/控制台错误、无横向溢出，桌面及手机截图已实际查看。小说工具/长目录另以隔离目录响应验证默认收起、键盘展开收起、元数据取消无写入、精确序号/状态筛选及清除、原始418章路由、在线目录/加载失败的诚实状态，宽窄屏通过；这一组目录响应是夹具，不冒充外部源实时目录。
+- 本轮未切走手机前台短信/浏览器，已发出非阻塞切回本应用提示；尚未安装3.0.0到iQOO。准确SHA的CI39346274471/39346269904当时仍在运行，真实整卷复验另行进行，不能将上述本机通过当作这些待验收项完成。尚未发布tag/Release、未部署用户现有Web服务。
+- 后续上述两个准确SHA的CI均success（Python3.11/3.12及android-compile），外部源首卷复验 **OK(1 test)，63.382s**：真实6卷/54单话，指定卷UUID的227张文件逐一Pillow.verify，生产阅读通道首图成功，真实worker从隔离错误任务手动resume后done1/total1/images_done227、error空/events空，夹具清理断言通过。仅临时测试代理finally恢复，未改手机VPN；不声称整卷逐页人工阅读。
+- 已创建GitHub **v3.0.0草稿**（release ID417877516，target精确0e5118e7b709c099e42012e7915eb12c41899f4d，draft=true，不公开）。三项资产均uploaded：APK40891003字节、完整源码ZIP7051584字节、SHA256SUMS195字节。GitHub服务端digest分别与本地APK **4d850409…86f66a4**、源码ZIP **890e0521eea5487d4cb9c32a9ed727805a1ecb128214d2bdc9a23b51ab202721**和校验文件一致；源码通过git archive从准确提交生成、ZIP完整性通过。远端回下载仍在进行，不能说已经完成回下载比对。手机随后USB断开，未覆盖安装3.0.0；测试模拟器正常退出，隔离浏览器/服务关闭，不以手机断开为理由提前公开稳定版。
+
 ### rc19补齐离线入口及小说阅读链路，扩展核心合跑63项
 
 - 审计发现OfflineModeTest仍使用createComposeRule，其ComponentActivity宿主仅由debugImplementation的ui-test-manifest注册，不能作为Release入口保障。改用真实MainActivity并通过activity.setContent注入Failed/Starting状态；没有修改生产逻辑或放宽原断言。OfflineModeTest、ReaderPathTest、ReaderUiAcceptanceTest在造数据前新增qemu硬限制，清理允许未初始化夹具安全退出；小说UI测试显式固定初始排版并在结束恢复之前设置，避免夜间主题污染后续验收。
