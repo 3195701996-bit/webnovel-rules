@@ -1,0 +1,43 @@
+name: 问题报告
+description: 报告可复现的 App、Web 或引擎问题
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: 请勿上传代理凭据、订阅、令牌、真实书库或整部内容；诊断和截图请先脱敏。
+  - type: input
+    id: version
+    attributes:
+      label: 版本与环境
+      placeholder: 例如 3.0.0/code179，Android 16；或 Web + Python 3.12
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: 入口
+      options:
+        - Android App
+        - Web
+        - 公共引擎 / API
+        - 构建 / 升级
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现步骤
+      description: 说明来源、本地/在线入口、具体操作，以及是否稳定复现。
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: 实际结果与预期结果
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 脱敏证据
+      description: 可附截图、错误文字或诊断片段；请不要上传私有数据目录。

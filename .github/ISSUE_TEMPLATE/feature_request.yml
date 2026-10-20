@@ -1,0 +1,21 @@
+name: 功能建议
+description: 描述要改善的使用场景与验收标准
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 当前遇到什么问题？
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 希望怎样工作？
+      description: 说明 Android/Web、用户流程与预期结果。
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 如何确认完成？
+      description: 尽量给出可观察或可复现的验收标准。

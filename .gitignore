@@ -1,4 +1,5 @@
 venv/
+.venv/
 __pycache__/
 *.pyc
 data/books/
@@ -27,3 +28,13 @@ data/proxy_good.txt
 # 运行日志与健康台账
 data/server.log
 data/source_health.json
+
+# 所有本机运行状态均不入库；样例/测试夹具应放 tests/ 或文档中。
+/data/
+.env
+.env.*
+!.env.example
+/dist/
+*.log
+*.apk
+*.aab

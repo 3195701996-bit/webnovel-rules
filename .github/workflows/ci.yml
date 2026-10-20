@@ -40,6 +40,9 @@ jobs:
       - name: Syntax check
         run: python -m compileall -q app.py server engine tests
 
+      - name: Check maintained documentation links (offline)
+        run: python tools/check_documentation_links.py
+
       - name: Set up Node.js for web regression checks
         uses: actions/setup-node@v7
         with:
