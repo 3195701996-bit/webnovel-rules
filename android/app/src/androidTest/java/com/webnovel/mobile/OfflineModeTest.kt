@@ -1,8 +1,10 @@
 package com.webnovel.mobile
 
+import androidx.activity.compose.setContent
+import androidx.compose.runtime.Composable
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasText
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -42,7 +44,7 @@ import java.util.UUID
 class OfflineModeTest {
 
     @get:Rule
-    val rule = createComposeRule()
+    val rule = createAndroidComposeRule<MainActivity>()
 
     private lateinit var book: SelfTestBook
     private lateinit var comic: SelfTestComic
@@ -58,8 +60,15 @@ class OfflineModeTest {
         rule.waitUntil(timeoutMs) { nodes(tag) > 0 }
     }
 
+    // Release 不包含 debug-only ui-test-manifest，必须使用真实、已注册的宿主。
+    private fun showContent(content: @Composable () -> Unit) {
+        rule.activityRule.scenario.onActivity { activity -> activity.setContent(content = content) }
+    }
+
     @Before
     fun setUp() {
+        assertTrue("Synthetic offline fixtures are forbidden on physical devices",
+            Shell.run("getprop ro.kernel.qemu").trim() == "1")
         book = SelfTestBook()
         book.create()
         comic = SelfTestComic()
@@ -69,10 +78,14 @@ class OfflineModeTest {
 
     @After
     fun tearDown() {
-        comic.cleanup()
-        book.cleanup()
-        assertTrue("自检书未清理干净", !book.exists())
-        assertTrue("自检漫画未清理干净", !comic.exists())
+        if (::comic.isInitialized) {
+            comic.cleanup()
+            assertTrue("自检漫画未清理干净", !comic.exists())
+        }
+        if (::book.isInitialized) {
+            book.cleanup()
+            assertTrue("自检书未清理干净", !book.exists())
+        }
         ev("清理完成")
     }
 
@@ -83,7 +96,7 @@ class OfflineModeTest {
     @Test
     fun engineStarting_isNotReportedAsFailure() {
         val ctx = InstrumentationRegistry.getInstrumentation().targetContext
-        rule.setContent {
+        showContent {
             AppShell(
                 gateway = EngineGateway(ctx),
                 engine = EngineState.Starting,
@@ -113,7 +126,7 @@ class OfflineModeTest {
         val gateway = EngineGateway(ctx)
 
         // 以"引擎失败"渲染应用外壳：这正是用户遇到的情形
-        rule.setContent {
+        showContent {
             AppShell(
                 gateway = gateway,
                 engine = EngineState.Failed("启动本机引擎", "自检：故意制造引擎不可用"),
@@ -270,7 +283,7 @@ class OfflineModeTest {
             assertEquals("离线书架章节数需与归并后的阅读目录一致", 2,
                 OfflineStore.manga(ctx).single { it.comicId == comicId }.chapterCount)
 
-            rule.setContent {
+            showContent {
                 AppShell(
                     gateway = EngineGateway(ctx),
                     engine = EngineState.Failed("启动本机引擎", "自检：验证旧下载别名"),

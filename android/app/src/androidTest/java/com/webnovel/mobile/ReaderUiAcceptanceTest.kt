@@ -42,6 +42,7 @@ class ReaderUiAcceptanceTest {
     val rule = createAndroidComposeRule<MainActivity>()
 
     private lateinit var book: SelfTestBook
+    private var savedPrefs: ReaderPrefs? = null
 
     private fun ev(line: String) = println("READER_UI_EVIDENCE $line")
 
@@ -69,6 +70,11 @@ class ReaderUiAcceptanceTest {
 
     @Before
     fun setUp() {
+        assertTrue("Synthetic reader UI fixtures are forbidden on physical devices",
+            Shell.run("getprop ro.kernel.qemu").trim() == "1")
+        val ctx = InstrumentationRegistry.getInstrumentation().targetContext
+        savedPrefs = ReaderPrefs.load(ctx)
+        ReaderPrefs.save(ctx, ReaderPrefs())
         book = SelfTestBook()
         book.create()
         rule.activityRule.scenario.recreate()
@@ -77,6 +83,10 @@ class ReaderUiAcceptanceTest {
 
     @After
     fun tearDown() {
+        savedPrefs?.let {
+            ReaderPrefs.save(InstrumentationRegistry.getInstrumentation().targetContext, it)
+        }
+        if (!::book.isInitialized) return
         book.cleanup()
         assertFalse("自检书目录未清理干净", book.exists())
         assertEquals("阅读进度里有自检残留", 0, book.progressEntryCount())

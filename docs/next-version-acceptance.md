@@ -4,6 +4,14 @@
 
 ## 2026-10-20 元数据修复跨端验收与全量回归
 
+### rc19补齐离线入口及小说阅读链路，扩展核心合跑63项
+
+- 审计发现OfflineModeTest仍使用createComposeRule，其ComponentActivity宿主仅由debugImplementation的ui-test-manifest注册，不能作为Release入口保障。改用真实MainActivity并通过activity.setContent注入Failed/Starting状态；没有修改生产逻辑或放宽原断言。OfflineModeTest、ReaderPathTest、ReaderUiAcceptanceTest在造数据前新增qemu硬限制，清理允许未初始化夹具安全退出；小说UI测试显式固定初始排版并在结束恢复之前设置，避免夜间主题污染后续验收。
+- 首次启动ReaderAudit_API36停留在旧快照恢复，adb为offline，控制命令无响应。仅关闭该任务模拟器，确认原PID退出后用-no-snapshot-load/-no-snapshot-save冷启动，保留磁盘、未wipe-data，启动日志14.850s完成。用户iQOO全过程保持USB device状态，没有要求或更改手机USB/VPN/安全设置。
+- 模拟器已安装主包实际拉回校验SHA256为f004688fc14d818953ca90856459be2e7364cb754babcfa70de56d51756f4a90，与冻结rc19完全相同；只更新仪器包，不重建替换主包。补充6项先单独通过（6.680s），最终测试包9s构建后与原57项连续合跑，**OK(63 tests)，132.786s**，日志`/private/tmp/webnovel-rc19-core-offline-ui.log`，无跳过或失败。
+- 新增覆盖范围：模拟EngineState.Failed后本地书架可达、小说缓存正文和漫画本机图片可打开、离线阅读设置可用；Starting不伪报故障；历史卷/话自然排序及copymanga_web下载别名归并、本地普通在线缓存不冒充下载；真实本机引擎的小说目录/正文/未下载/404/进度API契约，以及书架→详情→原生正文→未下载提示→目录→夜间设置→返回详情和书架读到第一章。阅读进度日志idx2/pct37准确读回；合成书清理后目录不存在、进度残留0。
+- Failed状态是测试注入，不声称实际杀死引擎或断网验收；6项也不证明外部源在线可用。本轮仅测试与文档变化，未改生产Android/Web/Python、未重复完整后端或更换手机APK，仍未正式发布3.0.0。发布通道只读核对仍有rc6等预发布，README稳定入口仍为2.0.4；正式身份、准确最终回归/CI、发布资产和Web交付门继续保留。
+
 ### rc19准确构建、完整核心UI、CI与真机保留数据升级
 
 - 冻结 **c36ee985bfa79c74018e500330beba543f40697b**，版本2.1.0-rc19/code178；本次仅递增身份，业务基线为5d322338。Release JVM/主包/仪器22s构建通过、JVM141/141。冻结APK `/private/tmp/webnovel-iqoo-inspect-gs7YcH/rc19-c36ee985.apk`，SHA256 **f004688fc14d818953ca90856459be2e7364cb754babcfa70de56d51756f4a90**；与rc18同证书141ec0be…a93b4，完整40位源码/clean身份、递增版本、签名/ZIP及内置Web资源逐项一致校验通过。
