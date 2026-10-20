@@ -4,6 +4,14 @@
 
 ## 2026-10-20 元数据修复跨端验收与全量回归
 
+### 交付源码独立启动及中文路径解压兼容补验
+
+- 重新确认工作区无生产修改、手机USB列表为空、v3.0.0仍为draft，准确target保持0e5118e7b709c099e42012e7915eb12c41899f4d。没有因等待真机而公开稳定版，也没有反复安装/清数据。
+- 对远端回下载源码ZIP作实际解压：macOS Info-ZIP UnZip6.00在中文文档文件名处退出50并误报可能磁盘满；df显示约500GiB可用，换en_US.UTF-8仍复现。系统原生ditto -xk成功完整解压；从该解压目录运行其自带tools/smoke_api.py，独立真实LocalServer **21/21**，请求/响应契约0问题，不借用工作区app/engine/templates，只复用现有Python依赖环境。先前失败解压的半成品没有启动成功，后续正确解压结果不能抹去该工具兼容限制。
+- 补充同一准确提交生成的 **webnovel_rules-3.0.0-source.tar.gz**（6616487字节，SHA256 **77e18924723960b396e005262e6ede3e540fddbc6fcba0f0dca99301bd37e8f4**）；独立tar解压后按git ls-tree逐一核对 **609个Git blob和可执行文件权限**，全部一致，android/gradlew可执行。该tar解压源码再独立运行HTTP smoke21/21、请求契约19接口/49调用点0问题、响应契约27接口0问题；空列表/条件字段登记跳过仍保留，不将其说成所有业务状态完整验证。
+- Release草稿新增tar.gz、更新SHA256SUMS296字节（摘要3a0b48592c1dbbd4bb09d431fba00f458b443821bb3e73b25222360a48d796b6），API核对release ID417877516保持draft=true、精确target不变、四项资产uploaded且服务端digest一致。发布说明新增tar/Finder/ditto路径，明确不能用失败解压半成品启动；APK和原ZIP保持原摘要，没有重建生产包。本轮不改业务代码，不重复全部测试，不声称已部署用户Web或完成3.0.0真机升级；隔离服务均随脚本退出关闭。
+- 新tar及更新后的校验文件已从草稿完整回下载到既有专属远端验收目录，shasum -c三项均OK（APK、ZIP、tar.gz）；tar目录完整读取662项（含目录），与609个Git文件的统计口径不同。没有将上传摘要代替回下载校验。
+
 ### 3.0.0正式身份冻结与准确构建回归（尚未发布）
 
 - 冻结提交 **0e5118e7b709c099e42012e7915eb12c41899f4d**，Android **3.0.0/code179**；用户可读增量及升级边界写入docs/3.0.0-release-notes.md。仅递增版本和发布说明，不改rc19业务。19s完成Release JVM/主包/仪器构建，JVM **141/141**；冻结APK `/private/tmp/webnovel-iqoo-inspect-gs7YcH/3.0.0-0e5118e7.apk`，SHA256 **4d850409651bfd3d276b26c6ecf658c0d2ef61db5f7553d46d17dc12586f66a4**。完整40位clean源码身份、包名、递增版本、ZIP与v2/v3签名通过，证书与rc19同为141ec0bef7e49d1b9b31aae3af65da2be2d124eb98641d096d53ecc86a4a93b4；内置Web资源与源码逐文件一致。
